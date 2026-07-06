@@ -323,9 +323,6 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN etf_last_tracked_owner_asset INTEGER");
 }
 
-const stockColumns = new Set(
-  db.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
-);
 if (!stockColumns.has("is_bluechip")) {
   db.exec("ALTER TABLE stocks ADD COLUMN is_bluechip INTEGER NOT NULL DEFAULT 0");
 }
