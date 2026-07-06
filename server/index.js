@@ -5,7 +5,7 @@ import express from "express";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { config } from "./config.js";
-import "./db.js";
+import { db } from "./db.js";
 import { authRouter } from "./routes/auth.js";
 import { bonusCodesRouter } from "./routes/bonusCodes.js";
 import { gamesRouter } from "./routes/games.js";
