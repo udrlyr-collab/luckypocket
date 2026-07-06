@@ -10,6 +10,7 @@ export default function StockDetailPage() {
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const [data, setData] = useState(null);
+  const [timer, setTimer] = useState(10);
   
   // Trade state
   const [amountInput, setAmountInput] = useState("");
@@ -27,6 +28,7 @@ export default function StockDetailPage() {
     try {
       const res = await api(`/stocks/${id}`);
       setData(res);
+      setTimer(10);
     } catch (e) {
       setError(e.message);
     }
@@ -37,6 +39,13 @@ export default function StockDetailPage() {
     const interval = setInterval(fetchStock, 10000);
     return () => clearInterval(interval);
   }, [id]);
+
+  useEffect(() => {
+    const timerInterval = setInterval(() => {
+      setTimer((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timerInterval);
+  }, []);
 
   if (error) {
     return (
@@ -69,7 +78,7 @@ export default function StockDetailPage() {
       }
       return executeTrade("/stocks/open-position", { stockId: stock.id, margin: Number(amountInput), leverage });
     }
-    return executeTrade("/stocks/buy", { stockId: stock.id, amount: Number(amountInput) });
+    return executeTrade("/stocks/buy", { stockId: stock.id, quantity: Number(amountInput) });
   };
 
   const handleSell = async () => {
@@ -150,14 +159,21 @@ export default function StockDetailPage() {
     }
   };
 
-  const addAmount = (val) => {
+  const addValue = (val) => {
     const cur = Number(amountInput) || 0;
     setAmountInput(String(cur + val));
   };
 
   const setPercent = (pct) => {
-    setAmountInput(String(Math.floor(user.balance * pct)));
+    const budget = Math.floor(user.balance * pct);
+    if (leverage === 1) {
+      setAmountInput(String(Math.floor(budget / stock.current_price)));
+    } else {
+      setAmountInput(String(budget));
+    }
   };
+
+  const todayRate = ((stock.current_price - stock.initial_price) / stock.initial_price) * 100;
 
   return (
     <div className="page-content">
@@ -182,13 +198,19 @@ export default function StockDetailPage() {
             )}
           </p>
         </div>
-        <div className="text-left md:text-right">
+        <div className="text-left md:text-right relative">
+          <div className="absolute right-0 -top-6 text-xs font-bold text-base-content/50">
+            다음 갱신 <span className="text-primary">{timer}초</span>
+          </div>
           <div className={`text-4xl font-black tabular-nums ${isDelisted ? "text-base-content/30" : ""}`}>
             {formatMoney(stock.current_price)}
           </div>
           {!isDelisted && (
-            <div className={`text-lg font-bold tabular-nums ${stock.current_price - stock.previous_price >= 0 ? "text-success" : "text-error"}`}>
-              {stock.current_price - stock.previous_price >= 0 ? "+" : ""}{formatSignedMoney(stock.current_price - stock.previous_price)}
+            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center ${stock.current_price - stock.previous_price >= 0 ? "text-success" : "text-error"}`}>
+              <span>틱 {stock.current_price - stock.previous_price >= 0 ? "+" : ""}{formatSignedMoney(stock.current_price - stock.previous_price)}</span>
+              <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${todayRate >= 0 ? "text-success" : "text-error"}`}>
+                상장가대비 {todayRate >= 0 ? "+" : ""}{todayRate.toFixed(1)}%
+              </span>
             </div>
           )}
         </div>
@@ -234,7 +256,7 @@ export default function StockDetailPage() {
 
               <div className="mb-4">
                 <label className="text-xs font-bold text-base-content/50 block mb-2">
-                  {leverage === 1 ? "매수 금액" : "증거금 (투자 금액)"} <span className="float-right">보유 잔액: {formatMoney(user.balance)}</span>
+                  {leverage === 1 ? "매수 수량(주)" : "증거금(금액)"} <span className="float-right">보유 잔액: {formatMoney(user.balance)}</span>
                 </label>
                 <div className="flex gap-2">
                   <input 
@@ -252,10 +274,15 @@ export default function StockDetailPage() {
                     {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? "매수" : "롱 오픈")}
                   </button>
                 </div>
+                {leverage === 1 && amountInput > 0 && (
+                  <div className="text-right text-xs mt-1 font-bold text-primary">
+                    총 매수 금액: {formatMoney(Math.floor(Number(amountInput) * stock.current_price))}
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-1 mt-2">
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addAmount(10000)}>+1만</button>
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addAmount(100000)}>+10만</button>
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addAmount(1000000)}>+100만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 1 : 10000)}>{leverage === 1 ? "+1주" : "+1만"}</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 10 : 100000)}>{leverage === 1 ? "+10주" : "+10만"}</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 100 : 1000000)}>{leverage === 1 ? "+100주" : "+100만"}</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 ml-auto" onClick={() => setPercent(0.1)}>10%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.5)}>50%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 font-bold text-primary" onClick={() => setPercent(1)}>전재산</button>
@@ -469,7 +496,7 @@ function StockChart({ history, isDelisted }) {
       return `${x},${y}`;
     });
     
-    return { mapped: mapped.join(" "), width, height, isUp: history[history.length-1].price >= history[0].price };
+    return { mapped: mapped.join(" "), width, height, isUp: history[history.length-1].price >= history[0].price, minPrice: Math.min(...prices), maxPrice: Math.max(...prices) };
   }, [history]);
 
   if (!history || history.length < 2) {
@@ -500,6 +527,12 @@ function StockChart({ history, isDelisted }) {
           strokeLinejoin="round" 
         />
       </svg>
+      <div className="absolute top-2 left-2 px-2 py-1 bg-base-100/80 rounded-lg text-xs font-bold shadow-sm">
+        최고 {formatMoney(points.maxPrice)}
+      </div>
+      <div className="absolute bottom-2 left-2 px-2 py-1 bg-base-100/80 rounded-lg text-xs font-bold shadow-sm">
+        최저 {formatMoney(points.minPrice)}
+      </div>
       {/* 
         This is a simple sparkline chart. 
         Prices aren't mapped to axes explicitly since it updates every 10s and is just a visual trend.

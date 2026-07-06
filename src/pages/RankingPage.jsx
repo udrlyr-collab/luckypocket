@@ -228,20 +228,20 @@ function secondaryStats(ranking, type) {
     return [
       ["현재 자산", formatCompactMoney(ranking.balance)],
       ["게임", `${ranking.totalGames.toLocaleString("ko-KR")}판`],
-      ["재도전", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
+      ["파산 횟수", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];
   }
   if (type === "games") {
     return [
       ["현재 자산", formatCompactMoney(ranking.balance)],
       ["업적", `${ranking.achievementCount.toLocaleString("ko-KR")}개`],
-      ["재도전", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
+      ["파산 횟수", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];
   }
   return [
     ["업적", `${ranking.achievementCount.toLocaleString("ko-KR")}개`],
     ["게임", `${ranking.totalGames.toLocaleString("ko-KR")}판`],
-    ["재도전", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
+    ["파산 횟수", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
   ];
 }
 

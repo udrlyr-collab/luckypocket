@@ -181,13 +181,11 @@ function processNormalTick(db, stock) {
 }
 
 function processEtfTick(db, stock) {
-  // 1등 유저 찾기 (balance + 주식 평가액이 가장 큰 사람)
-  // For simplicity based on prompt, we can use highest balance + portfolio value, or just highest total_profit, etc.
-  // Prompt says: "리더보드 1등 유저의 자산을 추종" -> We will use highest balance for simplicity and performance.
-  const topUser = db.prepare("SELECT balance FROM users ORDER BY balance DESC LIMIT 1").get();
-  if (!topUser) return;
+  // 인수자의 자산을 추종
+  const ownerUser = db.prepare("SELECT balance FROM users WHERE id = ?").get(stock.owner_user_id);
+  if (!ownerUser) return;
 
-  const currentTopBalance = topUser.balance;
+  const currentTopBalance = ownerUser.balance;
   
   if (!stock.etf_base_price || !stock.etf_base_top_balance) {
     db.prepare("UPDATE stocks SET etf_base_price = ?, etf_base_top_balance = ?, etf_last_tracked_balance = ? WHERE id = ?")
@@ -231,8 +229,8 @@ function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg) {
 }
 
 export function delistStock(db, stock) {
-  // 1. Update stock status to delisted, price to 0
-  db.prepare("UPDATE stocks SET status = 'delisted', current_price = 0, previous_price = current_price, market_cap = 0 WHERE id = ?").run(stock.id);
+  // 1. Update stock status to delisted, price to 0, set delisted_at
+  db.prepare("UPDATE stocks SET status = 'delisted', current_price = 0, previous_price = current_price, market_cap = 0, delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(stock.id);
   
   // 2. Liquidate all positions for this stock
   const openPositions = db.prepare("SELECT * FROM stock_positions WHERE stock_id = ? AND status = 'open'").all(stock.id);

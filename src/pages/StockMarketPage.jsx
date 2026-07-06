@@ -118,10 +118,18 @@ export default function StockMarketPage() {
       <div className="mb-8 grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <h2 className="section-title text-xl mb-4">시장 종목</h2>
-          <div className="grid gap-3">
-            {stocks.map(stock => (
-              <StockRow key={stock.id} stock={stock} />
-            ))}
+          <div className="bg-base-100 rounded-2xl p-2 sm:p-4 shadow-sm border border-base-200">
+            <div className="hidden sm:flex text-xs font-bold text-base-content/50 px-4 pb-2 border-b border-base-200 mb-2">
+              <div className="flex-[2]">종목명</div>
+              <div className="flex-1 text-right">현재가</div>
+              <div className="flex-1 text-right">등락률</div>
+              <div className="flex-1 text-right">시가총액</div>
+            </div>
+            <div className="grid gap-1">
+              {stocks.map(stock => (
+                <StockRow key={stock.id} stock={stock} />
+              ))}
+            </div>
           </div>
         </div>
         
@@ -223,31 +231,31 @@ function StockRow({ stock }) {
   const color = isUp ? "text-success" : isDown ? "text-error" : "text-base-content";
   
   return (
-    <Link to={`/stocks/${stock.id}`} className="soft-card flex items-center justify-between p-4 hover:-translate-y-0.5 hover:shadow-md transition">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <h3 className="font-black text-lg truncate">{stock.name}</h3>
-          <span className="text-xs font-bold text-base-content/40">{stock.symbol}</span>
-          {stock.status === 'ipo' && <span className="badge badge-warning badge-sm font-bold">공모주</span>}
-          {stock.status === 'acquired' && <span className="badge badge-primary badge-sm font-bold">인수됨</span>}
-          {stock.status === 'delisted' && <span className="badge badge-ghost badge-sm font-bold">상장폐지</span>}
-          {stock.event_type === 'surge' && <span className="badge badge-success badge-sm font-bold">급등</span>}
-          {stock.event_type === 'crash' && <span className="badge badge-error badge-sm font-bold">급락</span>}
-          {stock.event_type === 'delist_warning' && <span className="badge badge-error badge-sm font-bold animate-pulse">위험</span>}
+    <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition">
+      <div className="flex-[2] flex items-center min-w-0 mb-1 sm:mb-0">
+        <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
+        <div className="flex gap-1 shrink-0">
+          {stock.status === 'ipo' && <span className="badge badge-warning badge-xs py-1 font-bold">공모주</span>}
+          {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
+          {stock.status === 'delisted' && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
+          {stock.event_type === 'surge' && <span className="badge badge-success badge-xs py-1 font-bold">급등</span>}
+          {stock.event_type === 'crash' && <span className="badge badge-error badge-xs py-1 font-bold">급락</span>}
+          {stock.event_type === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">위험</span>}
         </div>
-        <p className="text-[11px] text-base-content/50 truncate">
-          {stock.is_etf ? "1등 자산 추종 ETF" : `시가총액 ${formatMoney(stock.market_cap)}`}
-        </p>
       </div>
-      <div className="text-right shrink-0 ml-4">
-        <div className={`font-black text-lg tabular-nums ${stock.status === 'delisted' ? "text-base-content/30" : ""}`}>
+      
+      <div className="flex-[3] flex justify-between sm:justify-end items-end sm:items-center">
+        <div className={`flex-1 sm:text-right font-black tabular-nums ${stock.status === 'delisted' ? "text-base-content/30" : ""}`}>
           {formatMoney(stock.current_price)}
         </div>
-        {stock.status !== 'delisted' && (
-          <div className={`text-sm font-bold tabular-nums ${color}`}>
-            {isUp ? "+" : ""}{formatSignedMoney(diff)} ({isUp ? "+" : ""}{rate.toFixed(1)}%)
-          </div>
-        )}
+        
+        <div className={`flex-1 text-right text-sm font-bold tabular-nums shrink-0 ${stock.status === 'delisted' ? "opacity-0" : color}`}>
+          {isUp ? "▲" : isDown ? "▼" : ""} {rate.toFixed(1)}%
+        </div>
+
+        <div className="flex-1 text-right text-[11px] text-base-content/40 truncate hidden sm:block">
+          {stock.is_etf ? "1등 ETF" : formatCompactMoney(stock.market_cap)}
+        </div>
       </div>
     </Link>
   );

@@ -75,21 +75,22 @@ stocksRouter.get("/:id", (req, res) => {
 });
 
 stocksRouter.post("/buy", (req, res) => {
-  const { stockId, amount } = req.body; // amount is the money they want to spend
+  const { stockId, quantity } = req.body; // quantity is the number of shares
   const userId = req.user.id;
 
-  if (!amount || amount <= 0) return res.status(400).json({ message: "매수 금액을 올바르게 입력해주세요." });
+  if (!quantity || quantity <= 0) return res.status(400).json({ message: "매수 수량을 올바르게 입력해주세요." });
 
   let result;
   try {
     result = db.transaction(() => {
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      if (user.balance < amount) throw new Error("잔액이 부족해요.");
-
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
 
-      const quantity = amount / stock.current_price;
+      const amount = Math.floor(quantity * stock.current_price);
+      if (amount <= 0) throw new Error("매수 금액이 너무 작습니다.");
+
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      if (user.balance < amount) throw new Error("잔액이 부족해요.");
       
       let holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, stockId);
       if (holding) {
