@@ -154,7 +154,7 @@ export default function ProfilePage() {
         </div>
       </section>
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+      <div className={`mb-6 grid gap-4 ${user.balance < 500000 ? "sm:grid-cols-2" : ""}`}>
         <RecoveryCard
           icon="⛏"
           title="탄광에서 자원 캐기"
