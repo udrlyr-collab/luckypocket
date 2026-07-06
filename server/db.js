@@ -308,6 +308,21 @@ db.exec(`
     ON stock_events(stock_id, created_at DESC);
 `);
 
+const stockColumns = new Set(
+  db.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
+);
+if (!stockColumns.has("ipo_subscription_started_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN ipo_subscription_started_at TEXT");
+  db.exec("ALTER TABLE stocks ADD COLUMN ipo_subscription_ends_at TEXT");
+  db.exec("ALTER TABLE stocks ADD COLUMN offering_price INTEGER");
+  db.exec("ALTER TABLE stocks ADD COLUMN newly_listed_until TEXT");
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_phase INTEGER NOT NULL DEFAULT 0");
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_phase_total INTEGER NOT NULL DEFAULT 0");
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_warning_started_at TEXT");
+  db.exec("ALTER TABLE stocks ADD COLUMN etf_base_owner_asset INTEGER");
+  db.exec("ALTER TABLE stocks ADD COLUMN etf_last_tracked_owner_asset INTEGER");
+}
+
 const bonusCodeColumns = new Set(
   db.prepare("PRAGMA table_info(bonus_codes)").all().map((column) => column.name),
 );

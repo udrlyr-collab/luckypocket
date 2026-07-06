@@ -81,6 +81,10 @@ export default function StockDetailPage() {
     return executeTrade("/stocks/buy", { stockId: stock.id, quantity: Number(amountInput) });
   };
 
+  const handleBuyIpo = async () => {
+    return executeTrade("/stocks/buy-ipo", { stockId: stock.id, amount: Number(amountInput) });
+  };
+
   const handleSell = async () => {
     return executeTrade("/stocks/sell", { stockId: stock.id, fraction: sellFraction });
   };
@@ -183,16 +187,18 @@ export default function StockDetailPage() {
 
       <header className="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <h1 className="text-3xl font-black">{stock.name}</h1>
             <span className="text-sm font-bold text-base-content/50">{stock.symbol}</span>
-            {stock.status === 'ipo' && <span className="badge badge-warning">공모주</span>}
+            {stock.status === 'ipo_subscription' && <span className="badge badge-warning">공모주</span>}
+            {stock.status === 'newly_listed' && <span className="badge badge-warning">신규 상장</span>}
             {isAcquired && <span className="badge badge-primary">인수됨</span>}
+            {stock.status === 'delist_warning' && <span className="badge badge-error animate-pulse">거래 주의</span>}
             {isDelisted && <span className="badge badge-ghost">상장폐지</span>}
           </div>
           <p className="text-sm font-bold text-base-content/60">
             {isAcquired ? (
-              <span>이 종목은 {stock.owner_nickname_snapshot}님이 인수한 1등 자산 추종 ETF입니다.</span>
+              <span>이 종목은 {stock.owner_nickname_snapshot}님의 자산을 추종하는 ETF입니다.</span>
             ) : (
               <span>시가총액 {formatMoney(stock.market_cap)}</span>
             )}
@@ -206,10 +212,10 @@ export default function StockDetailPage() {
             {formatMoney(stock.current_price)}
           </div>
           {!isDelisted && (
-            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center ${stock.current_price - stock.previous_price >= 0 ? "text-success" : "text-error"}`}>
-              <span>틱 {stock.current_price - stock.previous_price >= 0 ? "+" : ""}{formatSignedMoney(stock.current_price - stock.previous_price)}</span>
-              <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${todayRate >= 0 ? "text-success" : "text-error"}`}>
-                상장가대비 {todayRate >= 0 ? "+" : ""}{todayRate.toFixed(1)}%
+            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap ${stock.priceChangeAmount >= 0 ? "text-success" : "text-error"}`}>
+              <span>전 틱 대비 {stock.priceChangeAmount >= 0 ? "+" : ""}{formatSignedMoney(stock.priceChangeAmount)}원 · {(stock.priceChangeRate * 100).toFixed(1)}%</span>
+              <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${(stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) >= 0 ? "text-success" : "text-error"}`}>
+                {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate >= 0 ? "+" : ""}${stock.offeringChangeRate.toFixed(1)}%` : `상장가 대비 ${todayRate >= 0 ? "+" : ""}${todayRate.toFixed(1)}%`}
               </span>
             </div>
           )}
@@ -233,6 +239,52 @@ export default function StockDetailPage() {
                   휴지조각 버리기 (보유량 비우기)
                 </button>
               )}
+            </div>
+          ) : stock.status === 'ipo_subscription' ? (
+            <div className="bg-warning/10 border-2 border-warning/20 p-6 rounded-2xl">
+              <h3 className="font-black text-warning text-lg mb-2">🚀 공모 청약 진행 중!</h3>
+              <p className="text-sm font-bold text-base-content/70 mb-4">
+                현재 공모가 <strong className="text-warning text-lg">{formatMoney(stock.offering_price)}</strong>로 무제한 구매 가능합니다.<br/>
+                상장 후 가격이 어떻게 변동될지 예측해보세요!
+              </p>
+              
+              <div className="mb-4">
+                <label className="text-xs font-bold text-base-content/50 block mb-2">
+                  청약 금액 (금액 입력 시 수량 자동 계산) <span className="float-right">보유 잔액: {formatMoney(user.balance)}</span>
+                </label>
+                <div className="flex gap-2">
+                  <input 
+                    type="number" 
+                    className="input input-bordered w-full rounded-2xl bg-base-100" 
+                    placeholder="0"
+                    value={amountInput}
+                    onChange={e => setAmountInput(e.target.value)}
+                  />
+                  <button 
+                    className="btn btn-warning rounded-2xl px-6" 
+                    disabled={busy || !amountInput || Number(amountInput) <= 0}
+                    onClick={handleBuyIpo}
+                  >
+                    {busy ? <span className="loading loading-spinner loading-sm"/> : "공모가로 청약"}
+                  </button>
+                </div>
+                {amountInput > 0 && (
+                  <div className="text-right text-xs mt-1 font-bold text-warning">
+                    예상 수량: {(Number(amountInput) / stock.offering_price).toFixed(2)}주
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-1 mt-2">
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(10000)}>+1만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(100000)}>+10만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(1000000)}>+100만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200 ml-auto" onClick={() => setPercent(0.1)}>10%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.5)}>50%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200 font-bold text-warning" onClick={() => setPercent(1)}>전재산</button>
+                  <button className="btn btn-xs rounded-lg btn-ghost" onClick={() => setAmountInput("")}>초기화</button>
+                </div>
+              </div>
+              {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
+              {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
             </div>
           ) : (
             <div>
@@ -399,7 +451,7 @@ export default function StockDetailPage() {
             <h3 className="font-black text-lg mb-1 flex items-center gap-2">🏢 회사 인수 <span className="badge badge-primary badge-sm">ETF 전환</span></h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
               시가총액 <strong>{formatMoney(stock.market_cap)}</strong> 이상을 지불하면 이 회사를 인수할 수 있어요.<br />
-              인수된 회사는 '1등 자산 추종 ETF'가 되어 리더보드 1등의 자산 변화를 따라갑니다.
+              인수된 회사는 '인수자 자산 추종 ETF'가 되어 오너의 자산 변화를 따라갑니다.
             </p>
           </div>
           <button 

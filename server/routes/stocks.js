@@ -7,21 +7,40 @@ import { delistStock } from "../services/stockService.js";
 export const stocksRouter = express.Router();
 
 stocksRouter.get("/", (req, res) => {
-  const stocks = db.prepare(`
+  const stocksRaw = db.prepare(`
     SELECT * FROM stocks 
-    WHERE status != 'delisted' OR delisted_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day')
+    WHERE status != 'delisted'
     ORDER BY market_cap DESC
   `).all();
   
-  const summary = {
-    total: stocks.length,
-    up: stocks.filter(s => s.current_price > s.previous_price).length,
-    down: stocks.filter(s => s.current_price < s.previous_price).length,
-    ipo: stocks.filter(s => s.status === 'ipo').length,
-    delisted: stocks.filter(s => s.status === 'delisted').length
+  const recentDelisted = db.prepare(`
+    SELECT * FROM stocks
+    WHERE status = 'delisted'
+    ORDER BY delisted_at DESC LIMIT 5
+  `).all();
+
+  const processStock = (s) => {
+    return {
+      ...s,
+      priceChangeAmount: s.current_price - s.previous_price,
+      priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
+      offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
+      offeringChangeRate: s.offering_price ? ((s.current_price - s.offering_price) / s.offering_price) * 100 : null
+    };
   };
 
-  res.json({ stocks, summary });
+  const stocks = stocksRaw.map(processStock);
+  const recentDelistedStocks = recentDelisted.map(processStock);
+
+  const summary = {
+    total: stocks.length,
+    up: stocks.filter(s => s.priceChangeAmount > 0).length,
+    down: stocks.filter(s => s.priceChangeAmount < 0).length,
+    ipo: stocks.filter(s => s.status === 'ipo_subscription' || s.status === 'newly_listed').length,
+    delisted: db.prepare("SELECT COUNT(*) as c FROM stocks WHERE status = 'delisted'").get().c
+  };
+
+  res.json({ stocks, recentDelistedStocks, summary });
 });
 
 stocksRouter.get("/news", (req, res) => {
@@ -62,6 +81,16 @@ stocksRouter.get("/:id", (req, res) => {
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
   if (!stock) return res.status(404).json({ message: "종목을 찾을 수 없어요." });
 
+  const processStock = (s) => ({
+    ...s,
+    priceChangeAmount: s.current_price - s.previous_price,
+    priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
+    offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
+    offeringChangeRate: s.offering_price ? ((s.current_price - s.offering_price) / s.offering_price) * 100 : null
+  });
+
+  const stockWithCalculations = processStock(stock);
+
   const history = db.prepare(`
     SELECT * FROM stock_price_history 
     WHERE stock_id = ? 
@@ -71,7 +100,7 @@ stocksRouter.get("/:id", (req, res) => {
   const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, id);
   const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(req.user.id, id);
 
-  res.json({ stock, history, holding, positions });
+  res.json({ stock: stockWithCalculations, history, holding, positions });
 });
 
 stocksRouter.post("/buy", (req, res) => {
@@ -122,6 +151,59 @@ stocksRouter.post("/buy", (req, res) => {
   }
 
   res.json({ message: "매수 주문이 체결되었어요.", ...result });
+});
+
+stocksRouter.post("/buy-ipo", (req, res) => {
+  const { stockId, amount } = req.body;
+  const userId = req.user.id;
+
+  if (!amount || amount <= 0) return res.status(400).json({ message: "올바른 구매 금액을 입력해주세요." });
+
+  let result;
+  try {
+    result = db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+      if (!stock || stock.status !== 'ipo_subscription') throw new Error("현재 공모 청약 기간이 아닙니다.");
+
+      const now = Date.now();
+      const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
+      if (now >= endsAt) throw new Error("공모 청약 기간이 종료되었습니다.");
+
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      if (user.balance < amount) throw new Error("잔액이 부족해요.");
+
+      const quantity = amount / stock.offering_price;
+
+      let holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, stockId);
+      if (holding) {
+        const newQuantity = holding.quantity + quantity;
+        const totalCost = (holding.average_price * holding.quantity) + amount;
+        const newAvg = totalCost / newQuantity;
+        db.prepare("UPDATE stock_holdings SET quantity = ?, average_price = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, newAvg, holding.id);
+      } else {
+        db.prepare("INSERT INTO stock_holdings (user_id, stock_id, quantity, average_price) VALUES (?, ?, ?, ?)").run(userId, stockId, quantity, stock.offering_price);
+      }
+
+      const balanceAfter = user.balance - amount;
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
+
+      db.prepare(`
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_ipo_subscribe', ?, ?, ?, ?)
+      `).run(userId, -amount, user.balance, balanceAfter, stockId);
+
+      db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
+        VALUES (?, ?, 'ipo_subscribe', ?, ?, ?, 1, ?, ?)
+      `).run(userId, stockId, amount, quantity, stock.offering_price, user.balance, balanceAfter);
+
+      return { balance: balanceAfter };
+    })();
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+
+  res.json({ message: "공모주 청약에 성공했어요!", ...result });
 });
 
 stocksRouter.post("/sell", (req, res) => {
@@ -315,10 +397,11 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       
       db.prepare(`
         UPDATE stocks 
-        SET status = 'acquired', is_etf = 1, etf_tracking_type = 'top_user_asset', 
-            owner_user_id = ?, owner_nickname_snapshot = ?
+        SET status = 'acquired', is_etf = 1, etf_tracking_type = 'owner_asset', 
+            owner_user_id = ?, owner_nickname_snapshot = ?,
+            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?
         WHERE id = ?
-      `).run(userId, user.nickname, id);
+      `).run(userId, user.nickname, user.balance, user.balance, id);
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
@@ -335,7 +418,7 @@ stocksRouter.post("/:id/acquire", (req, res) => {
         nickname: user.nickname,
         type: "stock_acquired",
         title: "회사 인수",
-        message: `${user.nickname}님이 ${cost.toLocaleString()}원에 ${stock.name}을(를) 인수했어요! 이제 1등 자산을 추종하는 ETF가 됩니다.`,
+        message: `${user.nickname}님이 ${stock.name}을(를) 인수했어요! 이제 ${user.nickname}님의 자산을 추종하는 ETF가 됩니다.`,
         amount: -cost,
         gameType: "stock",
         gameName: "주식",

@@ -3,12 +3,9 @@ import { createServerNotification } from "./serverNotificationService.js";
 const STOCK_TICK_INTERVAL_MS = 10_000;
 
 const EVENT_PROBABILITIES = {
-  normal: 0.92,
+  normal: 0.95,
   surge: 0.025,
-  crash: 0.025,
-  delistWarning: 0.015,
-  delist: 0.005,
-  ipoBoost: 0.01
+  crash: 0.025
 };
 
 const IPO_EVENT_PROBABILITIES = {
@@ -85,7 +82,7 @@ function getRandomEvent(probs) {
 
 export function tickStockMarket(db) {
   db.transaction(() => {
-    const stocks = db.prepare("SELECT * FROM stocks WHERE status IN ('listed', 'ipo', 'acquired')").all();
+    const stocks = db.prepare("SELECT * FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
 
     for (const stock of stocks) {
       if (stock.is_etf) {
@@ -114,7 +111,31 @@ function processNormalTick(db, stock) {
     db.prepare("UPDATE stocks SET event_type = NULL, event_until = NULL WHERE id = ?").run(stock.id);
   }
 
-  if (stock.status === "ipo") {
+  if (stock.status === "ipo_subscription") {
+    const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
+    if (now >= endsAt) {
+      newStatus = "newly_listed";
+      const newlyListedUntil = new Date(now + 3 * 60 * 1000).toISOString();
+      db.prepare("UPDATE stocks SET newly_listed_until = ? WHERE id = ?").run(newlyListedUntil, stock.id);
+      
+      createServerNotification(db, {
+        type: "stock_newly_listed",
+        title: "신규 상장",
+        message: `${stock.name}이(가) 신규 상장했어요!`,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { stockId: stock.id, symbol: stock.symbol }
+      });
+      db.prepare("INSERT INTO stock_events (stock_id, event_type, title, message) VALUES (?, ?, ?, ?)").run(stock.id, "newly_listed", "신규 상장", `${stock.name} 종목이 신규 상장되어 거래가 시작되었습니다.`);
+    } else {
+      return; // In subscription period, price is locked
+    }
+  } else if (stock.status === "newly_listed") {
+    const newlyListedUntil = new Date(stock.newly_listed_until).getTime();
+    if (now >= newlyListedUntil) {
+      newStatus = "listed";
+    }
+
     const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
     if (event === "ipoSurge") {
       newPrice = Math.floor(newPrice * (1 + 0.5 + Math.random() * 2.5)); // +50% ~ +300%
@@ -126,49 +147,53 @@ function processNormalTick(db, stock) {
       const change = (Math.random() * 0.4 - 0.1); // -10% ~ +30%
       newPrice = Math.floor(newPrice * (1 + change));
     }
-    
-    // Transition to listed after some time or randomly (10% chance per tick to stabilize)
-    if (Math.random() < 0.1) {
-      newStatus = "listed";
+  } else if (stock.status === "final_crash") {
+    delistStock(db, stock);
+    return;
+  } else if (stock.status === "delist_warning") {
+    const phase = stock.delist_phase || 0;
+    const totalPhase = stock.delist_phase_total || 5;
+
+    if (phase < totalPhase - 1) {
+      const direction = phase % 2 === 0 ? 1 : -1;
+      const changeRate = direction === 1
+        ? (0.25 + Math.random() * 0.55) // +25% ~ +80%
+        : -(0.30 + Math.random() * 0.40); // -30% ~ -70%
+
+      newPrice = Math.floor(newPrice * (1 + changeRate));
+      db.prepare("UPDATE stocks SET delist_phase = delist_phase + 1 WHERE id = ?").run(stock.id);
+      eventType = direction === 1 ? "unstable_surge" : "unstable_crash";
+    } else {
+      // Final crash
+      const finalCrashRate = -(0.85 + Math.random() * 0.10); // -85% ~ -95%
+      newPrice = Math.floor(newPrice * (1 + finalCrashRate));
+      eventType = "final_crash";
+      newStatus = "final_crash";
     }
   } else {
     // Normal listed stock
-    if (currentEventType === "delist_warning") {
-      // High chance to delist or recover
-      if (Math.random() < 0.3) {
-        delistStock(db, stock);
-        return; // Terminate further processing for this stock
-      } else if (Math.random() < 0.4) {
-        // Recover
-        db.prepare("UPDATE stocks SET event_type = NULL, event_until = NULL WHERE id = ?").run(stock.id);
-      }
-    }
-
-    const event = getRandomEvent(EVENT_PROBABILITIES);
-    if (event === "surge") {
-      newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.6)); // +20% ~ +80%
-      eventType = "surge";
-      eventMsg = `${stock.name} 주가가 급등했어요!`;
-    } else if (event === "crash") {
-      newPrice = Math.floor(newPrice * (1 - 0.2 - Math.random() * 0.5)); // -20% ~ -70%
-      eventType = "crash";
-      eventMsg = `${stock.name} 주가가 급락했어요!`;
-    } else if (event === "delistWarning" && currentEventType !== "delist_warning") {
-      db.prepare("UPDATE stocks SET event_type = ?, event_until = ? WHERE id = ?")
-        .run("delist_warning", now + 60000, stock.id); // 1 minute warning
+    if (Math.random() < 0.005) { // 0.5% chance to become delist_warning
+      const totalPhases = Math.floor(Math.random() * 3) + 5; // 5~7 phases
+      db.prepare("UPDATE stocks SET delist_phase = 0, delist_phase_total = ?, delist_warning_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
+        .run(totalPhases, stock.id);
+      newStatus = "delist_warning";
       eventType = "delist_warning";
-      eventMsg = `${stock.name} 종목이 상장폐지 위기에 처했어요!`;
-    } else if (event === "delist") {
-      delistStock(db, stock);
-      return;
-    } else if (event === "ipoBoost") {
-       // Small boost
-       newPrice = Math.floor(newPrice * (1 + 0.1 + Math.random() * 0.2));
+      eventMsg = `${stock.name} 종목에서 이상 변동이 감지되었어요!`;
     } else {
-      // Normal fluctuation
-      const maxChange = stock.volatility; // e.g. 0.03 for 3%
-      const change = (Math.random() * 2 - 1) * maxChange + stock.trend;
-      newPrice = Math.floor(newPrice * (1 + change));
+      const event = getRandomEvent(EVENT_PROBABILITIES);
+      if (event === "surge") {
+        newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.6)); // +20% ~ +80%
+        eventType = "surge";
+        eventMsg = `${stock.name} 주가가 급등했어요!`;
+      } else if (event === "crash") {
+        newPrice = Math.floor(newPrice * (1 - 0.2 - Math.random() * 0.5)); // -20% ~ -70%
+        eventType = "crash";
+        eventMsg = `${stock.name} 주가가 급락했어요!`;
+      } else {
+        const maxChange = stock.volatility;
+        const change = (Math.random() * 2 - 1) * maxChange + stock.trend;
+        newPrice = Math.floor(newPrice * (1 + change));
+      }
     }
   }
 
@@ -181,25 +206,25 @@ function processNormalTick(db, stock) {
 }
 
 function processEtfTick(db, stock) {
-  // 인수자의 자산을 추종
   const ownerUser = db.prepare("SELECT balance FROM users WHERE id = ?").get(stock.owner_user_id);
   if (!ownerUser) return;
 
-  const currentTopBalance = ownerUser.balance;
+  const currentOwnerAsset = ownerUser.balance;
   
-  if (!stock.etf_base_price || !stock.etf_base_top_balance) {
-    db.prepare("UPDATE stocks SET etf_base_price = ?, etf_base_top_balance = ?, etf_last_tracked_balance = ? WHERE id = ?")
-      .run(stock.current_price, currentTopBalance, currentTopBalance, stock.id);
+  if (!stock.etf_base_price || !stock.etf_base_owner_asset) {
+    db.prepare("UPDATE stocks SET etf_base_price = ?, etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ? WHERE id = ?")
+      .run(stock.current_price, currentOwnerAsset, currentOwnerAsset, stock.id);
     return;
   }
 
-  if (currentTopBalance !== stock.etf_last_tracked_balance) {
-    const ratio = currentTopBalance / stock.etf_base_top_balance;
+  if (currentOwnerAsset !== stock.etf_last_tracked_owner_asset) {
+    const safeOwnerAsset = Math.max(currentOwnerAsset, 1);
+    const ratio = safeOwnerAsset / Math.max(stock.etf_base_owner_asset, 1);
     let newPrice = Math.floor(stock.etf_base_price * ratio);
     newPrice = Math.max(1, newPrice); // minimum 1 won
     
     updateStockPrice(db, stock, newPrice, stock.status, "etf_update", null);
-    db.prepare("UPDATE stocks SET etf_last_tracked_balance = ? WHERE id = ?").run(currentTopBalance, stock.id);
+    db.prepare("UPDATE stocks SET etf_last_tracked_owner_asset = ? WHERE id = ?").run(currentOwnerAsset, stock.id);
   }
 }
 
@@ -243,7 +268,7 @@ export function delistStock(db, stock) {
   createServerNotification(db, {
     type: "stock_delisted",
     title: "상장폐지 발생",
-    message: `${stock.name} 종목이 상장폐지되었습니다. 보유 주식은 휴지조각이 되었습니다.`,
+    message: `${stock.name}이(가) 급등락을 반복하다가 최종 대폭락 후 상장폐지되었어요.`,
     gameType: "stock",
     gameName: "주식",
     metadata: { stockId: stock.id, symbol: stock.symbol }
@@ -267,16 +292,17 @@ export function createIpoStock(db) {
   const volatility = 0.05 + Math.random() * 0.05; // 5% ~ 10% highly volatile initially
 
   const insert = db.prepare(`
-    INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility)
-    VALUES (?, ?, 'ipo', ?, ?, ?, ?, ?, ?)
+    INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, ipo_subscription_started_at, ipo_subscription_ends_at, offering_price)
+    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+3 minutes'), ?)
   `);
   
-  const stockId = insert.run(symbol, name, price, price, price, shares, cap, volatility).lastInsertRowid;
+  const stockId = insert.run(symbol, name, price, price, price, shares, cap, volatility, price).lastInsertRowid;
 
+  // 알림: 새 공모주가 상장폐지 후 등장했다는 메시지로 변경할 수 있지만, 기본적으로 아래 메시지를 사용
   createServerNotification(db, {
     type: "stock_ipo",
-    title: "신규 상장 (IPO)",
-    message: `새로운 공모주 ${name}(${symbol})이(가) 상장되었습니다!`,
+    title: "신규 공모주 청약",
+    message: `새 공모주 ${name}(${symbol})이 등장했어요. 3분 동안 공모가로 구매할 수 있어요.`,
     gameType: "stock",
     gameName: "주식",
     metadata: { stockId, symbol, name }

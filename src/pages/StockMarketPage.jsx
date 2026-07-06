@@ -68,7 +68,7 @@ export default function StockMarketPage() {
     );
   }
 
-  const { stocks, summary } = market;
+  const { stocks, recentDelistedStocks, summary } = market;
   const { holdings, positions } = portfolio;
 
   const totalHoldingsValue = holdings.reduce((sum, h) => sum + h.value, 0);
@@ -106,12 +106,12 @@ export default function StockMarketPage() {
           <strong className="block text-lg tabular-nums text-success">{summary.up} <span className="text-base-content/30">/</span> <span className="text-error">{summary.down}</span></strong>
         </div>
         <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">공모주 (IPO)</span>
+          <span className="text-[10px] font-bold text-base-content/50">공모주/신규 상장</span>
           <strong className="block text-lg tabular-nums text-warning">{summary.ipo}</strong>
         </div>
         <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">상장폐지</span>
-          <strong className="block text-lg tabular-nums text-base-content/40">{summary.delisted}</strong>
+          <span className="text-[10px] font-bold text-base-content/50">최근 상장폐지</span>
+          <strong className="block text-lg tabular-nums text-base-content/40">{recentDelistedStocks ? recentDelistedStocks.length : 0}</strong>
         </div>
       </div>
 
@@ -129,6 +129,16 @@ export default function StockMarketPage() {
               {stocks.map(stock => (
                 <StockRow key={stock.id} stock={stock} />
               ))}
+              {recentDelistedStocks && recentDelistedStocks.length > 0 && (
+                <div className="mt-4 pt-4 border-t border-base-200">
+                  <div className="text-xs font-bold text-base-content/50 mb-2 px-2">최근 상장폐지 (최근 5개)</div>
+                  <div className="grid gap-1 opacity-60">
+                    {recentDelistedStocks.map(stock => (
+                      <StockRow key={stock.id} stock={stock} />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -223,38 +233,43 @@ export default function StockMarketPage() {
 }
 
 function StockRow({ stock }) {
-  const diff = stock.current_price - stock.previous_price;
-  const rate = stock.previous_price > 0 ? (diff / stock.previous_price) * 100 : 0;
-  
-  const isUp = diff > 0;
-  const isDown = diff < 0;
+  const isDelisted = stock.status === 'delisted';
+  const isUp = stock.priceChangeAmount > 0;
+  const isDown = stock.priceChangeAmount < 0;
   const color = isUp ? "text-success" : isDown ? "text-error" : "text-base-content";
   
   return (
-    <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition">
+    <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition border border-transparent hover:border-base-200/50">
       <div className="flex-[2] flex items-center min-w-0 mb-1 sm:mb-0">
         <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
-        <div className="flex gap-1 shrink-0">
-          {stock.status === 'ipo' && <span className="badge badge-warning badge-xs py-1 font-bold">공모주</span>}
+        <div className="flex gap-1 shrink-0 flex-wrap">
+          {stock.status === 'ipo_subscription' && <span className="badge badge-warning badge-xs py-1 font-bold">공모주</span>}
+          {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
-          {stock.status === 'delisted' && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
-          {stock.event_type === 'surge' && <span className="badge badge-success badge-xs py-1 font-bold">급등</span>}
-          {stock.event_type === 'crash' && <span className="badge badge-error badge-xs py-1 font-bold">급락</span>}
-          {stock.event_type === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">위험</span>}
+          {stock.status === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">거래 주의</span>}
+          {stock.is_etf && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
+          {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
         </div>
       </div>
       
-      <div className="flex-[3] flex justify-between sm:justify-end items-end sm:items-center">
-        <div className={`flex-1 sm:text-right font-black tabular-nums ${stock.status === 'delisted' ? "text-base-content/30" : ""}`}>
+      <div className="flex-[3] flex justify-between sm:justify-end items-end sm:items-center mt-1 sm:mt-0">
+        <div className={`flex-1 sm:text-right font-black tabular-nums ${isDelisted ? "text-base-content/30" : ""}`}>
           {formatMoney(stock.current_price)}
         </div>
         
-        <div className={`flex-1 text-right text-sm font-bold tabular-nums shrink-0 ${stock.status === 'delisted' ? "opacity-0" : color}`}>
-          {isUp ? "▲" : isDown ? "▼" : ""} {rate.toFixed(1)}%
+        <div className={`flex-1 text-right text-xs font-bold tabular-nums shrink-0 ${isDelisted ? "opacity-0" : color}`}>
+          {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}<br className="sm:hidden"/>
+          <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toFixed(1)}%)</span>
         </div>
 
-        <div className="flex-1 text-right text-[11px] text-base-content/40 truncate hidden sm:block">
-          {stock.is_etf ? "1등 ETF" : formatCompactMoney(stock.market_cap)}
+        <div className="flex-1 text-right text-[11px] text-base-content/50 truncate hidden sm:block">
+          {stock.is_etf ? (
+            <span className="text-primary">{stock.owner_nickname_snapshot}</span>
+          ) : stock.status === 'ipo_subscription' || stock.status === 'newly_listed' ? (
+            <span className="text-warning">공모가 {formatCompactMoney(stock.offering_price)}</span>
+          ) : (
+            formatCompactMoney(stock.market_cap)
+          )}
         </div>
       </div>
     </Link>
