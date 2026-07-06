@@ -16,6 +16,12 @@ import {
   throwDart,
 } from "../services/gameMath.js";
 import {
+  calculateRiskCashoutPayout,
+  getAdjustedMultiplier,
+  getRiskPayoutPreview,
+  getRiskStagePayoutInfo,
+} from "../services/riskPayoutService.js";
+import {
   GameError,
   finishInstantGame,
   finishReservedGame,
@@ -47,14 +53,43 @@ function saveSession(sessionId, state, status = "active") {
 }
 
 function riskView(session, state) {
+  const bet = session.bet_amount;
   const current = state.stage > 0 ? RISK_STAGES[state.stage - 1] : null;
   const next = RISK_STAGES[state.stage] || null;
+
+  let cashoutAmount = 0;
+  let effectiveMultiplier = 1;
+  let baseMultiplier = 1;
+  let adjusted = false;
+  if (current) {
+    const info = getRiskStagePayoutInfo(bet, state.stage - 1);
+    cashoutAmount = info.expectedPayout;
+    effectiveMultiplier = info.effectiveMultiplier;
+    baseMultiplier = info.baseMultiplier;
+    adjusted = info.adjusted;
+  }
+
+  let nextAmount = null;
+  let nextEffectiveMultiplier = null;
+  let nextAdjusted = false;
+  if (next) {
+    const nextInfo = getRiskStagePayoutInfo(bet, state.stage);
+    nextAmount = nextInfo.expectedPayout;
+    nextEffectiveMultiplier = nextInfo.effectiveMultiplier;
+    nextAdjusted = nextInfo.adjusted;
+  }
+
   return {
     sessionId: session.id,
-    betAmount: session.bet_amount,
+    betAmount: bet,
     stage: state.stage,
-    cashoutAmount: current ? payoutFor(session.bet_amount, current.multiplier) : 0,
-    nextAmount: next ? payoutFor(session.bet_amount, next.multiplier) : null,
+    cashoutAmount,
+    effectiveMultiplier,
+    baseMultiplier,
+    adjusted,
+    nextAmount,
+    nextEffectiveMultiplier,
+    nextAdjusted,
     nextChance: next?.stepChance ?? null,
     cumulativeChance: current?.cumulativeChance ?? 1,
     multiplier: current?.multiplier ?? 1,
@@ -99,6 +134,14 @@ gamesRouter.get("/active", (req, res) => {
   return res.json(response);
 });
 
+gamesRouter.get("/risk/payout-preview", (req, res) => {
+  const betAmount = Number(req.query.betAmount);
+  if (!Number.isFinite(betAmount) || betAmount < 1000) {
+    return res.status(400).json({ message: "배팅금을 올바르게 입력해 주세요." });
+  }
+  return res.json(getRiskPayoutPreview(betAmount));
+});
+
 gamesRouter.post("/risk-button/start", (req, res, next) => {
   try {
     const start = db.transaction(() => {
@@ -137,9 +180,6 @@ gamesRouter.post("/risk-button/press", (req, res, next) => {
         throw new GameError("마지막 단계예요. 수익을 확정해 주세요.");
       }
       const targetStage = state.stage + 1;
-      if (targetStage >= 6 && session.bet_amount > 100000) {
-        throw new GameError("6단계 이상은 배팅금 100,000원 이하만 도전할 수 있어요.");
-      }
       const survived = chance(RISK_STAGES[state.stage].stepChance);
       if (!survived) {
         const detail = { failedAt: targetStage, reachedStage: state.stage, cashedOut: false };
@@ -177,9 +217,7 @@ gamesRouter.post("/risk-button/cashout", (req, res, next) => {
       if (!session) throw new GameError("진행 중인 위험버튼 게임이 없어요.", 404);
       const state = parseState(session);
       if (state.stage < 1) throw new GameError("버튼을 한 번 이상 성공한 뒤 확정할 수 있어요.");
-      const spec = RISK_STAGES[state.stage - 1];
-      const payout = payoutFor(session.bet_amount, spec.multiplier);
-      const detail = { stage: state.stage, multiplier: spec.multiplier, cashedOut: true };
+      const { payout, detail } = calculateRiskCashoutPayout(session.bet_amount, state.stage);
       saveSession(session.id, state, "completed");
       return finishReservedGame({
         userId: req.user.id,
