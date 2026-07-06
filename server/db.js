@@ -323,6 +323,17 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN etf_last_tracked_owner_asset INTEGER");
 }
 
+const stockEventColumns = new Set(
+  db.prepare("PRAGMA table_info(stock_events)").all().map((column) => column.name),
+);
+if (!stockEventColumns.has("price_before")) {
+  db.exec("ALTER TABLE stock_events ADD COLUMN price_before INTEGER");
+  db.exec("ALTER TABLE stock_events ADD COLUMN price_after INTEGER");
+  db.exec("ALTER TABLE stock_events ADD COLUMN change_amount INTEGER");
+  db.exec("ALTER TABLE stock_events ADD COLUMN change_rate REAL");
+  db.exec("ALTER TABLE stock_events ADD COLUMN basis TEXT");
+}
+
 const bonusCodeColumns = new Set(
   db.prepare("PRAGMA table_info(bonus_codes)").all().map((column) => column.name),
 );
@@ -535,6 +546,49 @@ function seedBonusCodes() {
 }
 
 seedBonusCodes();
+
+// Deduplicate existing active stocks
+import { STOCK_NAME_POOL } from "./constants/stockNamePool.js";
+
+const migrateDuplicateStocks = db.transaction(() => {
+  const activeStocks = db.prepare("SELECT id, name, symbol FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash') ORDER BY id ASC").all();
+  const seenNames = new Set();
+  const seenSymbols = new Set();
+  const update = db.prepare("UPDATE stocks SET name = ?, symbol = ? WHERE id = ?");
+
+  for (const stock of activeStocks) {
+    if (seenNames.has(stock.name) || seenSymbols.has(stock.symbol)) {
+      // Find a new identity from pool
+      const poolNames = new Set(STOCK_NAME_POOL.map(s => s.name));
+      const poolSymbols = new Set(STOCK_NAME_POOL.map(s => s.symbol));
+      
+      const candidates = STOCK_NAME_POOL.filter(item => 
+        !seenNames.has(item.name) && 
+        !seenSymbols.has(item.symbol)
+      );
+      
+      let candidate;
+      if (candidates.length > 0) {
+        candidate = candidates[Math.floor(Math.random() * candidates.length)];
+      } else {
+        const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
+        const suffix = Date.now().toString().slice(-4);
+        candidate = {
+          name: `${fallback.name}${suffix}`,
+          symbol: `${fallback.symbol}${suffix}`
+        };
+      }
+      
+      update.run(candidate.name, candidate.symbol, stock.id);
+      seenNames.add(candidate.name);
+      seenSymbols.add(candidate.symbol);
+    } else {
+      seenNames.add(stock.name);
+      seenSymbols.add(stock.symbol);
+    }
+  }
+});
+migrateDuplicateStocks();
 
 export function publicUser(user) {
   return {

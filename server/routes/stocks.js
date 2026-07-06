@@ -22,10 +22,13 @@ stocksRouter.get("/", (req, res) => {
   const processStock = (s) => {
     return {
       ...s,
+      currentPrice: s.current_price,
+      previousPrice: s.previous_price,
+      offeringPrice: s.offering_price,
       priceChangeAmount: s.current_price - s.previous_price,
       priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
       offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-      offeringChangeRate: s.offering_price ? ((s.current_price - s.offering_price) / s.offering_price) * 100 : null
+      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
     };
   };
 
@@ -83,10 +86,13 @@ stocksRouter.get("/:id", (req, res) => {
 
   const processStock = (s) => ({
     ...s,
+    currentPrice: s.current_price,
+    previousPrice: s.previous_price,
+    offeringPrice: s.offering_price,
     priceChangeAmount: s.current_price - s.previous_price,
     priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
     offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-    offeringChangeRate: s.offering_price ? ((s.current_price - s.offering_price) / s.offering_price) * 100 : null
+    offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
   });
 
   const stockWithCalculations = processStock(stock);

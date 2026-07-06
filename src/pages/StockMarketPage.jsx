@@ -258,7 +258,7 @@ function StockRow({ stock }) {
         </div>
         
         <div className={`flex-1 text-right text-xs font-bold tabular-nums shrink-0 ${isDelisted ? "opacity-0" : color}`}>
-          {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}<br className="sm:hidden"/>
+          {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원<br className="sm:hidden"/>
           <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toFixed(1)}%)</span>
         </div>
 

@@ -14,40 +14,35 @@ const IPO_EVENT_PROBABILITIES = {
   ipoCrash: 0.15
 };
 
-const DEFAULT_STOCKS = [
-  { symbol: "LUCKY", name: "행운전자" },
-  { symbol: "POKET", name: "주머니식품" },
-  { symbol: "BOMB", name: "폭탄산업" },
-  { symbol: "DART", name: "다트정밀" },
-  { symbol: "SLOT", name: "슬롯엔터" },
-  { symbol: "MINE", name: "탄광개발" },
-  { symbol: "CARD", name: "카드리테일" },
-  { symbol: "MOON", name: "달토끼바이오" }
-];
+import { STOCK_NAME_POOL } from "../constants/stockNamePool.js";
 
-function randomPrice() {
-  return Math.floor(Math.random() * 49000) + 1000; // 1,000 ~ 50,000
-}
+function pickRandomStockIdentity(db) {
+  const activeStocks = db.prepare("SELECT name, symbol FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
+  const recentDelisted = db.prepare("SELECT name FROM stocks WHERE status = 'delisted' ORDER BY delisted_at DESC LIMIT 5").all();
+  
+  const activeNames = new Set(activeStocks.map(s => s.name));
+  const activeSymbols = new Set(activeStocks.map(s => s.symbol));
+  const recentDelistedNames = new Set(recentDelisted.map(s => s.name));
 
-function randomShares() {
-  return Math.floor(Math.random() * 990000) + 10000; // 10,000 ~ 1,000,000
-}
+  const candidates = STOCK_NAME_POOL.filter(item => {
+    return (
+      !activeNames.has(item.name) &&
+      !activeSymbols.has(item.symbol) &&
+      !recentDelistedNames.has(item.name)
+    );
+  });
 
-function generateIpoName() {
-  const prefixes = ["우주", "메타", "스마트", "미래", "글로벌", "신성", "제일", "동방"];
-  const suffixes = ["테크", "바이오", "에너지", "홀딩스", "로보틱스", "솔루션", "시스템즈", "네트웍스"];
-  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-  const suffix = suffixes[Math.floor(Math.random() * suffixes.length)];
-  return `${prefix}${suffix}`;
-}
-
-function generateIpoSymbol() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  let symbol = "";
-  for (let i = 0; i < 4; i++) {
-    symbol += chars.charAt(Math.floor(Math.random() * chars.length));
+  if (candidates.length > 0) {
+    return candidates[Math.floor(Math.random() * candidates.length)];
   }
-  return symbol;
+
+  const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
+  const suffix = Date.now().toString().slice(-4);
+
+  return {
+    name: `${fallback.name}${suffix}`,
+    symbol: `${fallback.symbol}${suffix}`
+  };
 }
 
 export function initStockMarket(db) {
@@ -59,11 +54,12 @@ export function initStockMarket(db) {
     `);
     
     db.transaction(() => {
-      for (const st of DEFAULT_STOCKS) {
-        const price = randomPrice();
-        const shares = randomShares();
+      for (let i = 0; i < 8; i++) {
+        const st = pickRandomStockIdentity(db);
+        const price = Math.floor(Math.random() * 49000) + 1000;
+        const shares = Math.floor(Math.random() * 990000) + 10000;
         const cap = price * shares;
-        const volatility = 0.01 + Math.random() * 0.04; // 1% ~ 5% base volatility
+        const volatility = 0.01 + Math.random() * 0.04;
         insert.run(st.symbol, st.name, price, price, price, shares, cap, volatility);
       }
     })();
@@ -140,9 +136,11 @@ function processNormalTick(db, stock) {
     if (event === "ipoSurge") {
       newPrice = Math.floor(newPrice * (1 + 0.5 + Math.random() * 2.5)); // +50% ~ +300%
       eventType = "ipo_surge";
+      eventMsg = `${stock.name}이(가) 신규 상장 후 급등했어요.`;
     } else if (event === "ipoCrash") {
       newPrice = Math.floor(newPrice * (1 - 0.4 - Math.random() * 0.4)); // -40% ~ -80%
       eventType = "ipo_crash";
+      eventMsg = `${stock.name}이(가) 신규 상장 후 급락했어요.`;
     } else {
       const change = (Math.random() * 0.4 - 0.1); // -10% ~ +30%
       newPrice = Math.floor(newPrice * (1 + change));
@@ -168,6 +166,7 @@ function processNormalTick(db, stock) {
       const finalCrashRate = -(0.85 + Math.random() * 0.10); // -85% ~ -95%
       newPrice = Math.floor(newPrice * (1 + finalCrashRate));
       eventType = "final_crash";
+      eventMsg = `${stock.name}이(가) 최종 대폭락했어요.`;
       newStatus = "final_crash";
     }
   } else {
@@ -201,7 +200,10 @@ function processNormalTick(db, stock) {
   newPrice = Math.max(1, newPrice);
 
   if (newPrice !== stock.current_price || newStatus !== stock.status) {
-    updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg);
+    const basis = (eventType === "ipo_surge" || eventType === "ipo_crash") ? "offering_price" 
+      : eventType === "final_crash" ? "delist_final_crash" 
+      : "previous_tick";
+    updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, basis);
   }
 }
 
@@ -228,7 +230,7 @@ function processEtfTick(db, stock) {
   }
 }
 
-function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg) {
+function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, basis = "previous_tick") {
   const newCap = newPrice * stock.total_shares;
   
   db.prepare(`
@@ -243,13 +245,36 @@ function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg) {
   `).run(stock.id, newPrice, newCap, eventType);
 
   if (eventType && eventMsg) {
-    const eventId = db.prepare(`
-      INSERT INTO stock_events (stock_id, event_type, title, message)
-      VALUES (?, ?, ?, ?)
-    `).run(stock.id, eventType, eventType === "surge" ? "급등" : eventType === "crash" ? "급락" : "위기", eventMsg).lastInsertRowid;
+    const priceBefore = stock.current_price;
+    const priceAfter = newPrice;
+    const changeAmount = priceAfter - priceBefore;
+    const changeRate = priceBefore > 0 ? changeAmount / priceBefore : 0;
     
-    // Optional: Only broadcast really huge surges/crashes to server_notifications if needed, 
-    // but the prompt says to broadcast IPOs, acquired, delisted.
+    let finalMsg = eventMsg;
+    const formatRate = (rate) => {
+      const percent = rate * 100;
+      if (percent > 0) return `+${percent.toFixed(1)}%`;
+      if (percent < 0) return `${percent.toFixed(1)}%`;
+      return "0.0%";
+    };
+    const formatAmount = (amt) => {
+      if (amt > 0) return `+${amt.toLocaleString()}원`;
+      if (amt < 0) return `${amt.toLocaleString()}원`;
+      return "0원";
+    };
+
+    if (basis === "previous_tick" || basis === "delist_final_crash") {
+      finalMsg += ` 전 tick 대비 ${formatAmount(changeAmount)} · ${formatRate(changeRate)}`;
+    } else if (basis === "offering_price" && stock.offering_price) {
+      const offAmt = priceAfter - stock.offering_price;
+      const offRate = stock.offering_price > 0 ? offAmt / stock.offering_price : 0;
+      finalMsg += ` 공모가 대비 ${formatAmount(offAmt)} · ${formatRate(offRate)}`;
+    }
+
+    db.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message, price_before, price_after, change_amount, change_rate, basis)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(stock.id, eventType, eventType === "surge" || eventType === "ipo_surge" ? "급등" : eventType === "crash" || eventType === "ipo_crash" ? "급락" : "위기", finalMsg, priceBefore, priceAfter, changeAmount, changeRate, basis);
   }
 }
 
@@ -284,10 +309,11 @@ export function delistStock(db, stock) {
 }
 
 export function createIpoStock(db) {
-  const symbol = generateIpoSymbol();
-  const name = generateIpoName();
+  const st = pickRandomStockIdentity(db);
+  const symbol = st.symbol;
+  const name = st.name;
   const price = Math.floor(Math.random() * 4500) + 500; // 500 ~ 5,000
-  const shares = randomShares();
+  const shares = Math.floor(Math.random() * 990000) + 10000;
   const cap = price * shares;
   const volatility = 0.05 + Math.random() * 0.05; // 5% ~ 10% highly volatile initially
 

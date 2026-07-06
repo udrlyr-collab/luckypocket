@@ -212,10 +212,10 @@ export default function StockDetailPage() {
             {formatMoney(stock.current_price)}
           </div>
           {!isDelisted && (
-            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap ${stock.priceChangeAmount >= 0 ? "text-success" : "text-error"}`}>
-              <span>전 틱 대비 {stock.priceChangeAmount >= 0 ? "+" : ""}{formatSignedMoney(stock.priceChangeAmount)}원 · {(stock.priceChangeRate * 100).toFixed(1)}%</span>
-              <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${(stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) >= 0 ? "text-success" : "text-error"}`}>
-                {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate >= 0 ? "+" : ""}${stock.offeringChangeRate.toFixed(1)}%` : `상장가 대비 ${todayRate >= 0 ? "+" : ""}${todayRate.toFixed(1)}%`}
+            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap ${stock.priceChangeAmount > 0 ? "text-success" : stock.priceChangeAmount < 0 ? "text-error" : "text-base-content"}`}>
+              <span>전 틱 대비 {stock.priceChangeAmount > 0 ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원 · {stock.priceChangeRate > 0 ? "+" : ""}{(stock.priceChangeRate * 100).toFixed(1)}%</span>
+              <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${(stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) > 0 ? "text-success" : (stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) < 0 ? "text-error" : "text-base-content"}`}>
+                {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate > 0 ? "+" : ""}${(stock.offeringChangeRate * 100).toFixed(1)}%` : `상장가 대비 ${todayRate > 0 ? "+" : ""}${todayRate.toFixed(1)}%`}
               </span>
             </div>
           )}
