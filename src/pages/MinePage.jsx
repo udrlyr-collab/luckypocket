@@ -100,7 +100,8 @@ export default function MinePage() {
           <p className="eyebrow">COAL MINE</p>
           <h1 className="text-3xl font-black">탄광</h1>
           <p className="mt-2 text-sm text-base-content/60">
-            주머니가 가벼워졌네요. 자원을 캐서 1,000,000원까지 채워보세요.
+            곡괭이를 들고 자원을 캐서 자산을 키워보세요.<br />
+            가끔 금이나 다이아몬드가 나오면 더 큰 보상을 받을 수 있어요.
           </p>
         </div>
         <Link to="/home" className="btn btn-sm btn-ghost">나가기</Link>
@@ -110,17 +111,10 @@ export default function MinePage() {
         {/* Mining Area */}
         <div className="soft-card flex flex-col items-center justify-center p-8 min-h-[400px] relative overflow-hidden bg-gradient-to-b from-base-200 to-base-300">
           <div className="mb-8 w-full max-w-md bg-base-100 rounded-2xl p-4 shadow-sm text-center">
-            <span className="text-xs font-black text-base-content/50 block mb-1">현재 자산 / 목표 자산</span>
+            <span className="text-xs font-black text-base-content/50 block mb-1">현재 자산</span>
             <div className="flex items-center justify-center gap-2">
               <strong className="text-2xl font-black text-primary"><AnimatedMoney value={status.balance} /></strong>
-              <span className="text-base-content/40">/</span>
-              <span className="text-lg font-bold text-base-content/60">{status.targetBalance.toLocaleString()}</span>
             </div>
-            <progress 
-              className="progress progress-primary w-full mt-3 h-3" 
-              value={status.balance} 
-              max={status.targetBalance}
-            ></progress>
           </div>
 
           <button 
@@ -142,15 +136,6 @@ export default function MinePage() {
               </div>
             )}
           </button>
-
-          {!status.canMine && (
-            <div className="absolute inset-0 bg-base-100/80 backdrop-blur-sm flex items-center justify-center flex-col z-20">
-              <span className="text-6xl mb-4">🎉</span>
-              <h2 className="text-2xl font-black mb-2">목표 달성!</h2>
-              <p className="text-base-content/70 mb-6">충분한 자본이 모였어요. 다시 게임을 하러 가볼까요?</p>
-              <Link to="/home" className="btn btn-primary rounded-2xl h-12 px-8">홈으로 가기</Link>
-            </div>
-          )}
 
           {/* Floating Texts */}
           {floatingTexts.map(t => (

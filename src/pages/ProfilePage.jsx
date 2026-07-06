@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
 import { formatDate, formatMoney, formatPercent, formatSignedMoney } from "../utils/format";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 const rangeTabs = [
   { key: "day", label: "하루" },
@@ -153,44 +154,30 @@ export default function ProfilePage() {
         </div>
       </section>
 
-      {user.balance < 500000 && (
-        <div className="grid gap-4 mb-6 sm:grid-cols-2">
-          <section className="soft-card border-2 border-error">
-            <h2 className="section-title">⛏ 탄광에서 자원 캐기</h2>
-            <p className="my-2 text-sm leading-relaxed">
-              파산신청 대신 곡괭이를 들고 직접 자산을 캐볼까요? 1,000,000원이 될 때까지 캘 수 있어요.
-            </p>
-            <div className="mt-4 flex items-center justify-between">
-              <span className="text-xs font-bold text-base-content/50">
-                총 {user.mineTotalEarned?.toLocaleString("ko-KR") || 0}원 획득
-              </span>
-              <Link to="/mine" className="btn btn-error rounded-2xl">
-                탄광가기
-              </Link>
-            </div>
-          </section>
+      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+        <RecoveryCard
+          icon="⛏"
+          title="탄광에서 자원 캐기"
+          description="곡괭이를 들고 자산을 직접 키워보세요."
+          buttonLabel="탄광가기"
+          color="success"
+          linkTo="/mine"
+        />
 
-          <section className="soft-card border-2 border-warning">
-            <h2 className="section-title">🌱 파산신청으로 다시 시작하기</h2>
-            <p className="my-2 text-sm leading-relaxed">
-              현재 자산이 낮아요. 파산신청으로 자산을 정확히 1,000,000원으로 재설정할 수 있어요.
-            </p>
-            <p className="mb-4 text-xs font-bold text-base-content/50">
-              누적 {user.bankruptcyCount.toLocaleString("ko-KR")}회
-              {user.lastBankruptcyAt ? ` · 마지막 신청 ${formatDate(user.lastBankruptcyAt)}` : " · 아직 신청 내역 없음"}
-            </p>
-            <button
-              type="button"
-              className="btn btn-warning whitespace-nowrap rounded-2xl"
-              onClick={applyBankruptcy}
-              disabled={bankruptcyBusy}
-            >
-              {bankruptcyBusy ? <span className="loading loading-spinner loading-sm" /> : "파산신청"}
-            </button>
-            <p className="mt-3 min-h-5 text-sm font-bold" aria-live="polite">{bankruptcyMessage}</p>
-          </section>
-        </div>
-      )}
+        {user.balance < 500000 && (
+          <RecoveryCard
+            icon="🌱"
+            title="파산신청으로 다시 시작하기"
+            description="자산이 낮을 때 1,000,000원으로 재설정할 수 있어요."
+            buttonLabel="파산신청"
+            color="warning"
+            onClick={applyBankruptcy}
+            busy={bankruptcyBusy}
+            message={bankruptcyMessage}
+            extraText={`누적 ${user.bankruptcyCount.toLocaleString("ko-KR")}회${user.lastBankruptcyAt ? ` · 마지막 신청 ${formatDate(user.lastBankruptcyAt)}` : " · 아직 신청 내역 없음"}`}
+          />
+        )}
+      </div>
 
       <section className="soft-card asset-chart-card mb-8 min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-4">
@@ -336,6 +323,8 @@ function AdminPanel() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+
   const search = async () => {
     if (!query.trim()) return;
     setBusy(true);
@@ -352,7 +341,13 @@ function AdminPanel() {
     }
   };
 
+  const openConfirm = () => {
+    if (!selected || !newNickname.trim()) return;
+    setShowConfirmModal(true);
+  };
+
   const forceChange = async () => {
+    setShowConfirmModal(false);
     if (!selected || !newNickname.trim()) return;
     setBusy(true);
     setError("");
@@ -437,7 +432,7 @@ function AdminPanel() {
               type="button"
               className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
               disabled={busy || !newNickname.trim()}
-              onClick={forceChange}
+              onClick={openConfirm}
             >
               강제 변경
             </button>
@@ -450,7 +445,39 @@ function AdminPanel() {
       >
         {error || message || "\u00a0"}
       </p>
+
+      {showConfirmModal && (
+        <AdminConfirmModal
+          oldNickname={selected?.nickname}
+          newNickname={newNickname}
+          onConfirm={forceChange}
+          onClose={() => setShowConfirmModal(false)}
+        />
+      )}
     </section>
+  );
+}
+
+function AdminConfirmModal({ oldNickname, newNickname, onConfirm, onClose }) {
+  useEnterConfirm(true, onConfirm);
+
+  return (
+    <div className="modal modal-open" role="dialog">
+      <div className="modal-box rounded-[2rem] text-center">
+        <h2 className="text-2xl font-black mb-3 text-error">정말 이 유저의 닉네임을 변경할까요?</h2>
+        <p className="text-sm mb-1">기존 닉네임: <strong>{oldNickname}</strong></p>
+        <p className="text-sm mb-4">새 닉네임: <strong>{newNickname}</strong></p>
+        <div className="grid grid-cols-2 gap-2 mt-4">
+          <button type="button" className="btn btn-outline rounded-2xl" onClick={onClose}>
+            취소
+          </button>
+          <button type="button" className="btn btn-error rounded-2xl" onClick={onConfirm}>
+            확인 (Enter)
+          </button>
+        </div>
+      </div>
+      <button className="modal-backdrop" type="button" aria-label="닫기" onClick={onClose} />
+    </div>
   );
 }
 
@@ -653,5 +680,40 @@ function RecentAssetEvents({ points, range }) {
         ))}
       </div>
     </div>
+  );
+}
+
+function RecoveryCard({ icon, title, description, buttonLabel, color, linkTo, onClick, busy, message, extraText }) {
+  return (
+    <section className={`soft-card border-2 border-${color} flex flex-col`}>
+      <h2 className="section-title flex items-center gap-2">
+        <span className="text-xl">{icon}</span> {title}
+      </h2>
+      <p className="my-2 text-sm leading-relaxed text-base-content/70">
+        {description}
+      </p>
+      {extraText && (
+        <p className="mb-4 text-xs font-bold text-base-content/50">
+          {extraText}
+        </p>
+      )}
+      <div className="mt-auto pt-4 flex flex-col items-end gap-2">
+        {linkTo ? (
+          <Link to={linkTo} className={`btn btn-${color} btn-sm sm:btn-md rounded-2xl`}>
+            {buttonLabel}
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className={`btn btn-${color} btn-sm sm:btn-md whitespace-nowrap rounded-2xl`}
+            onClick={onClick}
+            disabled={busy}
+          >
+            {busy ? <span className="loading loading-spinner loading-sm" /> : buttonLabel}
+          </button>
+        )}
+        {message && <p className="text-sm font-bold text-error mt-1" aria-live="polite">{message}</p>}
+      </div>
+    </section>
   );
 }

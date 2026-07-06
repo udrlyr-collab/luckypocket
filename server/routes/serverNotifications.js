@@ -13,7 +13,7 @@ serverNotificationsRouter.get("/", (req, res) => {
   const notifications = db
     .prepare(
       `SELECT id, nickname_snapshot, type, title, message, amount, multiplier,
-              game_type, metadata_json, created_at
+              game_type, game_name, metadata_json, created_at
        FROM server_notifications
        ORDER BY id DESC LIMIT ?`,
     )
@@ -27,6 +27,7 @@ serverNotificationsRouter.get("/", (req, res) => {
       amount: row.amount,
       multiplier: row.multiplier,
       gameType: row.game_type,
+      gameName: row.game_name,
       metadata: JSON.parse(row.metadata_json),
       createdAt: row.created_at,
     }));

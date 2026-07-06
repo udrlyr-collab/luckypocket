@@ -6,6 +6,7 @@ import HistoryList from "../components/HistoryList";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
 import { formatMoney, formatSignedMoney } from "../utils/format";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 export default function HomePage() {
   const { user } = useAuth();
@@ -14,6 +15,7 @@ export default function HomePage() {
   const [rankings, setRankings] = useState([]);
   const [serverStats, setServerStats] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [showNewsModal, setShowNewsModal] = useState(false);
 
   useEffect(() => {
     Promise.all([api("/logs"), api("/rankings")])
@@ -27,7 +29,7 @@ export default function HomePage() {
   useEffect(() => {
     let active = true;
     const loadServerNews = () =>
-      Promise.all([api("/server/stats"), api("/server/notifications?limit=20")])
+      Promise.all([api("/server/stats"), api("/server/notifications?limit=50")])
         .then(([stats, news]) => {
           if (!active) return;
           setServerStats(stats);
@@ -95,8 +97,15 @@ export default function HomePage() {
                 )}
               </div>
             ) : (
-              <p className="mt-3 text-xs text-base-content/50">아직 큰 행운 소식이 없어요.</p>
+              <p className="mt-3 text-xs text-base-content/50">아직 행운 소식이 없어요.<br/>첫 번째 큰 행운을 만들어보세요!</p>
             )}
+            <button 
+              type="button" 
+              className="btn btn-outline btn-sm rounded-xl mt-4 w-full"
+              onClick={() => setShowNewsModal(true)}
+            >
+              행운소식 전체 보기
+            </button>
             {serverStats && (
               <p className="mt-4 text-[11px] font-bold text-base-content/50">
                 지금까지 {serverStats.totalUsers.toLocaleString("ko-KR")}명이 주머니를 만들었고,<br />
@@ -166,6 +175,14 @@ export default function HomePage() {
               <span className="mt-5 inline-block text-sm font-black text-primary">게임 열기 →</span>
             </Link>
           ))}
+          <Link to="/mine" className="game-card group shadow-sm bg-success/10 border-success/20">
+            <div className={`mb-4 grid size-14 place-items-center rounded-2xl text-3xl transition group-hover:-translate-y-1 bg-success/20 text-success`}>
+              ⛏
+            </div>
+            <h3 className="font-black text-success-content">탄광에서 자원 캐기</h3>
+            <p className="mt-2 text-xs leading-relaxed text-success-content/70">곡괭이를 들고 돌, 석탄, 금, 다이아몬드를 찾아보세요.</p>
+            <span className="mt-5 inline-block text-sm font-black text-success">탄광가기 →</span>
+          </Link>
         </div>
       </section>
 
@@ -180,6 +197,52 @@ export default function HomePage() {
         </div>
         <HistoryList logs={logs} />
       </section>
+
+      {showNewsModal && (
+        <NewsModal 
+          notifications={notifications} 
+          onClose={() => setShowNewsModal(false)} 
+        />
+      )}
+    </div>
+  );
+}
+
+function NewsModal({ notifications, onClose }) {
+  const timeLabel = (value) =>
+    new Intl.DateTimeFormat("ko-KR", { 
+      hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" 
+    }).format(new Date(value));
+
+  useEnterConfirm(true, onClose);
+
+  return (
+    <div className="modal modal-open" role="dialog">
+      <div className="modal-box rounded-[2rem] max-h-[80vh] flex flex-col p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-black">최근 행운소식</h2>
+          <button type="button" className="btn btn-circle btn-sm btn-ghost" onClick={onClose}>✕</button>
+        </div>
+        <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+          {notifications.map((news) => (
+            <div key={news.id} className="bg-base-200/50 rounded-2xl p-4">
+              <strong className="block text-sm mb-1">{news.title}</strong>
+              <div className="text-xs text-base-content/80 leading-relaxed">
+                {news.message}
+              </div>
+              <div className="text-[10px] text-base-content/50 mt-2">
+                {timeLabel(news.createdAt)}
+              </div>
+            </div>
+          ))}
+          {!notifications.length && (
+            <p className="text-sm text-center py-10 text-base-content/50">
+              아직 행운소식이 없어요.<br/>첫 번째 큰 행운을 만들어보세요!
+            </p>
+          )}
+        </div>
+      </div>
+      <button className="modal-backdrop" type="button" aria-label="닫기" onClick={onClose} />
     </div>
   );
 }

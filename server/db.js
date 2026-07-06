@@ -251,6 +251,13 @@ if (!userColumns.has("last_mined_at")) {
   db.exec("ALTER TABLE users ADD COLUMN last_mined_at TEXT");
 }
 
+const serverNotificationColumns = new Set(
+  db.prepare("PRAGMA table_info(server_notifications)").all().map((column) => column.name),
+);
+if (!serverNotificationColumns.has("game_name")) {
+  db.exec("ALTER TABLE server_notifications ADD COLUMN game_name TEXT");
+}
+
 function normalizedNickname(value) {
   return String(value || "").trim().replace(/\s+/gu, "").toLocaleLowerCase("ko-KR");
 }

@@ -1,11 +1,9 @@
 import express from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { createServerNotification } from "../services/serverNotificationService.js";
 
 export const mineRouter = express.Router();
-
-const TARGET_BALANCE = 1000000;
-const ENTER_THRESHOLD = 500000;
 
 mineRouter.use(requireAuth);
 
@@ -22,10 +20,9 @@ mineRouter.get("/status", (req, res) => {
   `).all(req.user.id);
 
   res.json({
-    canEnterMine: user.balance < ENTER_THRESHOLD,
-    canMine: user.balance < TARGET_BALANCE,
+    canEnterMine: true,
+    canMine: true,
     balance: user.balance,
-    targetBalance: TARGET_BALANCE,
     totalMineClicks: user.mine_click_count || 0,
     totalMineEarned: user.mine_total_earned || 0,
     recentFinds: recentFinds.map(f => ({
@@ -38,11 +35,11 @@ mineRouter.get("/status", (req, res) => {
 });
 
 const REWARDS = [
-  { type: "diamond", label: "다이아몬드", reward: 20000, cumulativeProb: 0.005 },
-  { type: "gold", label: "금 조각", reward: 2000, cumulativeProb: 0.030 },
-  { type: "iron", label: "철광석", reward: 500, cumulativeProb: 0.100 },
-  { type: "coal", label: "석탄", reward: 150, cumulativeProb: 0.300 },
-  { type: "stone", label: "돌", reward: 50, cumulativeProb: 1.000 },
+  { type: "diamond", label: "다이아몬드", reward: 50000, cumulativeProb: 0.010 },
+  { type: "gold", label: "금 조각", reward: 5000, cumulativeProb: 0.060 },
+  { type: "iron", label: "철광석", reward: 1000, cumulativeProb: 0.200 },
+  { type: "coal", label: "석탄", reward: 300, cumulativeProb: 0.500 },
+  { type: "stone", label: "앗! 작은 돌멩이", reward: 100, cumulativeProb: 1.000 },
 ];
 
 function getRandomReward() {
@@ -55,20 +52,12 @@ function getRandomReward() {
 
 mineRouter.post("/click", (req, res) => {
   const processMine = db.transaction((userId) => {
-    const user = db.prepare("SELECT id, balance, mine_click_count, mine_total_earned FROM users WHERE id = ?").get(userId);
+    const user = db.prepare("SELECT id, username, nickname, balance, mine_click_count, mine_total_earned FROM users WHERE id = ?").get(userId);
     if (!user) throw new Error("사용자를 찾을 수 없어요.");
-    
-    if (user.balance >= TARGET_BALANCE) {
-      return { 
-        success: false, 
-        message: "목표 달성! 자산이 1,000,000원이 되었어요.", 
-        balance: user.balance 
-      };
-    }
 
     const item = getRandomReward();
     const rawReward = item.reward;
-    const actualReward = Math.min(rawReward, TARGET_BALANCE - user.balance);
+    const actualReward = rawReward;
     const balanceAfter = user.balance + actualReward;
 
     db.prepare(`
@@ -90,6 +79,27 @@ mineRouter.post("/click", (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(userId, 'mine_reward', actualReward, user.balance, balanceAfter, 'mine_log', '0', JSON.stringify({ label: item.label, result_type: item.type }));
 
+    if (item.type === "gold" || item.type === "diamond" || actualReward >= 10000) {
+      createServerNotification(db, {
+        userId: user.id,
+        nickname: user.nickname,
+        type: "big_win",
+        title: "탄광 대박",
+        message: `${user.nickname}님이 탄광에서 ${item.label}을(를) 발견해 ${actualReward.toLocaleString("ko-KR")}원을 획득했어요!`,
+        amount: actualReward,
+        gameType: "mine",
+        gameName: "탄광",
+        metadata: { resultType: item.type, label: item.label },
+        sourceType: "mine_log",
+        sourceId: null, // mine_logs id can be passed if we retrieve last insert row id, but for now null is fine
+      });
+    }
+
+    const isStone = item.type === "stone";
+    const msg = isStone 
+      ? `앗! 작은 돌멩이를 캤어요. 그래도 +100원!` 
+      : `${item.label}을(를) 발견했어요! +${actualReward.toLocaleString('ko-KR')}원`;
+
     return {
       success: true,
       resultType: item.type,
@@ -98,10 +108,8 @@ mineRouter.post("/click", (req, res) => {
       actualReward,
       balanceBefore: user.balance,
       balanceAfter,
-      canMine: balanceAfter < TARGET_BALANCE,
-      message: balanceAfter >= TARGET_BALANCE 
-        ? "목표 달성! 자산이 1,000,000원이 되었어요." 
-        : `${item.label}을(를) 발견했어요! +${actualReward.toLocaleString('ko-KR')}원`
+      canMine: true,
+      message: msg
     };
   });
 

@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import PageContainer from "./PageContainer";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 const links = [
   { to: "/", label: "홈", icon: "🏠", end: true },
@@ -54,6 +55,9 @@ export default function AppShell() {
       setBankruptcyBusy(false);
     }
   };
+
+  useEnterConfirm(bankruptcyOpen && !bankruptcyBusy, applyBankruptcy);
+
   return (
     <div className="app-layout bg-grid">
       <div className="virtual-banner">🍀 현금 결제·충전·출금이 없는 숫자 게임입니다</div>
@@ -123,6 +127,10 @@ export default function AppShell() {
             <p className="mt-3 text-sm leading-relaxed text-base-content/65">
               현재 자산이 500,000원 미만이에요. 파산신청을 하면 자산이
               정확히 1,000,000원으로 재설정돼요.
+            </p>
+            <p className="mt-2 text-sm leading-relaxed text-base-content/65">
+              직접 다시 벌고 싶다면 탄광에서 자원을 캐볼 수 있어요.<br />
+              탄광은 언제든 이용할 수 있어요.
             </p>
             <p className="mt-2 text-xs font-bold text-base-content/45">
               파산 횟수는 기록과 리더보드에 표시돼요.

@@ -1,4 +1,5 @@
 import { formatMoney, formatSignedMoney } from "../utils/format";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 export default function ResultModal({
   result,
@@ -8,6 +9,8 @@ export default function ResultModal({
   failureMessage = "아쉽지만 다음 행운이 기다려요",
   showCoins = false,
 }) {
+  useEnterConfirm(!!result, onClose);
+
   if (!result) return null;
   return (
     <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="result-title">

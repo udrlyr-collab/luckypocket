@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { formatMoney, formatPercent } from "../utils/format";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 export default function PayoutPreviewModal({ betAmount, onClose }) {
   const [data, setData] = useState(null);
@@ -16,10 +17,13 @@ export default function PayoutPreviewModal({ betAmount, onClose }) {
     setLoading(true);
     setError("");
     api(`/games/risk/payout-preview?betAmount=${betAmount}`)
-      .then(setData)
-      .catch((requestError) => setError(requestError.message))
-      .finally(() => setLoading(false));
+      .then((res) => active && setData(res))
+      .catch((requestError) => active && setError(requestError.message))
+      .finally(() => active && setLoading(false));
+    return () => { active = false; };
   }, [betAmount]);
+
+  useEnterConfirm(true, onClose);
 
   return (
     <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="preview-title">
