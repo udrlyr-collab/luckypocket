@@ -69,15 +69,17 @@ mineRouter.post("/click", (req, res) => {
       WHERE id = ?
     `).run(balanceAfter, actualReward, userId);
 
-    db.prepare(`
+    const logResult = db.prepare(`
       INSERT INTO mine_logs (user_id, result_type, label, raw_reward, actual_reward, balance_before, balance_after)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(userId, item.type, item.label, rawReward, actualReward, user.balance, balanceAfter);
 
+    const logId = logResult.lastInsertRowid;
+
     db.prepare(`
       INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_type, source_id, detail_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(userId, 'mine_reward', actualReward, user.balance, balanceAfter, 'mine_log', '0', JSON.stringify({ label: item.label, result_type: item.type }));
+    `).run(userId, 'mine_reward', actualReward, user.balance, balanceAfter, 'mine_log', String(logId), JSON.stringify({ label: item.label, result_type: item.type }));
 
     if (item.type === "gold" || item.type === "diamond" || actualReward >= 10000) {
       createServerNotification(db, {
@@ -91,7 +93,7 @@ mineRouter.post("/click", (req, res) => {
         gameName: "탄광",
         metadata: { resultType: item.type, label: item.label },
         sourceType: "mine_log",
-        sourceId: null, // mine_logs id can be passed if we retrieve last insert row id, but for now null is fine
+        sourceId: logId,
       });
     }
 
