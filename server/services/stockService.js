@@ -306,9 +306,9 @@ function liquidatePositionsIfNeeded(db) {
 function liquidatePosition(db, position, closingPrice) {
   db.prepare(`
     UPDATE stock_positions 
-    SET status = 'liquidated', current_price = ?, liquidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unrealized_pnl = 0, realized_pnl = ?
+    SET status = 'liquidated', liquidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unrealized_pnl = 0, realized_pnl = ?
     WHERE id = ?
-  `).run(closingPrice, -position.margin_amount, position.id);
+  `).run(-position.margin_amount, position.id);
 
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(position.user_id);
   
