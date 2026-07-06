@@ -254,8 +254,29 @@ export default function StockDetailPage() {
                   <span>청약 금액 (금액 입력 시 수량 자동 계산)</span>
                   <span>보유 잔액: {formatMoney(user.balance)}</span>
                 </label>
+                <div className="flex flex-col gap-1">
+                  <div className="flex gap-2">
+                    <input 
+                      type="number" 
+                      className="input input-bordered flex-1 min-w-0 rounded-2xl bg-base-100" 
+                      placeholder="0"
+                      value={amountInput}
+                      onChange={e => setAmountInput(e.target.value)}
+                    />
+                    <button 
+                      className="btn btn-warning rounded-2xl px-6 shrink-0" 
+                      disabled={busy || !amountInput || Number(amountInput) <= 0}
+                      onClick={handleBuyIpo}
+                    >
+                      {busy ? <span className="loading loading-spinner loading-sm"/> : "공모가로 청약"}
+                    </button>
                   </div>
-                )}
+                  {amountInput && Number(amountInput) > 0 && (
+                    <div className="text-right text-xs text-primary font-bold pr-2">
+                      {formatCompactMoney(amountInput)}
+                    </div>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-1 mt-2">
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(10000)}>+1만</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(100000)}>+10만</button>
