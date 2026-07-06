@@ -178,7 +178,6 @@ stocksRouter.post("/buy", (req, res) => {
       const amount = Math.floor(quantity * stock.current_price);
       if (amount <= 0) throw new Error("매수 금액이 너무 작습니다.");
 
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       if (user.balance < amount) throw new Error("잔액이 부족해요.");
       
       let holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, stockId);
