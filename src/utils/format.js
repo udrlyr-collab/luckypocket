@@ -34,7 +34,7 @@ export function formatCompactMoney(value) {
     
     if (jo > 0) result += `${jo.toLocaleString("ko-KR")}조 `;
     if (uk > 0) result += `${uk.toLocaleString("ko-KR")}억 `;
-    if (jo === 0 && man > 0) result += `${man.toLocaleString("ko-KR")}만 `;
+    if (man > 0) result += `${man.toLocaleString("ko-KR")}만 `;
     
     if (result === '') result = '0 ';
     return (number < 0 ? "-" : "") + result.trim() + "원";

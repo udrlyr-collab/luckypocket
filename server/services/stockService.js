@@ -9,8 +9,8 @@ const EVENT_PROBABILITIES = {
 };
 
 const IPO_EVENT_PROBABILITIES = {
-  ipoSurge: 0.55,
-  ipoNormal: 0.30,
+  ipoSurge: 0.15,
+  ipoNormal: 0.70,
   ipoCrash: 0.15
 };
 
@@ -136,15 +136,15 @@ function processNormalTick(db, stock) {
 
     const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
     if (event === "ipoSurge") {
-      newPrice = Math.floor(newPrice * (1 + 0.5 + Math.random() * 2.5)); // +50% ~ +300%
+      newPrice = Math.floor(newPrice * (1 + 0.1 + Math.random() * 0.4)); // +10% ~ +50%
       eventType = "ipo_surge";
-      eventMsg = `${stock.name}이(가) 신규 상장 후 급등했어요.`;
+      eventMsg = `${stock.name}이(가) 신규 상장 프리미엄으로 급등 중이에요!`;
     } else if (event === "ipoCrash") {
-      newPrice = Math.floor(newPrice * (1 - 0.4 - Math.random() * 0.4)); // -40% ~ -80%
+      newPrice = Math.floor(newPrice * (1 - 0.1 - Math.random() * 0.3)); // -10% ~ -40%
       eventType = "ipo_crash";
-      eventMsg = `${stock.name}이(가) 신규 상장 후 급락했어요.`;
+      eventMsg = `${stock.name}이(가) 신규 상장 직후 급락했어요.`;
     } else {
-      const change = (Math.random() * 0.4 - 0.1); // -10% ~ +30%
+      const change = (Math.random() * 0.2 - 0.1); // -10% ~ +10%
       newPrice = Math.floor(newPrice * (1 + change));
     }
   } else if (stock.status === "final_crash") {
@@ -185,12 +185,12 @@ function processNormalTick(db, stock) {
       if (stock.is_bluechip !== 1) {
         const event = getRandomEvent(EVENT_PROBABILITIES);
         if (event === "surge") {
-          newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.6)); // +20% ~ +80%
+          newPrice = Math.floor(newPrice * (1 + 0.1 + Math.random() * 0.2)); // +10% ~ +30%
           eventType = "surge";
-          eventMsg = `${stock.name} 주가가 급등했어요!`;
+          eventMsg = `${stock.name} 주가가 반등했어요!`;
           isSurgeOrCrash = true;
         } else if (event === "crash") {
-          newPrice = Math.floor(newPrice * (1 - 0.2 - Math.random() * 0.5)); // -20% ~ -70%
+          newPrice = Math.floor(newPrice * (1 - 0.1 - Math.random() * 0.3)); // -10% ~ -40%
           eventType = "crash";
           eventMsg = `${stock.name} 주가가 급락했어요!`;
           isSurgeOrCrash = true;
@@ -328,7 +328,7 @@ export function delistStock(db, stock) {
 }
 
 export function createIpoStock(db) {
-  const symbol = "IPO";
+  const symbol = `IPO-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 1000)}`;
   const name = "공모주";
   const price = Math.floor(Math.random() * 4500) + 500; // 500 ~ 5,000
   const shares = Math.floor(Math.random() * 990000) + 10000;
