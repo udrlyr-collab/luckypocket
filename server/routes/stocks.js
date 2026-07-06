@@ -105,9 +105,9 @@ stocksRouter.post("/buy", (req, res) => {
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_after, source_id)
-        VALUES (?, 'stock_buy', ?, ?, ?)
-      `).run(userId, -amount, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_buy', ?, ?, ?, ?)
+      `).run(userId, -amount, user.balance, balanceAfter, stockId);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
@@ -157,9 +157,9 @@ stocksRouter.post("/sell", (req, res) => {
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_after, source_id)
-        VALUES (?, 'stock_sell', ?, ?, ?)
-      `).run(userId, sellAmount, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_sell', ?, ?, ?, ?)
+      `).run(userId, sellAmount, user.balance, balanceAfter, stockId);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
@@ -217,9 +217,9 @@ stocksRouter.post("/open-position", (req, res) => {
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_after, source_id)
-        VALUES (?, 'stock_position_open', ?, ?, ?)
-      `).run(userId, -margin, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_position_open', ?, ?, ?, ?)
+      `).run(userId, -margin, user.balance, balanceAfter, stockId);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
@@ -263,9 +263,9 @@ stocksRouter.post("/close-position", (req, res) => {
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_after, source_id)
-        VALUES (?, 'stock_position_close', ?, ?, ?)
-      `).run(userId, finalPayout, balanceAfter, stock.id);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_position_close', ?, ?, ?, ?)
+      `).run(userId, finalPayout, user.balance, balanceAfter, stock.id);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
@@ -320,9 +320,9 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       `).run(userId, user.nickname, id);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_after, source_id)
-        VALUES (?, 'stock_acquire_company', ?, ?, ?)
-      `).run(userId, -cost, balanceAfter, id);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'stock_acquire_company', ?, ?, ?, ?)
+      `).run(userId, -cost, user.balance, balanceAfter, id);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
