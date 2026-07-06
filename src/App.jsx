@@ -9,6 +9,7 @@ import SlotMachineGame from "./games/SlotMachineGame";
 import AuthPage from "./pages/AuthPage";
 import HistoryPage from "./pages/HistoryPage";
 import HomePage from "./pages/HomePage";
+import MinePage from "./pages/MinePage";
 import ProfilePage from "./pages/ProfilePage";
 import RankingPage from "./pages/RankingPage";
 import WalletPage from "./pages/WalletPage";
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/games/bombs" element={<BombDodgeGame />} />
         <Route path="/games/slot" element={<SlotMachineGame />} />
         <Route path="/games/dart" element={<DartGame />} />
+        <Route path="/mine" element={<MinePage />} />
         <Route path="/ranking" element={<RankingPage />} />
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/wallet" element={<WalletPage />} />

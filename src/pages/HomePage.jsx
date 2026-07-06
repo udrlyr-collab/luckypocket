@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import AnimatedMoney from "../components/AnimatedMoney";
 import HistoryList from "../components/HistoryList";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatSignedMoney } from "../utils/format";
 
 export default function HomePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [logs, setLogs] = useState([]);
   const [rankings, setRankings] = useState([]);
   const [serverStats, setServerStats] = useState(null);
@@ -40,17 +42,77 @@ export default function HomePage() {
     };
   }, []);
 
+  const todayProfit = Number(user.todayProfit || 0);
+  const isLowBalance = user.balance < 500000;
+  const latestNews = notifications[0];
+
   return (
     <div className="page-content">
-      <div className="mb-6">
-        <p className="eyebrow">Hello, {user.nickname}</p>
+      {/* Hero Card */}
+      <section className="mb-8 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="balance-summary-card m-0! shadow-md">
+          <div className="balance-summary-owner">
+            <span className="balance-summary-pouch" aria-hidden="true">👛</span>
+            <div className="min-w-0">
+              <p className="text-xs font-black text-primary/80">행운주머니가 이만큼 자랐어요</p>
+              <h2 className="mt-1 truncate text-base font-black">{user.nickname}님의 주머니</h2>
+            </div>
+          </div>
+          <div className="balance-summary-main border-b-0 pb-0">
+            <span className="summary-label">현재 자산</span>
+            <strong className="balance-summary-amount">
+              <AnimatedMoney value={user.balance} />
+            </strong>
+            <span className={`mt-2 inline-flex items-center gap-1 text-sm font-black tabular-nums ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
+              {todayProfit >= 0 ? "↗" : "↘"} 오늘 손익 {formatSignedMoney(todayProfit)}
+            </span>
+          </div>
+          {isLowBalance && (
+            <div className="relative z-10 mt-2 flex items-center justify-between rounded-xl bg-error/15 p-3 shadow-inner">
+              <div className="min-w-0 flex-1">
+                <span className="block text-xs font-black text-error-content/90">자산이 부족해졌어요.</span>
+                <span className="mt-0.5 block truncate text-[11px] font-bold text-error-content/60">탄광에서 자원을 캐서 다시 모아볼까요?</span>
+              </div>
+              <button onClick={() => navigate("/mine")} className="btn btn-sm btn-error shrink-0 rounded-xl px-4 font-bold text-[11px] shadow-sm">
+                ⛏ 탄광가기
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-3">
+          <div className="soft-card flex-1 p-5 shadow-sm">
+            <p className="text-xs font-black tracking-widest text-primary">LUCKY NEWS</p>
+            <h3 className="mt-1 text-lg font-black">오늘의 행운 소식</h3>
+            {latestNews ? (
+              <div className="mt-3 min-w-0 border-l-2 border-primary/30 pl-3">
+                <strong className="block text-sm">{latestNews.title}</strong>
+                <p className="mt-1 text-xs leading-relaxed text-base-content/60">{latestNews.message}</p>
+                {latestNews.amount > 0 && (
+                  <span className={`mt-1 block text-xs font-black tabular-nums ${latestNews.type === "jackpot" ? "text-warning" : "text-success"}`}>
+                    {formatMoney(latestNews.amount)}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-base-content/50">아직 큰 행운 소식이 없어요.</p>
+            )}
+            {serverStats && (
+              <p className="mt-4 text-[11px] font-bold text-base-content/50">
+                지금까지 {serverStats.totalUsers.toLocaleString("ko-KR")}명이 주머니를 만들었고,<br />
+                오늘 {serverStats.activeUsersToday.toLocaleString("ko-KR")}명이 {serverStats.totalGames.toLocaleString("ko-KR")}판의 게임을 즐겼어요!
+              </p>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Welcome & Top 3 Section */}
+      <div className="mb-4">
         <h1 className="text-2xl font-black sm:text-3xl">오늘은 행운주머니가 얼마나 불어날까요?</h1>
-        <p className="mt-2 text-sm text-base-content/55">
-          배팅할 금액을 정하고, 귀여운 숫자 게임으로 자산을 키워보세요.
-        </p>
       </div>
-      <div className="grid gap-5 lg:grid-cols-[1.15fr_0.85fr]">
-        <section className="home-welcome-card">
+      <section className="mb-8 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="home-welcome-card shadow-md">
           <div className="relative z-10 max-w-md">
             <span className="badge border-0 bg-base-100/70 font-black text-primary">TODAY&apos;S LUCK</span>
             <h2 className="mt-4 text-2xl font-black leading-tight sm:text-3xl">
@@ -58,86 +120,44 @@ export default function HomePage() {
               <span className="text-primary">행운을 톡톡</span> 키워보세요
             </h2>
             <p className="mt-3 text-sm leading-relaxed text-base-content/60">
-              다섯 가지 숫자 게임에서 오늘의 감각을 시험해 보세요.
+              다섯 가지 게임에서 오늘의 감각을 시험해 보세요.
             </p>
             <Link to="/games/dart" className="btn btn-primary mt-5 h-12 whitespace-nowrap rounded-2xl px-6">
               🎯 다트부터 시작하기
             </Link>
           </div>
           <span className="home-welcome-emoji" aria-hidden="true">🍀</span>
-        </section>
-        <section className="soft-card">
+        </div>
+        
+        <div className="soft-card flex flex-col shadow-md">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="section-title">현재 자산 TOP 3</h2>
             <Link className="link link-primary text-xs font-bold" to="/ranking">전체 랭킹</Link>
           </div>
-          <div className="space-y-2">
+          <div className="flex-1 space-y-2">
             {rankings.map((ranking, index) => (
               <div className="flex items-center gap-3 rounded-xl bg-base-200/60 p-3" key={ranking.userId}>
-                <span className="grid size-8 place-items-center rounded-full bg-warning/30 font-black">
+                <span className="grid size-8 place-items-center rounded-full bg-warning/30 font-black text-[13px]">
                   {index + 1}
                 </span>
-                <strong className="flex-1 truncate">{ranking.nickname}</strong>
-                <span className="text-sm font-black tabular-nums">{formatMoney(ranking.balance)}</span>
+                <strong className="flex-1 truncate text-sm">{ranking.nickname}</strong>
+                <span className="text-[13px] font-black tabular-nums text-primary">{formatMoney(ranking.balance)}</span>
               </div>
             ))}
             {!rankings.length && <div className="empty-state py-6">첫 랭커가 되어 보세요!</div>}
           </div>
-        </section>
-      </div>
-
-      {serverStats && (
-        <section className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="서버 전체 통계">
-          <ServerStat label="전체 가입자" value={`${serverStats.totalUsers.toLocaleString("ko-KR")}명`} />
-          <ServerStat label="오늘 가입" value={`${serverStats.todayNewUsers.toLocaleString("ko-KR")}명`} />
-          <ServerStat label="오늘 활동" value={`${serverStats.activeUsersToday.toLocaleString("ko-KR")}명`} />
-          <ServerStat label="누적 게임" value={`${serverStats.totalGames.toLocaleString("ko-KR")}판`} />
-        </section>
-      )}
-
-      <section className="mt-8">
-        <div className="mb-4">
-          <p className="eyebrow">Lucky news</p>
-          <h2 className="section-title text-xl">행운 소식</h2>
-        </div>
-        <div className="soft-card max-h-96 space-y-2 overflow-y-auto">
-          {notifications.map((notification, index) => (
-            <article
-              className={`flex items-start gap-3 rounded-2xl bg-base-200/55 p-3 ${index === 0 ? "achievement-pop" : ""}`}
-              key={notification.id}
-            >
-              <span className={`grid size-10 shrink-0 place-items-center rounded-xl text-xl ${notification.type === "jackpot" ? "bg-warning/25" : "bg-success/15"}`}>
-                {notification.type === "bankruptcy" ? "🌱" : notification.type === "achievement" ? "🏅" : notification.type === "bonus_code" ? "🎁" : "✨"}
-              </span>
-              <div className="min-w-0">
-                <strong className="block text-sm">{notification.title}</strong>
-                <p className="mt-1 text-xs leading-relaxed text-base-content/60">{notification.message}</p>
-                {notification.amount > 0 && (
-                  <span className={`mt-1 block text-xs font-black tabular-nums ${notification.type === "jackpot" ? "text-warning" : "text-success"}`}>
-                    {formatMoney(notification.amount)}
-                  </span>
-                )}
-              </div>
-            </article>
-          ))}
-          {!notifications.length && (
-            <div className="empty-state py-8">아직 큰 행운 소식이 없어요.</div>
-          )}
         </div>
       </section>
 
+      {/* Game List */}
       <section className="mt-8">
         <div className="mb-4">
           <p className="eyebrow">Pick a game</p>
-          <h2 className="section-title text-xl">오늘은 행운주머니가 얼마나 불어날까요?</h2>
+          <h2 className="section-title text-xl">게임 목록</h2>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           {Object.entries(gameMeta).map(([key, game]) => (
-            <Link
-              key={key}
-              to={game.path}
-              className="game-card group"
-            >
+            <Link key={key} to={game.path} className="game-card group shadow-sm">
               <div className={`mb-4 grid size-14 place-items-center rounded-2xl text-3xl transition group-hover:-translate-y-1 ${game.color}`}>
                 {game.icon}
               </div>
@@ -149,6 +169,7 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* History */}
       <section className="mt-8">
         <div className="mb-4 flex items-end justify-between">
           <div>

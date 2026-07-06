@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import BalanceSummaryCard from "./BalanceSummaryCard";
 import PageContainer from "./PageContainer";
 
 const links = [
@@ -19,6 +18,7 @@ function linkClass({ isActive }) {
 
 export default function AppShell() {
   const { user, logout, refreshUser } = useAuth();
+  const navigate = useNavigate();
   const [bankruptcyOpen, setBankruptcyOpen] = useState(false);
   const [bankruptcyBusy, setBankruptcyBusy] = useState(false);
   const [bankruptcyError, setBankruptcyError] = useState("");
@@ -97,7 +97,6 @@ export default function AppShell() {
       </header>
       <main className="app-main">
         <PageContainer>
-          <BalanceSummaryCard user={user} />
           <Outlet />
         </PageContainer>
       </main>
@@ -131,10 +130,10 @@ export default function AppShell() {
             <p className="mt-3 min-h-5 text-sm font-bold text-error" aria-live="polite">
               {bankruptcyError}
             </p>
-            <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className="mt-3 grid grid-cols-3 gap-2">
               <button
                 type="button"
-                className="btn rounded-2xl"
+                className="btn btn-sm sm:btn-md rounded-2xl"
                 disabled={bankruptcyBusy}
                 onClick={dismissBankruptcy}
               >
@@ -142,7 +141,18 @@ export default function AppShell() {
               </button>
               <button
                 type="button"
-                className="btn btn-primary rounded-2xl"
+                className="btn btn-sm sm:btn-md btn-secondary rounded-2xl"
+                disabled={bankruptcyBusy}
+                onClick={() => {
+                  setBankruptcyOpen(false);
+                  navigate("/mine");
+                }}
+              >
+                ⛏ 탄광가기
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm sm:btn-md btn-primary rounded-2xl"
                 disabled={bankruptcyBusy}
                 onClick={applyBankruptcy}
               >

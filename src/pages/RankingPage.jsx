@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney } from "../utils/format";
@@ -54,9 +54,19 @@ export default function RankingPage() {
   const [period, setPeriod] = useState("day");
   const [type, setType] = useState("currentBalance");
   const [data, setData] = useState({ rankings: [], myStats: null, myRank: null });
-  const [serverStats, setServerStats] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [isDateFilterOpen, setIsDateFilterOpen] = useState(false);
+  
+  const myRankRef = useRef(null);
+  const [highlightMyRank, setHighlightMyRank] = useState(false);
+
   const selected = rankingTypes[type];
+
+  const scrollToMyRank = () => {
+    myRankRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightMyRank(true);
+    setTimeout(() => setHighlightMyRank(false), 1200);
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -66,8 +76,11 @@ export default function RankingPage() {
   }, [date, period, type, user.balance]);
 
   useEffect(() => {
-    api("/server/stats").then(setServerStats).catch(() => {});
-  }, []);
+    setLoading(true);
+    api(`/leaderboard?date=${date}&period=${period}&type=${type}`)
+      .then(setData)
+      .finally(() => setLoading(false));
+  }, [date, period, type, user.balance]);
 
   const podium = data.rankings.slice(0, 3);
   const remaining = data.rankings.slice(3);
@@ -79,85 +92,70 @@ export default function RankingPage() {
     period === "week" ? "이번 주" : period === "month" ? "이번 달" : date === today ? "오늘" : date;
 
   return (
-    <div className="page-content">
-      <div className="mb-6">
-        <p className="eyebrow">Leaderboard</p>
-        <h1 className="text-3xl font-black">행운주머니 리더보드</h1>
-        <p className="mt-2 text-sm text-base-content/55">
-          자산, 업적, 플레이 기록 중 보고 싶은 기준을 골라보세요.
-        </p>
-      </div>
-
-      {serverStats && (
-        <div className="mb-5 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-2xl border border-base-300/60 bg-base-100 px-4 py-3 text-xs font-bold text-base-content/55 shadow-sm">
-          <span>전체 가입자 <strong className="text-primary tabular-nums">{serverStats.totalUsers.toLocaleString("ko-KR")}명</strong></span>
-          <span>누적 게임 <strong className="tabular-nums">{serverStats.totalGames.toLocaleString("ko-KR")}판</strong></span>
-          <span>오늘 활동 <strong className="tabular-nums">{serverStats.activeUsersToday.toLocaleString("ko-KR")}명</strong></span>
-        </div>
-      )}
-
-      <section className="ranking-date-card">
-        <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+    <div className="page-content pt-2 pb-16">
+      <section className="mb-4">
+        <p className="eyebrow">LEADERBOARD</p>
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
           <div>
-            <p className="eyebrow">Ranking date</p>
-            <h2 className="text-xl font-black">랭킹 기준 날짜</h2>
-          </div>
-          <span className="badge badge-primary badge-outline whitespace-nowrap font-black">
-            {periodLabel} · 자동 반영
-          </span>
-        </div>
-        <div className="ranking-date-controls">
-          <label className="block min-w-0 lg:w-60 lg:shrink-0">
-            <span className="mb-1.5 block text-xs font-black text-base-content/55">날짜 선택</span>
-            <input
-              type="date"
-              className="ranking-date-input input input-bordered w-full text-base focus:outline-none focus:ring-2 focus:ring-primary/30"
-              value={date}
-              max={today}
-              onChange={(event) => selectDate(event.target.value, "day")}
-            />
-          </label>
-          <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
-            <DateButton active={period === "day" && date === today} onClick={() => selectDate(today)}>오늘</DateButton>
-            <DateButton active={period === "day" && date === seoulDate(-1)} onClick={() => selectDate(seoulDate(-1))}>어제</DateButton>
-            <DateButton active={period === "week"} onClick={() => selectDate(today, "week")}>이번 주</DateButton>
-            <DateButton active={period === "month"} onClick={() => selectDate(today, "month")}>이번 달</DateButton>
+            <h1 className="text-2xl font-black sm:text-3xl">행운주머니 리더보드</h1>
+            <p className="text-sm text-base-content/60">
+              순위를 한눈에 확인해보세요.
+            </p>
           </div>
         </div>
       </section>
 
-      <div className="ranking-tabs" role="tablist" aria-label="리더보드 기준">
-        {Object.entries(rankingTypes).map(([key, tab]) => (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={type === key}
-            key={key}
-            className={`ranking-tab ${type === key ? "is-active" : ""}`}
-            onClick={() => setType(key)}
-          >
-            <span className="text-xl" aria-hidden="true">{tab.icon}</span>
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
-
-      <section className={`leaderboard-hero tone-${selected.tone}`} key={`hero-${type}`}>
-        <div className="relative z-10">
-          <span className="mb-3 inline-flex rounded-full bg-base-100/55 px-3 py-1 text-[11px] font-black">
-            {periodLabel} 기준
-          </span>
-          <p className="text-[11px] font-black tracking-[0.16em] opacity-65">{selected.eyebrow}</p>
-          <h2 className="mt-2 text-2xl font-black sm:text-3xl">{selected.title}</h2>
-          <p className="mt-2 max-w-xl text-sm font-bold opacity-65">{selected.description}</p>
+      <section className="mb-4">
+        <div className="sticky top-[72px] z-20 bg-base-100/90 backdrop-blur-md py-2 mb-3">
+          <div className="tabs-boxed grid grid-cols-3 rounded-2xl p-1 bg-base-200/50">
+            {Object.entries(rankingTypes).map(([key, tab]) => (
+              <button
+                type="button"
+                key={key}
+                className={`btn btn-sm h-9 rounded-xl border-none ${type === key ? "bg-base-100 text-primary shadow-sm font-black" : "bg-transparent text-base-content/60"}`}
+                onClick={() => setType(key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
-        <span className="leaderboard-hero-icon" aria-hidden="true">{selected.icon}</span>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="badge badge-primary badge-outline font-bold">{periodLabel} 기준</span>
+          <span className="text-sm text-base-content/60 tabular-nums">{date}</span>
+          <button className="btn btn-xs btn-ghost rounded-lg" onClick={() => setIsDateFilterOpen(v => !v)}>
+            날짜 변경 {isDateFilterOpen ? "▲" : "▼"}
+          </button>
+        </div>
+
+        {isDateFilterOpen && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-base-200/40">
+            <input
+              type="date"
+              className="input input-sm input-bordered w-36 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              value={date}
+              max={today}
+              onChange={(event) => selectDate(event.target.value, "day")}
+            />
+            <div className="flex flex-wrap gap-1">
+              <DateButton active={period === "day" && date === today} onClick={() => selectDate(today)}>오늘</DateButton>
+              <DateButton active={period === "day" && date === seoulDate(-1)} onClick={() => selectDate(seoulDate(-1))}>어제</DateButton>
+              <DateButton active={period === "week"} onClick={() => selectDate(today, "week")}>이번 주</DateButton>
+              <DateButton active={period === "month"} onClick={() => selectDate(today, "month")}>이번 달</DateButton>
+            </div>
+          </div>
+        )}
       </section>
 
       {loading ? (
         <div className="loading-block mt-5" />
       ) : (
-        <div className="ranking-transition" key={`${type}-${date}-${period}`}>
+        <div className="ranking-transition">
+          <div className="mb-3">
+            <h2 className="text-lg font-black">{selected.title}</h2>
+            <p className="text-xs text-base-content/60">{selected.description}</p>
+          </div>
           {podium.length > 0 && (
             <section className="podium-grid" aria-label="상위 3명">
               {podium.map((ranking, index) => (
@@ -167,25 +165,10 @@ export default function RankingPage() {
                   type={type}
                   place={index + 1}
                   mine={ranking.userId === user.id}
+                  innerRef={ranking.userId === user.id ? myRankRef : null}
+                  highlight={ranking.userId === user.id && highlightMyRank}
                 />
               ))}
-            </section>
-          )}
-
-          {data.myStats && (
-            <section className="my-rank-card">
-              <span className="grid size-12 shrink-0 place-items-center rounded-2xl bg-primary text-2xl shadow-sm">🐣</span>
-              <div className="min-w-0 flex-1">
-                <span className="text-[11px] font-black text-base-content/45">내 순위</span>
-                <strong className="block truncate text-base font-black">{data.myStats.nickname}</strong>
-              </div>
-              <div className="text-right">
-                <strong className="block text-2xl font-black text-primary tabular-nums">#{data.myRank}</strong>
-                <span className="text-xs font-black tabular-nums">{primaryValue(data.myStats, type)}</span>
-                <span className="mt-1 block text-[10px] font-bold text-base-content/45">
-                  재도전 {data.myStats.bankruptcyCount.toLocaleString("ko-KR")}회
-                </span>
-              </div>
             </section>
           )}
 
@@ -197,6 +180,8 @@ export default function RankingPage() {
                   ranking={ranking}
                   type={type}
                   mine={ranking.userId === user.id}
+                  innerRef={ranking.userId === user.id ? myRankRef : null}
+                  highlight={ranking.userId === user.id && highlightMyRank}
                 />
               ))}
             </section>
@@ -207,6 +192,15 @@ export default function RankingPage() {
           )}
         </div>
       )}
+
+      {data.myRank && (
+        <button
+          className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 btn btn-primary rounded-full shadow-lg font-bold"
+          onClick={scrollToMyRank}
+        >
+          내 순위 보기
+        </button>
+      )}
     </div>
   );
 }
@@ -215,7 +209,7 @@ function DateButton({ active, onClick, children }) {
   return (
     <button
       type="button"
-      className={`btn h-12 min-h-12 whitespace-nowrap rounded-2xl ${active ? "btn-primary" : "btn-outline border-base-300 bg-base-100"}`}
+      className={`btn btn-sm rounded-lg border-0 ${active ? "btn-primary" : "bg-base-100 text-base-content/70"}`}
       onClick={onClick}
     >
       {children}
@@ -251,10 +245,13 @@ function secondaryStats(ranking, type) {
   ];
 }
 
-function PodiumCard({ ranking, type, place, mine }) {
+function PodiumCard({ ranking, type, place, mine, innerRef, highlight }) {
   const medals = ["🥇", "🥈", "🥉"];
   return (
-    <article className={`podium-card place-${place} ${mine ? "is-mine" : ""}`}>
+    <article 
+      ref={innerRef}
+      className={`podium-card place-${place} ${mine ? "is-mine" : ""} ${highlight ? "animate-rank-pulse" : ""}`}
+    >
       <div className="flex items-center justify-between gap-3">
         <span className="text-3xl" aria-label={`${place}위`}>{medals[place - 1]}</span>
         {mine && <span className="badge badge-primary badge-sm font-black">나</span>}
@@ -272,9 +269,12 @@ function PodiumCard({ ranking, type, place, mine }) {
   );
 }
 
-function RankingRow({ ranking, type, mine }) {
+function RankingRow({ ranking, type, mine, innerRef, highlight }) {
   return (
-    <article className={`ranking-row ${mine ? "is-mine" : ""}`}>
+    <article 
+      ref={innerRef}
+      className={`ranking-row ${mine ? "is-mine" : ""} ${highlight ? "animate-rank-pulse" : ""}`}
+    >
       <span className="ranking-number">{ranking.rank}</span>
       <div className="min-w-0 flex-1">
         <strong className="block truncate font-black">

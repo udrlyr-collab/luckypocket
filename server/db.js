@@ -185,6 +185,21 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_server_notifications_source
     ON server_notifications(source_type, source_id)
     WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS mine_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    result_type TEXT NOT NULL,
+    label TEXT NOT NULL,
+    raw_reward INTEGER NOT NULL,
+    actual_reward INTEGER NOT NULL,
+    balance_before INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_mine_logs_user_created
+    ON mine_logs(user_id, created_at DESC);
 `);
 
 const bonusCodeColumns = new Set(
@@ -225,6 +240,15 @@ if (!userColumns.has("last_bankruptcy_at")) {
 }
 if (!userColumns.has("bankruptcy_prompt_dismissed_at")) {
   db.exec("ALTER TABLE users ADD COLUMN bankruptcy_prompt_dismissed_at TEXT");
+}
+if (!userColumns.has("mine_click_count")) {
+  db.exec("ALTER TABLE users ADD COLUMN mine_click_count INTEGER NOT NULL DEFAULT 0");
+}
+if (!userColumns.has("mine_total_earned")) {
+  db.exec("ALTER TABLE users ADD COLUMN mine_total_earned INTEGER NOT NULL DEFAULT 0");
+}
+if (!userColumns.has("last_mined_at")) {
+  db.exec("ALTER TABLE users ADD COLUMN last_mined_at TEXT");
 }
 
 function normalizedNickname(value) {
@@ -401,5 +425,8 @@ export function publicUser(user) {
     lastBankruptcyAt: user.last_bankruptcy_at || null,
     isAdmin: user.username === "admin",
     createdAt: user.created_at,
+    mineClickCount: user.mine_click_count || 0,
+    mineTotalEarned: user.mine_total_earned || 0,
+    lastMinedAt: user.last_mined_at || null,
   };
 }

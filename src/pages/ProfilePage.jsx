@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
@@ -153,25 +154,42 @@ export default function ProfilePage() {
       </section>
 
       {user.balance < 500000 && (
-        <section className="soft-card mb-6 border-2 border-warning">
-          <h2 className="section-title">🌱 파산신청으로 다시 시작하기</h2>
-          <p className="my-2 text-sm leading-relaxed">
-            현재 자산이 낮아요. 파산신청으로 자산을 정확히 1,000,000원으로 재설정할 수 있어요.
-          </p>
-          <p className="mb-4 text-xs font-bold text-base-content/50">
-            누적 {user.bankruptcyCount.toLocaleString("ko-KR")}회
-            {user.lastBankruptcyAt ? ` · 마지막 신청 ${formatDate(user.lastBankruptcyAt)}` : " · 아직 신청 내역 없음"}
-          </p>
-          <button
-            type="button"
-            className="btn btn-warning whitespace-nowrap rounded-2xl"
-            onClick={applyBankruptcy}
-            disabled={bankruptcyBusy}
-          >
-            {bankruptcyBusy ? <span className="loading loading-spinner loading-sm" /> : "파산신청"}
-          </button>
-          <p className="mt-3 min-h-5 text-sm font-bold" aria-live="polite">{bankruptcyMessage}</p>
-        </section>
+        <div className="grid gap-4 mb-6 sm:grid-cols-2">
+          <section className="soft-card border-2 border-error">
+            <h2 className="section-title">⛏ 탄광에서 자원 캐기</h2>
+            <p className="my-2 text-sm leading-relaxed">
+              파산신청 대신 곡괭이를 들고 직접 자산을 캐볼까요? 1,000,000원이 될 때까지 캘 수 있어요.
+            </p>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs font-bold text-base-content/50">
+                총 {user.mineTotalEarned?.toLocaleString("ko-KR") || 0}원 획득
+              </span>
+              <Link to="/mine" className="btn btn-error rounded-2xl">
+                탄광가기
+              </Link>
+            </div>
+          </section>
+
+          <section className="soft-card border-2 border-warning">
+            <h2 className="section-title">🌱 파산신청으로 다시 시작하기</h2>
+            <p className="my-2 text-sm leading-relaxed">
+              현재 자산이 낮아요. 파산신청으로 자산을 정확히 1,000,000원으로 재설정할 수 있어요.
+            </p>
+            <p className="mb-4 text-xs font-bold text-base-content/50">
+              누적 {user.bankruptcyCount.toLocaleString("ko-KR")}회
+              {user.lastBankruptcyAt ? ` · 마지막 신청 ${formatDate(user.lastBankruptcyAt)}` : " · 아직 신청 내역 없음"}
+            </p>
+            <button
+              type="button"
+              className="btn btn-warning whitespace-nowrap rounded-2xl"
+              onClick={applyBankruptcy}
+              disabled={bankruptcyBusy}
+            >
+              {bankruptcyBusy ? <span className="loading loading-spinner loading-sm" /> : "파산신청"}
+            </button>
+            <p className="mt-3 min-h-5 text-sm font-bold" aria-live="polite">{bankruptcyMessage}</p>
+          </section>
+        </div>
       )}
 
       <section className="soft-card asset-chart-card mb-8 min-w-0 overflow-hidden">
@@ -599,6 +617,7 @@ const assetEventLabels = {
   support_grant: "지원금",
   bankruptcy_reset: "파산신청",
   signup_grant: "가입 선물",
+  mine_reward: "탄광 획득",
 };
 
 function RecentAssetEvents({ points, range }) {

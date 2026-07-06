@@ -18,6 +18,7 @@ import { adminRouter } from "./routes/admin.js";
 import { bankruptcyRouter } from "./routes/bankruptcy.js";
 import { serverNotificationsRouter } from "./routes/serverNotifications.js";
 import { serverStatsRouter } from "./routes/serverStats.js";
+import { mineRouter } from "./routes/mine.js";
 
 const app = express();
 if (config.trustProxy) app.set("trust proxy", 1);
@@ -68,6 +69,16 @@ app.use(
     legacyHeaders: false,
   }),
 );
+app.use(
+  "/api/mine/click",
+  rateLimit({
+    windowMs: 1000,
+    limit: 8, // Allow slight burst but generally restrict fast clicking
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    message: { message: "조금 천천히 캐볼까요?" }
+  })
+);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "haengun-pocket" });
@@ -85,6 +96,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/bankruptcy", bankruptcyRouter);
 app.use("/api/server/notifications", serverNotificationsRouter);
 app.use("/api/server/stats", serverStatsRouter);
+app.use("/api/mine", mineRouter);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ message: "요청한 API를 찾을 수 없어요." });

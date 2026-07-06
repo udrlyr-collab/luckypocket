@@ -25,6 +25,9 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   background: #faf7f5;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 #root {
@@ -41,6 +44,26 @@ button,
 a,
 input {
   -webkit-tap-highlight-color: transparent;
+}
+
+button,
+.btn,
+.card,
+.ranking-row,
+.game-card,
+.stat-card,
+.soft-card {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea,
+[contenteditable="true"],
+.allow-select {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 .btn {
@@ -1195,6 +1218,41 @@ input {
   .quick-amount-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
+}
+
+@keyframes rockHit {
+  0% { transform: scale(1) translate(0, 0) rotate(0deg); }
+  20% { transform: scale(0.95) translate(-2px, 2px) rotate(-2deg); }
+  40% { transform: scale(0.95) translate(2px, -2px) rotate(2deg); }
+  60% { transform: scale(1.02) translate(-1px, 1px) rotate(-1deg); }
+  80% { transform: scale(1.02) translate(1px, -1px) rotate(1deg); }
+  100% { transform: scale(1) translate(0, 0) rotate(0deg); }
+}
+
+.animate-rock-hit {
+  animation: rockHit 150ms ease-in-out;
+}
+
+@keyframes floatUp {
+  0% { transform: translateY(0) scale(0.5); opacity: 0; }
+  20% { transform: translateY(-20px) scale(1.2); opacity: 1; }
+  100% { transform: translateY(-80px) scale(1); opacity: 0; }
+}
+
+.animate-float-up {
+  animation: floatUp 1s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes rankPulse {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(22, 139, 146, 0.4); }
+  50% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(22, 139, 146, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(22, 139, 146, 0); }
+}
+
+.animate-rank-pulse {
+  animation: rankPulse 1s ease-in-out;
+  z-index: 10;
+  position: relative;
 }
 
 @media (max-width: 420px) {
