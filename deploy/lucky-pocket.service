@@ -1,0 +1,22 @@
+[Unit]
+Description=Haengun Pocket number game
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/var/www/lucky-pocket/current
+Environment=NODE_ENV=production
+EnvironmentFile=/var/www/lucky-pocket/shared/.env
+ExecStart=/usr/local/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/www/lucky-pocket/shared
+
+[Install]
+WantedBy=multi-user.target

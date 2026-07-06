@@ -1,0 +1,47 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import AppShell from "./components/AppShell";
+import { useAuth } from "./context/AuthContext";
+import BombDodgeGame from "./games/BombDodgeGame";
+import CardDrawGame from "./games/CardDrawGame";
+import DartGame from "./games/DartGame";
+import RiskButtonGame from "./games/RiskButtonGame";
+import SlotMachineGame from "./games/SlotMachineGame";
+import AuthPage from "./pages/AuthPage";
+import HistoryPage from "./pages/HistoryPage";
+import HomePage from "./pages/HomePage";
+import ProfilePage from "./pages/ProfilePage";
+import RankingPage from "./pages/RankingPage";
+import WalletPage from "./pages/WalletPage";
+
+export default function App() {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-base-200">
+        <div className="text-center">
+          <span className="loading loading-ring loading-lg text-primary" />
+          <p className="mt-3 text-sm font-bold">행운 주머니를 여는 중...</p>
+        </div>
+      </div>
+    );
+  }
+  if (!user) return <AuthPage />;
+
+  return (
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route index element={<HomePage />} />
+        <Route path="/games/risk" element={<RiskButtonGame />} />
+        <Route path="/games/cards" element={<CardDrawGame />} />
+        <Route path="/games/bombs" element={<BombDodgeGame />} />
+        <Route path="/games/slot" element={<SlotMachineGame />} />
+        <Route path="/games/dart" element={<DartGame />} />
+        <Route path="/ranking" element={<RankingPage />} />
+        <Route path="/history" element={<HistoryPage />} />
+        <Route path="/wallet" element={<WalletPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+  );
+}
