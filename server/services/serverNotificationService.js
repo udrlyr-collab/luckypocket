@@ -61,43 +61,44 @@ export function createGameNotification(database, {
 }) {
   if (!won) return null;
   const multiplier = bet > 0 ? payout / bet : 0;
+  const profit = payout - bet;
   let notification = null;
 
   if (gameType === "slot" && detail.outcome === "777") {
     notification = {
       type: "jackpot",
       title: "777 잭팟",
-      message: `${user.nickname}님이 슬롯머신에서 777을 띄워 ${formatWon(payout)}을 획득했어요!`,
+      message: `${user.nickname}님이 슬롯머신에서 777을 띄워 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
   } else if (gameType === "dart" && String(detail.target || "").includes("bullseye")) {
     notification = {
       type: "jackpot",
       title: "다트 불스아이",
-      message: `${user.nickname}님이 다트 던지기에서 불스아이를 맞혀 ${formatWon(payout)}을 획득했어요!`,
+      message: `${user.nickname}님이 다트 던지기에서 불스아이를 맞혀 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
   } else if (gameType === "risk-button" && detail.cashedOut && detail.stage >= 5) {
     notification = {
       type: "high_multiplier",
       title: "위험버튼 고배당",
-      message: `${user.nickname}님이 위험버튼 ${detail.stage}단계에서 ${Number(multiplier.toFixed(2))}배 보상을 확정해 ${formatWon(payout)}을 획득했어요!`,
+      message: `${user.nickname}님이 위험버튼 ${detail.stage}단계에서 ${Number(multiplier.toFixed(2))}배 보상을 확정해 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
   } else if (gameType === "bomb-dodge" && detail.cashedOut && detail.safeCount >= 8) {
     notification = {
       type: "high_multiplier",
       title: "폭탄 피하기 대기록",
-      message: `${user.nickname}님이 폭탄 숫자 피하기에서 안전 칸 ${detail.safeCount}개를 열고 ${formatWon(payout)}을 확정했어요!`,
+      message: `${user.nickname}님이 폭탄 숫자 피하기에서 안전 칸 ${detail.safeCount}개를 열고 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
   } else if (multiplier >= 10) {
     notification = {
       type: "high_multiplier",
       title: "고배당 당첨",
-      message: `${user.nickname}님이 ${GAME_NAMES[gameType] || '게임'}에서 ${Number(multiplier.toFixed(2))}배 보상으로 ${formatWon(payout)}을 획득했어요!`,
+      message: `${user.nickname}님이 ${GAME_NAMES[gameType] || '게임'}에서 ${Number(multiplier.toFixed(2))}배 보상으로 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
-  } else if (payout >= 1000000) {
+  } else if (profit >= 1000000) {
     notification = {
       type: "big_win",
       title: "큰 행운 도착",
-      message: `${user.nickname}님이 ${GAME_NAMES[gameType] || '게임'}에서 ${formatWon(payout)}을 획득했어요!`,
+      message: `${user.nickname}님이 ${GAME_NAMES[gameType] || '게임'}에서 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
     };
   }
 
@@ -106,7 +107,7 @@ export function createGameNotification(database, {
     userId: user.id,
     nickname: user.nickname,
     ...notification,
-    amount: payout,
+    amount: profit,
     multiplier,
     gameType,
     gameName: GAME_NAMES[gameType] || null,
