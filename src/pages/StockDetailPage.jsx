@@ -214,11 +214,7 @@ export default function StockDetailPage() {
           </div>
           {!isDelisted && (
             <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap transition-colors duration-500 ${stock.priceChangeAmount > 0 ? "text-success" : stock.priceChangeAmount < 0 ? "text-error" : "text-base-content"}`}>
-              {Boolean(stock.is_etf) && stock.priceChangeAmount === 0 ? (
-                <span>변동 없음 (0)</span>
-              ) : (
-                <span>전 틱 대비 {stock.priceChangeAmount > 0 ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원 · {stock.priceChangeRate > 0 ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</span>
-              )}
+              <span>전 틱 대비 {stock.priceChangeAmount > 0 ? "+" : ""}{formatMoney(stock.priceChangeAmount)} · {stock.priceChangeRate > 0 ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</span>
               <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${(stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) > 0 ? "text-success" : (stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) < 0 ? "text-error" : "text-base-content"}`}>
                 {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate > 0 ? "+" : ""}${(stock.offeringChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : `상장가 대비 ${todayRate > 0 ? "+" : ""}${todayRate.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`}
               </span>

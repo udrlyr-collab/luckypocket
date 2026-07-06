@@ -259,14 +259,8 @@ function StockRow({ stock }) {
         </div>
         
         <div className={`flex-1 text-right text-xs font-bold tabular-nums shrink-0 transition-colors duration-500 ${isDelisted ? "opacity-0" : color}`}>
-          {Boolean(stock.is_etf) && stock.priceChangeAmount === 0 ? (
-            "0"
-          ) : (
-            <>
-              {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원<br className="sm:hidden"/>
-              <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</span>
-            </>
-          )}
+          {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}<br className="sm:hidden"/>
+          <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</span>
         </div>
 
         <div className="flex-1 text-right text-[11px] text-base-content/50 truncate hidden sm:block">

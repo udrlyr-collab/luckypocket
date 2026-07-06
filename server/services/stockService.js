@@ -9,9 +9,9 @@ const EVENT_PROBABILITIES = {
 };
 
 const IPO_EVENT_PROBABILITIES = {
-  ipoSurge: 0.15,
-  ipoNormal: 0.70,
-  ipoCrash: 0.15
+  ipoSurge: 0.60,
+  ipoNormal: 0.30,
+  ipoCrash: 0.10
 };
 
 import { STOCK_NAME_POOL } from "../constants/stockNamePool.js";
@@ -136,7 +136,7 @@ function processNormalTick(db, stock) {
 
     const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
     if (event === "ipoSurge") {
-      newPrice = Math.floor(newPrice * (1 + 0.1 + Math.random() * 0.4)); // +10% ~ +50%
+      newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.8)); // +20% ~ +100%
       eventType = "ipo_surge";
       eventMsg = `${stock.name}이(가) 신규 상장 프리미엄으로 급등 중이에요!`;
     } else if (event === "ipoCrash") {
