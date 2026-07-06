@@ -195,9 +195,9 @@ adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
       `).run(admin.id, admin.nickname, admin.balance, admin.balance, stock.id);
 
       db.prepare(
-        `INSERT INTO admin_logs (admin_user_id, action_type, before_value, after_value)
-         VALUES (?, 'force_stock_acquire', ?, ?)`
-      ).run(admin.id, stock.status, 'acquired');
+        `INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+         VALUES (?, ?, 'force_stock_acquire', ?, ?)`
+      ).run(admin.id, admin.id, stock.status, 'acquired');
     })();
     return res.json({ message: "관리자 권한으로 종목을 강제 인수했습니다." });
   } catch (error) {
@@ -226,9 +226,9 @@ adminRouter.post("/stocks/:id/revert", (req, res, next) => {
       `).run(stock.id);
 
       db.prepare(
-        `INSERT INTO admin_logs (admin_user_id, action_type, before_value, after_value)
-         VALUES (?, 'force_stock_revert', ?, ?)`
-      ).run(admin.id, stock.status, 'listed');
+        `INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+         VALUES (?, ?, 'force_stock_revert', ?, ?)`
+      ).run(admin.id, admin.id, stock.status, 'listed');
     })();
     return res.json({ message: "종목을 다시 일반 주식으로 되돌렸습니다." });
   } catch (error) {
@@ -251,9 +251,9 @@ adminRouter.post("/stocks/:id/delist", (req, res, next) => {
       delistStock(db, stock);
 
       db.prepare(
-        `INSERT INTO admin_logs (admin_user_id, action_type, before_value, after_value)
-         VALUES (?, 'force_stock_delist', ?, ?)`
-      ).run(admin.id, stock.status, 'delisted');
+        `INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+         VALUES (?, ?, 'force_stock_delist', ?, ?)`
+      ).run(admin.id, admin.id, stock.status, 'delisted');
     })();
     return res.json({ message: "종목을 강제 상장폐지했습니다." });
   } catch (error) {
