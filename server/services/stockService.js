@@ -181,25 +181,42 @@ function processNormalTick(db, stock) {
       eventType = "delist_warning";
       eventMsg = `${stock.name} 종목에서 이상 변동이 감지되었어요!`;
     } else {
-      const event = getRandomEvent(EVENT_PROBABILITIES);
-      if (event === "surge") {
-        newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.6)); // +20% ~ +80%
-        eventType = "surge";
-        eventMsg = `${stock.name} 주가가 급등했어요!`;
-      } else if (event === "crash") {
-        newPrice = Math.floor(newPrice * (1 - 0.2 - Math.random() * 0.5)); // -20% ~ -70%
-        eventType = "crash";
-        eventMsg = `${stock.name} 주가가 급락했어요!`;
-      } else {
+      let isSurgeOrCrash = false;
+      if (stock.is_bluechip !== 1) {
+        const event = getRandomEvent(EVENT_PROBABILITIES);
+        if (event === "surge") {
+          newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.6)); // +20% ~ +80%
+          eventType = "surge";
+          eventMsg = `${stock.name} 주가가 급등했어요!`;
+          isSurgeOrCrash = true;
+        } else if (event === "crash") {
+          newPrice = Math.floor(newPrice * (1 - 0.2 - Math.random() * 0.5)); // -20% ~ -70%
+          eventType = "crash";
+          eventMsg = `${stock.name} 주가가 급락했어요!`;
+          isSurgeOrCrash = true;
+        }
+      }
+      
+      if (!isSurgeOrCrash) {
         const maxChange = stock.volatility;
-        const change = (Math.random() * 2 - 1) * maxChange + stock.trend;
+        const change = stock.is_bluechip === 1
+          ? (Math.random() * 2 - 0.8) * maxChange + stock.trend // 우상향 (평균 +0.2 * maxChange)
+          : (Math.random() * 2 - 1) * maxChange + stock.trend;
         newPrice = Math.floor(newPrice * (1 + change));
       }
     }
   }
 
   // Enforce bounds
-  newPrice = Math.max(1, newPrice);
+  if (stock.is_bluechip === 1) {
+    const minCap = 50000000000000; // 50조
+    const minPrice = Math.ceil(minCap / stock.total_shares);
+    if (newPrice < minPrice) {
+      newPrice = minPrice + Math.floor(Math.random() * 100);
+    }
+  } else {
+    newPrice = Math.max(1, newPrice);
+  }
 
   if (newPrice !== stock.current_price || newStatus !== stock.status) {
     const basis = (eventType === "ipo_surge" || eventType === "ipo_crash") ? "offering_price" 

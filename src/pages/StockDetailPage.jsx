@@ -250,19 +250,20 @@ export default function StockDetailPage() {
               </p>
               
               <div className="mb-4">
-                <label className="text-xs font-bold text-base-content/50 block mb-2">
-                  청약 금액 (금액 입력 시 수량 자동 계산) <span className="float-right">보유 잔액: {formatMoney(user.balance)}</span>
+                <label className="text-xs font-bold text-base-content/50 mb-2 flex justify-between items-end gap-2">
+                  <span>청약 금액 (금액 입력 시 수량 자동 계산)</span>
+                  <span>보유 잔액: {formatMoney(user.balance)}</span>
                 </label>
                 <div className="flex gap-2">
                   <input 
                     type="number" 
-                    className="input input-bordered w-full rounded-2xl bg-base-100" 
+                    className="input input-bordered flex-1 min-w-0 rounded-2xl bg-base-100" 
                     placeholder="0"
                     value={amountInput}
                     onChange={e => setAmountInput(e.target.value)}
                   />
                   <button 
-                    className="btn btn-warning rounded-2xl px-6" 
+                    className="btn btn-warning rounded-2xl px-6 shrink-0" 
                     disabled={busy || !amountInput || Number(amountInput) <= 0}
                     onClick={handleBuyIpo}
                   >
