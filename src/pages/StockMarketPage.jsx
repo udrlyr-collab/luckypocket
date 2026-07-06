@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import { formatMoney, formatSignedMoney } from "../utils/format";
+import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 
 export default function StockMarketPage() {
   const [market, setMarket] = useState(null);
