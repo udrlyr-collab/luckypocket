@@ -122,10 +122,23 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     WHERE p.user_id = ? AND p.status = 'open'
   `).all(userId);
 
+  const processStock = (s) => {
+    return {
+      ...s,
+      currentPrice: s.current_price,
+      previousPrice: s.previous_price,
+      offeringPrice: s.offering_price,
+      priceChangeAmount: s.current_price - s.previous_price,
+      priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
+      offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
+      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
+    };
+  };
+
   res.json({
     serverTime: new Date(now).toISOString(),
     nextTickInSeconds,
-    stocks: stocksRaw,
+    stocks: stocksRaw.map(processStock),
     portfolio: { ...portfolio, holdings, positions }
   });
 });
