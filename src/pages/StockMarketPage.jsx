@@ -1,16 +1,38 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
+import { useEffect, useState, useRef } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockRiskBadges } from "../components/StockRiskStatus";
 
 export default function StockMarketPage() {
+  const { user } = useAuth();
+  const isAdmin = user && (user.isAdmin || user.username === 'admin');
   const [market, setMarket] = useState(null);
   const [portfolio, setPortfolio] = useState(null);
   const [news, setNews] = useState([]);
-  const [timer, setTimer] = useState(10);
+  const [nextTickAt, setNextTickAt] = useState(null);
+  const [timeRemaining, setTimeRemaining] = useState(10);
+  const [busy, setBusy] = useState(false);
   const loading = !market || !portfolio;
+
+  const handleAdminAction = async (endpoint) => {
+    if (!window.confirm("정말 실행하시겠습니까?")) return;
+    setBusy(true);
+    try {
+      const isDelete = endpoint.includes('method=DELETE');
+      const path = endpoint.split('?')[0];
+      await api(path, { method: isDelete ? "DELETE" : "POST" });
+      await fetchMarket();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const fetchMarket = async () => {
     try {
@@ -22,7 +44,7 @@ export default function StockMarketPage() {
         marketOpen: data.marketOpen,
       }));
       setPortfolio(data.portfolio);
-      setTimer(data.nextTickInSeconds);
+      setNextTickAt(new Date(data.nextTickAt).getTime());
     } catch (e) {
       console.error(e);
     }
@@ -66,10 +88,13 @@ export default function StockMarketPage() {
 
   useEffect(() => {
     const timerInterval = setInterval(() => {
-      setTimer((prev) => Math.max(0, prev - 1));
-    }, 1000);
+      if (nextTickAt) {
+        const remaining = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
+        setTimeRemaining(remaining);
+      }
+    }, 100);
     return () => clearInterval(timerInterval);
-  }, []);
+  }, [nextTickAt]);
 
   if (loading) {
     return (
@@ -101,11 +126,22 @@ export default function StockMarketPage() {
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="eyebrow">Lucky Exchange</p>
-          <h1 className="text-3xl font-black">주식 시장</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-3xl font-black">주식 시장</h1>
+            {isAdmin && (
+              <div className="flex gap-2">
+                {market.marketOpen ? (
+                  <button className="btn btn-xs btn-error" disabled={busy} onClick={() => handleAdminAction("/admin/stocks/market/close")}>주식장 닫기</button>
+                ) : (
+                  <button className="btn btn-xs btn-success" disabled={busy} onClick={() => handleAdminAction("/admin/stocks/market/open")}>주식장 열기</button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
         <div className="text-right">
           <p className="text-xs font-bold text-base-content/50">다음 갱신까지</p>
-          <p className="text-xl font-black text-primary">{timer}초</p>
+          <p className="text-xl font-black text-primary">{timeRemaining}초</p>
         </div>
       </header>
 
@@ -146,14 +182,14 @@ export default function StockMarketPage() {
             </div>
             <div className="grid gap-1">
               {stocks.map(stock => (
-                <StockRow key={stock.id} stock={stock} />
+                <StockRow key={stock.id} stock={stock} isAdmin={isAdmin} handleAdminAction={handleAdminAction} />
               ))}
               {recentDelistedStocks && recentDelistedStocks.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-base-200">
                   <div className="text-xs font-bold text-base-content/50 mb-2 px-2">최근 상장폐지 (최근 5개)</div>
                   <div className="grid gap-1 opacity-60">
                     {recentDelistedStocks.map(stock => (
-                      <StockRow key={stock.id} stock={stock} />
+                      <StockRow key={stock.id} stock={stock} isAdmin={isAdmin} handleAdminAction={handleAdminAction} />
                     ))}
                   </div>
                 </div>
@@ -253,25 +289,57 @@ export default function StockMarketPage() {
   );
 }
 
-function StockRow({ stock }) {
+function StockRow({ stock, isAdmin, handleAdminAction }) {
   const isDelisted = stock.status === 'delisted';
   const isUp = stock.priceChangeAmount > 0;
   const isDown = stock.priceChangeAmount < 0;
   const color = isUp ? "text-success" : isDown ? "text-error" : "text-base-content";
+  
+  const [ipoTimeRemaining, setIpoTimeRemaining] = useState(0);
+
+  useEffect(() => {
+    if (stock.status === 'ipo_subscription' && stock.ipo_subscription_ends_at) {
+      const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
+      const updateTimer = () => {
+        const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+        setIpoTimeRemaining(remaining);
+      };
+      updateTimer();
+      const interval = setInterval(updateTimer, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [stock.status, stock.ipo_subscription_ends_at]);
+
+  const ipoMins = Math.floor(ipoTimeRemaining / 60);
+  const ipoSecs = ipoTimeRemaining % 60;
   
   return (
     <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition border border-transparent hover:border-base-200/50">
       <div className="flex-[2] flex items-center min-w-0 mb-1 sm:mb-0">
         <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
         <div className="flex gap-1 shrink-0 flex-wrap">
-          {stock.status === 'ipo_subscription' && <span className="badge badge-warning badge-xs py-1 font-bold">공모주</span>}
+          {stock.status === 'ipo_subscription' && (
+             <span className="badge badge-warning badge-xs py-1 font-bold">
+               상장까지 {ipoMins > 0 ? `${ipoMins}분 ` : ''}{ipoSecs}초
+             </span>
+          )}
           {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
-          <StockRiskBadges stock={stock} compact />
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
           {stock.is_trading_suspended === 1 && <span className="badge badge-error badge-xs py-1 font-bold">거래 정지</span>}
           {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
+          <StockRiskBadges stock={stock} compact />
+          
+          {isAdmin && !isDelisted && (
+            <div className="flex gap-1 ml-2 border-l border-base-200 pl-2">
+              {stock.is_bluechip === 1 ? (
+                <button className="btn btn-xs btn-outline btn-warning" onClick={(e) => { e.preventDefault(); handleAdminAction(`/admin/stocks/${stock.id}/blue-chip?method=DELETE`); }}>우량주 취소</button>
+              ) : stock.status !== 'ipo_subscription' && stock.status !== 'newly_listed' && !stock.is_etf ? (
+                <button className="btn btn-xs btn-outline btn-info" onClick={(e) => { e.preventDefault(); handleAdminAction(`/admin/stocks/${stock.id}/blue-chip`); }}>우량주 선정</button>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
       
