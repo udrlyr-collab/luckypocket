@@ -86,6 +86,60 @@ function eventMeta(log) {
       badgeLabel: "서버 알림",
     };
   }
+  if (log.entryType === "stock_buy") {
+    return {
+      icon: "📈",
+      title: `주식을 ${formatMoney(Math.abs(log.profit))}에 매수했어요`,
+      color: "bg-primary/15",
+      badge: "badge-primary",
+      badgeLabel: "현물 매수",
+    };
+  }
+  if (log.entryType === "stock_sell") {
+    return {
+      icon: "📉",
+      title: `주식을 매도하여 ${formatMoney(log.profit)}을 받았어요`,
+      color: "bg-success/15",
+      badge: "badge-success",
+      badgeLabel: "현물 매도",
+    };
+  }
+  if (log.entryType === "stock_position_open") {
+    return {
+      icon: "🔥",
+      title: `레버리지 증거금 ${formatMoney(Math.abs(log.profit))}을 사용했어요`,
+      color: "bg-primary/20",
+      badge: "badge-primary",
+      badgeLabel: "롱 진입",
+    };
+  }
+  if (log.entryType === "stock_position_close") {
+    return {
+      icon: "💰",
+      title: `포지션을 청산하고 ${formatMoney(log.profit)}을 돌려받았어요`,
+      color: "bg-success/20",
+      badge: "badge-success",
+      badgeLabel: "포지션 청산",
+    };
+  }
+  if (log.entryType === "stock_liquidation") {
+    return {
+      icon: "💀",
+      title: `포지션이 강제 청산되어 증거금을 잃었어요`,
+      color: "bg-error/20",
+      badge: "badge-error",
+      badgeLabel: "강제청산",
+    };
+  }
+  if (log.entryType === "stock_acquire_company") {
+    return {
+      icon: "🏢",
+      title: `회사를 인수하는 데 ${formatMoney(Math.abs(log.profit))}을 사용했어요`,
+      color: "bg-secondary/20",
+      badge: "badge-secondary",
+      badgeLabel: "회사 인수",
+    };
+  }
   const game = gameMeta[log.gameType];
   return {
     icon: game?.icon || "🍀",

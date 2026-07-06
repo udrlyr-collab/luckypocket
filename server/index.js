@@ -19,6 +19,8 @@ import { bankruptcyRouter } from "./routes/bankruptcy.js";
 import { serverNotificationsRouter } from "./routes/serverNotifications.js";
 import { serverStatsRouter } from "./routes/serverStats.js";
 import { mineRouter } from "./routes/mine.js";
+import { stocksRouter } from "./routes/stocks.js";
+import { initStockMarket, tickStockMarket } from "./services/stockService.js";
 
 const app = express();
 if (config.trustProxy) app.set("trust proxy", 1);
@@ -97,6 +99,7 @@ app.use("/api/bankruptcy", bankruptcyRouter);
 app.use("/api/server/notifications", serverNotificationsRouter);
 app.use("/api/server/stats", serverStatsRouter);
 app.use("/api/mine", mineRouter);
+app.use("/api/stocks", stocksRouter);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ message: "요청한 API를 찾을 수 없어요." });
@@ -122,6 +125,15 @@ app.use((error, _req, res, _next) => {
 
 const server = app.listen(config.port, "127.0.0.1", () => {
   console.log(`행운주머니 server listening on http://127.0.0.1:${config.port}`);
+  
+  // Initialize stock market
+  try {
+    initStockMarket(db);
+    setInterval(() => tickStockMarket(db), 10000);
+    console.log("주식 시장 틱 타이머(10초)가 시작되었습니다.");
+  } catch (err) {
+    console.error("주식 시장 초기화 실패:", err);
+  }
 });
 
 function shutdown() {

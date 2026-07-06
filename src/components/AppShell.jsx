@@ -10,6 +10,7 @@ const links = [
   { to: "/ranking", label: "리더보드", icon: "🏆" },
   { to: "/history", label: "기록", icon: "📒" },
   { to: "/wallet", label: "나누기", icon: "💸" },
+  { to: "/stocks", label: "주식", icon: "📈" },
   { to: "/profile", label: "내 정보", icon: "👛" },
 ];
 
@@ -104,7 +105,7 @@ export default function AppShell() {
           <Outlet />
         </PageContainer>
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-base-300 bg-base-100 p-2 md:hidden" aria-label="모바일 메뉴">
+      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-base-300 bg-base-100 p-2 md:hidden" aria-label="모바일 메뉴">
         {links.map((link) => (
           <NavLink
             key={link.to}

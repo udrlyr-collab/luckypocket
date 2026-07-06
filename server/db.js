@@ -200,6 +200,112 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_mine_logs_user_created
     ON mine_logs(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS stocks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'listed',
+    current_price INTEGER NOT NULL,
+    previous_price INTEGER NOT NULL,
+    initial_price INTEGER NOT NULL,
+    total_shares INTEGER NOT NULL,
+    market_cap INTEGER NOT NULL,
+    volatility REAL NOT NULL,
+    trend REAL NOT NULL DEFAULT 0,
+    event_type TEXT,
+    event_until INTEGER,
+    owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    owner_nickname_snapshot TEXT,
+    is_etf INTEGER NOT NULL DEFAULT 0 CHECK (is_etf IN (0, 1)),
+    etf_tracking_type TEXT,
+    etf_base_price INTEGER,
+    etf_base_top_balance INTEGER,
+    etf_last_tracked_balance INTEGER,
+    listed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    delisted_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_price_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    price INTEGER NOT NULL,
+    market_cap INTEGER NOT NULL,
+    event_type TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_price_history_stock
+    ON stock_price_history(stock_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS stock_holdings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE RESTRICT,
+    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+    average_price REAL NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, stock_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS stock_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE RESTRICT,
+    side TEXT NOT NULL DEFAULT 'long',
+    margin_amount INTEGER NOT NULL CHECK (margin_amount > 0),
+    leverage INTEGER NOT NULL CHECK (leverage > 1),
+    position_size INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    entry_price INTEGER NOT NULL,
+    liquidation_price INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    unrealized_pnl INTEGER NOT NULL DEFAULT 0,
+    realized_pnl INTEGER NOT NULL DEFAULT 0,
+    opened_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    closed_at TEXT,
+    liquidated_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_positions_user_status
+    ON stock_positions(user_id, status);
+  
+  CREATE INDEX IF NOT EXISTS idx_stock_positions_stock_status
+    ON stock_positions(stock_id, status);
+
+  CREATE TABLE IF NOT EXISTS stock_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE RESTRICT,
+    trade_type TEXT NOT NULL,
+    amount INTEGER NOT NULL,
+    quantity REAL NOT NULL,
+    price INTEGER NOT NULL,
+    leverage INTEGER NOT NULL DEFAULT 1,
+    realized_pnl INTEGER NOT NULL DEFAULT 0,
+    balance_before INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_trades_user
+    ON stock_trades(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS stock_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    message TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_events_stock
+    ON stock_events(stock_id, created_at DESC);
 `);
 
 const bonusCodeColumns = new Set(

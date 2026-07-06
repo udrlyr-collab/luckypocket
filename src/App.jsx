@@ -13,6 +13,8 @@ import MinePage from "./pages/MinePage";
 import ProfilePage from "./pages/ProfilePage";
 import RankingPage from "./pages/RankingPage";
 import WalletPage from "./pages/WalletPage";
+import StockMarketPage from "./pages/StockMarketPage";
+import StockDetailPage from "./pages/StockDetailPage";
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -42,6 +44,8 @@ export default function App() {
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/wallet" element={<WalletPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/stocks" element={<StockMarketPage />} />
+        <Route path="/stocks/:id" element={<StockDetailPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

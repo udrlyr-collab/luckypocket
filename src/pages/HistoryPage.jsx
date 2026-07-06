@@ -59,6 +59,12 @@ export default function HistoryPage() {
           ["bankruptcy_reset", "🌱 파산신청"],
           ["admin_nickname_change", "🛡️ 관리자 변경"],
           ["server_notification", "📣 서버 알림"],
+          ["stock_buy", "📈 주식 매수"],
+          ["stock_sell", "📉 주식 매도"],
+          ["stock_position_open", "🔥 레버리지 진입"],
+          ["stock_position_close", "💰 포지션 청산"],
+          ["stock_liquidation", "💀 강제 청산"],
+          ["stock_acquire_company", "🏢 회사 인수"],
         ].map(([key, label]) => (
           <button
             key={key}
