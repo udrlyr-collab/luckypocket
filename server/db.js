@@ -349,6 +349,13 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
 if (!stockColumns.has("is_bluechip")) {
   db.exec("ALTER TABLE stocks ADD COLUMN is_bluechip INTEGER NOT NULL DEFAULT 0");
 }
+
+if (!stockColumns.has("blue_chip_selected_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_selected_at TEXT");
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_selected_by_user_id INTEGER");
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_cancelled_at TEXT");
+}
+
 if (!stockColumns.has("is_trading_suspended")) {
   db.exec(
     "ALTER TABLE stocks ADD COLUMN is_trading_suspended INTEGER NOT NULL DEFAULT 0 CHECK (is_trading_suspended IN (0, 1))",

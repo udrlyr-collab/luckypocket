@@ -4,7 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
-import { StockRiskBadges } from "../components/StockRiskStatus";
+import { StockRiskBadges, StockTierBadge } from "../components/StockRiskStatus";
 
 export default function StockMarketPage() {
   const { user } = useAuth();
@@ -325,6 +325,7 @@ function StockRow({ stock, isAdmin, handleAdminAction }) {
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
+          <StockTierBadge stock={stock} compact />
           {stock.is_trading_suspended === 1 && <span className="badge badge-error badge-xs py-1 font-bold">거래 정지</span>}
           {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
           <StockRiskBadges stock={stock} compact />

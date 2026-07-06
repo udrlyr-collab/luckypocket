@@ -368,6 +368,8 @@ adminRouter.post("/stocks/:id/suspend", (req, res) => {
   return res.json({ message: "해당 주식의 거래를 정지했습니다." });
 });
 
+
+
 adminRouter.post("/stocks/:id/resume", (req, res) => {
   const stockId = Number(req.params.id);
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
@@ -375,4 +377,35 @@ adminRouter.post("/stocks/:id/resume", (req, res) => {
   
   db.prepare("UPDATE stocks SET is_trading_suspended = 0 WHERE id = ?").run(stockId);
   return res.json({ message: "해당 주식의 거래 정지를 해제했습니다." });
+});
+
+adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
+  const stockId = Number(req.params.id);
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+  
+  db.prepare(`
+    UPDATE stocks 
+    SET is_bluechip = 1, 
+        blue_chip_selected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 
+        blue_chip_selected_by_user_id = ? 
+    WHERE id = ?
+  `).run(req.user.id, stockId);
+  
+  return res.json({ message: "해당 종목을 우량주로 선정했습니다." });
+});
+
+adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
+  const stockId = Number(req.params.id);
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+  
+  db.prepare(`
+    UPDATE stocks 
+    SET is_bluechip = 0, 
+        blue_chip_cancelled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') 
+    WHERE id = ?
+  `).run(stockId);
+  
+  return res.json({ message: "해당 종목의 우량주 지정을 취소했습니다." });
 });

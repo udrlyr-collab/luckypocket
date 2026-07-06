@@ -5,18 +5,22 @@ import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import AnimatedMoney from "../components/AnimatedMoney";
+import { StockTierBadge } from "../components/StockRiskStatus";
 
 export default function StockDetailPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const [data, setData] = useState(null);
-  const [timer, setTimer] = useState(10);
+  const [nextTickAt, setNextTickAt] = useState(null);
+  const [timeRemaining, setTimeRemaining] = useState(10);
+  const [ipoTimeRemaining, setIpoTimeRemaining] = useState(0);
   
   // Trade state
   const [amountInput, setAmountInput] = useState("");
   const [sellFraction, setSellFraction] = useState(1);
   const [leverage, setLeverage] = useState(1);
+  const [positionSide, setPositionSide] = useState('long');
   
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -29,7 +33,7 @@ export default function StockDetailPage() {
     try {
       const res = await api(`/stocks/${id}`);
       setData(res);
-      setTimer(10);
+      setNextTickAt(new Date(res.nextTickAt || Date.now() + 10000).getTime());
     } catch (e) {
       setError(e.message);
     }
@@ -43,10 +47,26 @@ export default function StockDetailPage() {
 
   useEffect(() => {
     const timerInterval = setInterval(() => {
-      setTimer((prev) => Math.max(0, prev - 1));
-    }, 1000);
+      if (nextTickAt) {
+        const remaining = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
+        setTimeRemaining(remaining);
+      }
+    }, 100);
     return () => clearInterval(timerInterval);
-  }, []);
+  }, [nextTickAt]);
+
+  useEffect(() => {
+    if (data?.stock?.status === 'ipo_subscription' && data.stock.ipo_subscription_ends_at) {
+      const endsAt = new Date(data.stock.ipo_subscription_ends_at).getTime();
+      const updateTimer = () => {
+        const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+        setIpoTimeRemaining(remaining);
+      };
+      updateTimer();
+      const interval = setInterval(updateTimer, 1000);
+      return () => clearInterval(interval);
+    }
+  }, [data?.stock]);
 
   if (error) {
     return (
@@ -97,7 +117,7 @@ export default function StockDetailPage() {
         setShowLeverageWarning(true);
         return;
       }
-      return executeTrade("/stocks/open-position", { stockId: stock.id, margin: Number(amountInput), leverage });
+      return executeTrade("/stocks/open-position", { stockId: stock.id, margin: Number(amountInput), leverage, side: positionSide });
     }
     return executeTrade("/stocks/buy", { stockId: stock.id, quantity: Number(amountInput) });
   };
@@ -231,6 +251,7 @@ export default function StockDetailPage() {
           </div>
           <div className="flex gap-2 mb-2 flex-wrap">
             {stock.is_bluechip === 1 && <span className="badge badge-info font-bold">우량주</span>}
+            <StockTierBadge stock={stock} />
             {stock.status === 'ipo_subscription' && <span className="badge badge-warning font-bold">공모주</span>}
             {stock.status === 'newly_listed' && <span className="badge badge-warning font-bold">신규 상장</span>}
             {isAcquired && <span className="badge badge-primary font-bold">인수됨</span>}
@@ -249,7 +270,7 @@ export default function StockDetailPage() {
         </div>
         <div className="text-left md:text-right relative">
           <div className="absolute right-0 -top-6 text-xs font-bold text-base-content/50">
-            다음 갱신 <span className="text-primary">{timer}초</span>
+            다음 갱신 <span className="text-primary">{timeRemaining}초</span>
           </div>
           <div className={`text-4xl font-black tabular-nums ${isDelisted ? "text-base-content/30" : ""}`}>
             <AnimatedMoney value={stock.current_price} />
@@ -310,6 +331,24 @@ export default function StockDetailPage() {
                 일반 주식으로 되돌리기
               </button>
             )}
+            {!isDelisted && stock.is_bluechip !== 1 && stock.status !== 'delist_review' && stock.status !== 'delist_warning' && stock.status !== 'final_crash' && (
+              <button 
+                className="btn btn-info btn-sm" 
+                disabled={busy} 
+                onClick={() => executeAdminAction("/blue-chip")}
+              >
+                우량주 선정
+              </button>
+            )}
+            {!isDelisted && stock.is_bluechip === 1 && (
+              <button 
+                className="btn btn-warning btn-sm" 
+                disabled={busy} 
+                onClick={() => executeAdminAction("/blue-chip", 'DELETE')}
+              >
+                우량주 취소
+              </button>
+            )}
             {!isDelisted && (
               <button 
                 className="btn btn-error btn-sm btn-outline" 
@@ -339,10 +378,15 @@ export default function StockDetailPage() {
           ) : stock.status === 'ipo_subscription' ? (
             <div className="bg-warning/10 border-2 border-warning/20 p-6 rounded-2xl">
               <h3 className="font-black text-warning text-lg mb-2">🚀 공모 청약 진행 중!</h3>
-              <p className="text-sm font-bold text-base-content/70 mb-4">
+              <p className="text-sm font-bold text-base-content/70 mb-2">
                 현재 공모가 <strong className="text-warning text-lg">{formatMoney(stock.offering_price)}</strong>로 무제한 구매 가능합니다.<br/>
                 상장 후 가격이 어떻게 변동될지 예측해보세요!
               </p>
+              <div className="mb-4 text-center">
+                <span className="text-3xl font-black text-warning animate-pulse">
+                  상장까지 {Math.floor(ipoTimeRemaining / 60) > 0 ? `${Math.floor(ipoTimeRemaining / 60)}분 ` : ''}{ipoTimeRemaining % 60}초
+                </span>
+              </div>
               
               <div className="mb-4">
                 <label className="text-xs font-bold text-base-content/50 mb-2 flex justify-between items-end gap-2">
@@ -433,6 +477,22 @@ export default function StockDetailPage() {
                 </label>
                 <div className="flex flex-col gap-1">
                   <div className="flex gap-2">
+                    {leverage > 1 && (
+                      <div className="join mr-2 bg-base-200 p-1 rounded-2xl shrink-0">
+                        <button 
+                          className={`join-item btn btn-sm rounded-xl ${positionSide === 'long' ? 'btn-success text-white' : 'btn-ghost'}`}
+                          onClick={() => setPositionSide('long')}
+                        >
+                          LONG
+                        </button>
+                        <button 
+                          className={`join-item btn btn-sm rounded-xl ${positionSide === 'short' ? 'btn-error text-white' : 'btn-ghost'}`}
+                          onClick={() => setPositionSide('short')}
+                        >
+                          SHORT
+                        </button>
+                      </div>
+                    )}
                     <input 
                       type="number" 
                       className="input input-bordered flex-1 min-w-0 rounded-2xl" 
@@ -441,11 +501,11 @@ export default function StockDetailPage() {
                       onChange={e => setAmountInput(e.target.value)}
                     />
                     <button 
-                      className={`btn rounded-2xl px-6 shrink-0 ${leverage >= 50 ? "btn-error" : "btn-primary"}`} 
+                      className={`btn rounded-2xl px-6 shrink-0 ${leverage >= 50 ? "btn-error" : leverage > 1 ? (positionSide === 'long' ? "btn-success" : "btn-error") : "btn-primary"}`} 
                       disabled={busy || !amountInput || Number(amountInput) <= 0 || isTradeBlocked}
                       onClick={handleBuy}
                     >
-                      {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? "매수" : "롱 오픈")}
+                      {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? "매수" : `${positionSide === 'long' ? 'LONG' : 'SHORT'} 오픈`)}
                     </button>
                   </div>
                   {amountInput && Number(amountInput) > 0 && (
@@ -541,8 +601,11 @@ export default function StockDetailPage() {
                   return (
                     <div key={p.id} className={`bg-base-200/50 p-4 rounded-2xl border ${danger ? "border-error/50" : "border-transparent"}`}>
                       <div className="flex justify-between items-center mb-2">
-                        <span className="font-bold text-sm">
-                          LONG {p.leverage}x <span className="text-xs font-normal text-base-content/50 ml-1">진입 {formatMoney(p.entry_price)}</span>
+                        <span className="font-bold text-sm flex items-center gap-2">
+                          <span className={p.side === 'short' ? 'text-error' : 'text-success'}>
+                            {p.side === 'short' ? 'SHORT' : 'LONG'} {p.leverage}x
+                          </span>
+                          <span className="text-xs font-normal text-base-content/50">진입 {formatMoney(p.entry_price)}</span>
                         </span>
                         <span className={`font-bold text-sm ${unrealized >= 0 ? "text-success" : "text-error"}`}>
                           {formatSignedMoney(unrealized)} ({unrealized >= 0 ? "+" : ""}{((unrealized / p.margin_amount) * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)

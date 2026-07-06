@@ -7,6 +7,7 @@ import {
   recalculateOwnerEtfs,
   requiredCompanyAcquisitionBalance,
   STOCK_MARKET_POLICY,
+  nextTickAt,
 } from "../services/stockService.js";
 import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
@@ -99,7 +100,10 @@ stocksRouter.get("/portfolio", (req, res) => {
 
   const positions = db.prepare(`
     SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price, s.status as stock_status,
-           (s.current_price - p.entry_price) * p.quantity as live_unrealized_pnl
+           CASE 
+             WHEN p.side = 'short' THEN (p.entry_price - s.current_price) * p.quantity
+             ELSE (s.current_price - p.entry_price) * p.quantity 
+           END as live_unrealized_pnl
     FROM stock_positions p
     JOIN stocks s ON p.stock_id = s.id
     WHERE p.user_id = ? AND p.status = 'open'
@@ -113,7 +117,7 @@ stocksRouter.get("/market-snapshot", (req, res) => {
   
   // 10초 틱을 기준으로 다음 틱까지 남은 시간 대략 계산
   const now = Date.now();
-  const nextTickInSeconds = 10 - Math.floor((now % 10000) / 1000);
+  const serverNextTickAt = nextTickAt;
 
   // 폴링 시 실시간으로 ETF 가격 최신화
   recalculateOwnerEtfs(db);
@@ -137,7 +141,10 @@ stocksRouter.get("/market-snapshot", (req, res) => {
 
   const positions = db.prepare(`
     SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price, s.status as stock_status,
-           (s.current_price - p.entry_price) * p.quantity as live_unrealized_pnl
+           CASE 
+             WHEN p.side = 'short' THEN (p.entry_price - s.current_price) * p.quantity
+             ELSE (s.current_price - p.entry_price) * p.quantity 
+           END as live_unrealized_pnl
     FROM stock_positions p
     JOIN stocks s ON p.stock_id = s.id
     WHERE p.user_id = ? AND p.status = 'open'
@@ -158,7 +165,7 @@ stocksRouter.get("/market-snapshot", (req, res) => {
 
   res.json({
     serverTime: new Date(now).toISOString(),
-    nextTickInSeconds,
+    nextTickAt: new Date(serverNextTickAt).toISOString(),
     marketOpen: isStockMarketOpen(db),
     stocks: stocksRaw.map(processStock),
     portfolio: { ...portfolio, holdings, positions }
@@ -399,11 +406,12 @@ stocksRouter.post("/sell", (req, res) => {
 });
 
 stocksRouter.post("/open-position", (req, res) => {
-  const { stockId, margin, leverage } = req.body;
+  const { stockId, margin, leverage, side = "long" } = req.body;
   const userId = req.user.id;
 
   if (!margin || margin <= 0 || !leverage || leverage <= 1) return res.status(400).json({ message: "증거금 또는 레버리지가 올바르지 않아요." });
   if (![2, 5, 10, 50, 100].includes(leverage)) return res.status(400).json({ message: "지원하지 않는 레버리지 배율이에요." });
+  if (!["long", "short"].includes(side)) return res.status(400).json({ message: "포지션 방향이 올바르지 않아요." });
 
   let result;
   try {
@@ -419,12 +427,14 @@ stocksRouter.post("/open-position", (req, res) => {
 
       const positionSize = margin * leverage;
       const quantity = positionSize / stock.current_price;
-      const liquidationPrice = Math.floor(stock.current_price * (1 - 1 / leverage)); // LONG liquidation
+      const liquidationPrice = side === "short" 
+        ? Math.ceil(stock.current_price * (1 + 1 / leverage))
+        : Math.floor(stock.current_price * (1 - 1 / leverage));
 
       db.prepare(`
         INSERT INTO stock_positions (user_id, stock_id, side, margin_amount, leverage, position_size, quantity, entry_price, liquidation_price)
-        VALUES (?, ?, 'long', ?, ?, ?, ?, ?, ?)
-      `).run(userId, stockId, margin, leverage, positionSize, quantity, stock.current_price, liquidationPrice);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, stockId, side, margin, leverage, positionSize, quantity, stock.current_price, liquidationPrice);
 
       const balanceAfter = user.balance - margin;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
@@ -464,7 +474,17 @@ stocksRouter.post("/close-position", (req, res) => {
       assertCanTradeStock(user, stock);
       const closePrice = (stock && stock.status !== 'delisted') ? stock.current_price : 0;
 
-      const unrealizedPnl = (closePrice - position.entry_price) * position.quantity;
+      let unrealizedPnl = 0;
+      if (position.side === "short") {
+        unrealizedPnl = (position.entry_price - closePrice) * position.quantity;
+        if (closePrice === 0) { // Delisted cap
+          const maxShortProfit = position.margin_amount * position.leverage * 0.95;
+          unrealizedPnl = Math.min(unrealizedPnl, maxShortProfit);
+        }
+      } else {
+        unrealizedPnl = (closePrice - position.entry_price) * position.quantity;
+      }
+
       const payout = Math.floor(position.margin_amount + unrealizedPnl);
       const finalPayout = Math.max(0, payout); // Cannot lose more than margin if manually closed before liquidation processing
 

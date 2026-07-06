@@ -1,10 +1,30 @@
 function remainingRecoveryTime(stock) {
-  const required = Number(stock.recovery_required_ticks || 60);
+  const required = Number(stock.recovery_required_ticks || 6);
   const current = Number(stock.recovery_tick_count || 0);
   const seconds = Math.max(0, required - current) * 10;
   const minutes = Math.floor(seconds / 60);
   const restSeconds = seconds % 60;
-  return `${minutes}분 ${restSeconds}초`;
+  if (minutes > 0) return `${minutes}분 ${restSeconds}초`;
+  return `${restSeconds}초`;
+}
+
+export function getStockTier(marketCap) {
+  const cap = Number(marketCap) || 0;
+  if (cap >= 100_000_000_000_000) return { label: "대표 대형주", className: "badge-primary text-primary-content" };
+  if (cap >= 20_000_000_000_000) return { label: "초대형주", className: "badge-secondary text-secondary-content" };
+  if (cap >= 2_000_000_000_000) return { label: "대형주", className: "badge-accent text-accent-content" };
+  if (cap >= 300_000_000_000) return { label: "중형주", className: "badge-info text-info-content" };
+  if (cap >= 50_000_000_000) return { label: "중소형주", className: "badge-ghost bg-base-300" };
+  return { label: "소형주", className: "badge-ghost" };
+}
+
+export function StockTierBadge({ stock, compact = false }) {
+  if (stock.status === 'ipo_subscription' || stock.status === 'newly_listed') {
+    // 공모주는 별도로 표시할 수도 있지만 시가총액 기반으로 그대로 표시
+  }
+  const { label, className } = getStockTier(stock.market_cap);
+  const size = compact ? "badge-xs py-1" : "";
+  return <span className={`badge font-bold ${className} ${size}`}>{label}</span>;
 }
 
 export function StockRiskBadges({ stock, compact = false }) {
@@ -34,7 +54,7 @@ export function StockRiskBadges({ stock, compact = false }) {
     return (
       <span className={`badge badge-success font-bold ${size}`}>
         회생 중 {Number(stock.recovery_tick_count || 0)}/
-        {Number(stock.recovery_required_ticks || 60)}
+        {Number(stock.recovery_required_ticks || 6)}
       </span>
     );
   }
@@ -77,7 +97,7 @@ export function StockRiskNotice({ stock }) {
       <div className="alert mb-6 rounded-2xl border border-error/30 bg-warning/15 text-base-content">
         <span>
           <strong className="block text-error">상장폐지 심사 중 · 급등락 위험</strong>
-          60억원 이상으로 회복한 뒤 10분 동안 유지하면 회생해요.
+          60억원 이상으로 회복한 뒤 1분 동안 유지하면 회생해요.
           <br />
           시가총액이 10억원 미만으로 떨어지면 최종 폭락 단계에 들어갑니다.
         </span>
@@ -90,7 +110,7 @@ export function StockRiskNotice({ stock }) {
         <span>
           <strong className="block">
             회생 중 · {Number(stock.recovery_tick_count || 0)}/
-            {Number(stock.recovery_required_ticks || 60)}틱
+            {Number(stock.recovery_required_ticks || 6)}틱
           </strong>
           60억원 이상 유지가 필요해요. 남은 유지 시간:{" "}
           {remainingRecoveryTime(stock)}
