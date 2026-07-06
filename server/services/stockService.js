@@ -196,10 +196,6 @@ export function initStockMarket(db) {
       INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility)
       VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?)
     `);
-    const insert = db.prepare(`
-      INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility)
-      VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?)
-    `);
     
     db.transaction(() => {
       const usedSymbols = new Set();
@@ -384,7 +380,7 @@ function processNormalTick(
     const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
     if (now >= endsAt) {
       newStatus = "newly_listed";
-      const newlyListedUntil = new Date(now + STOCK_MARKET_POLICY.newlyListedDurationMs).toISOString();
+      const newlyListedUntil = new Date(now + STOCK_TEMP_POLICY.newlyListedDurationMs).toISOString();
       const identity = pickRandomStockIdentity(db, usedSymbols);
       
       db.prepare("UPDATE stocks SET newly_listed_until = ?, name = ?, symbol = ? WHERE id = ?").run(newlyListedUntil, identity.name, identity.symbol, stock.id);
@@ -1140,6 +1136,31 @@ export function initializeStockDelistingLifecycle(database) {
     return { initialized: true, stockCount: stocks.length };
   })();
 }
+
+export function liquidatePositionsIfNeeded(db) {
+  // Find all open positions where current stock price hits or exceeds liquidation price
+  const positions = db.prepare(`
+    SELECT p.*, s.current_price as stock_current_price
+    FROM stock_positions p
+    JOIN stocks s ON p.stock_id = s.id
+    WHERE p.status = 'open' AND (
+      (p.side = 'long' AND s.current_price <= p.liquidation_price) OR
+      (p.side = 'short' AND s.current_price >= p.liquidation_price)
+    )
+  `).all();
+
+  for (const pos of positions) {
+    liquidatePosition(db, pos, pos.stock_current_price);
+  }
+}
+
+function liquidatePosition(db, position, closingPrice) {
+  db.prepare(`
+    UPDATE stock_positions 
+    SET status = 'liquidated', liquidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unrealized_pnl = 0, realized_pnl = ?
+    WHERE id = ?
+  `).run(-position.margin_amount, position.id);
+
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(position.user_id);
   
   db.prepare(`
@@ -1149,16 +1170,18 @@ export function initializeStockDelistingLifecycle(database) {
 
   // Big liquidations get notification
   if (position.leverage >= 50 || position.margin_amount >= 500000) {
-    createServerNotification(db, {
-      userId: user.id,
-      nickname: user.nickname,
-      type: "stock_liquidation",
-      title: "강제 청산",
-      message: `${user.nickname}님이 ${position.leverage}배 레버리지 포지션에서 강제 청산당했습니다.`,
-      amount: -position.margin_amount,
-      gameType: "stock",
-      gameName: "주식",
-      metadata: { positionId: position.id, margin: position.margin_amount }
+    import('./notificationService.js').then(({ createServerNotification }) => {
+      createServerNotification(db, {
+        userId: user.id,
+        nickname: user.nickname,
+        type: "stock_liquidation",
+        title: "강제 청산",
+        message: `${user.nickname}님이 ${position.leverage}배 레버리지 포지션에서 강제 청산당했습니다.`,
+        amount: -position.margin_amount,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { positionId: position.id, margin: position.margin_amount }
+      });
     });
   }
 }
