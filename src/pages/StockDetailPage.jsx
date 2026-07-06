@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
+import AnimatedMoney from "../components/AnimatedMoney";
 
 export default function StockDetailPage() {
   const { id } = useParams();
@@ -36,7 +37,7 @@ export default function StockDetailPage() {
 
   useEffect(() => {
     fetchStock();
-    const interval = setInterval(fetchStock, 10000);
+    const interval = setInterval(fetchStock, 2000);
     return () => clearInterval(interval);
   }, [id]);
 
@@ -245,7 +246,7 @@ export default function StockDetailPage() {
             다음 갱신 <span className="text-primary">{timer}초</span>
           </div>
           <div className={`text-4xl font-black tabular-nums ${isDelisted ? "text-base-content/30" : ""}`}>
-            {formatMoney(stock.current_price)}
+            <AnimatedMoney value={stock.current_price} />
           </div>
           {!isDelisted && (
             <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap transition-colors duration-500 ${stock.priceChangeAmount > 0 ? "text-success" : stock.priceChangeAmount < 0 ? "text-error" : "text-base-content"}`}>
@@ -360,6 +361,13 @@ export default function StockDetailPage() {
               </div>
               {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
+            </div>
+          ) : isAcquired && isOwner ? (
+            <div className="bg-warning/10 border-2 border-warning/20 p-6 rounded-2xl text-center">
+              <h3 className="font-black text-warning text-lg mb-2">본인이 인수한 ETF는 거래할 수 없어요</h3>
+              <p className="text-sm font-bold text-base-content/70">
+                이 ETF는 인수자의 자산을 따라 움직이기 때문에, 자산 순환을 막기 위한 제한이에요.
+              </p>
             </div>
           ) : isAcquired && !isOwner ? (
             <div className="bg-error/10 border-2 border-error/20 p-6 rounded-2xl text-center">

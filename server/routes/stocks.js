@@ -2,7 +2,15 @@ import express from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
-import { delistStock } from "../services/stockService.js";
+import { delistStock, recalculateOwnerEtfs } from "../services/stockService.js";
+import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
+
+function assertCanTradeStock(user, stock) {
+  const isOwnOwnerEtf = stock.is_etf === 1 && stock.etf_tracking_type === "owner_asset" && stock.owner_user_id === user.id;
+  if (isOwnOwnerEtf) {
+    throw new Error("본인이 인수한 ETF는 직접 구매할 수 없어요.");
+  }
+}
 
 export const stocksRouter = express.Router();
 
@@ -79,6 +87,49 @@ stocksRouter.get("/portfolio", (req, res) => {
   res.json({ holdings, positions });
 });
 
+stocksRouter.get("/market-snapshot", (req, res) => {
+  const userId = req.user.id;
+  
+  // 10초 틱을 기준으로 다음 틱까지 남은 시간 대략 계산
+  const now = Date.now();
+  const nextTickInSeconds = 10 - Math.floor((now % 10000) / 1000);
+
+  // 폴링 시 실시간으로 ETF 가격 최신화
+  recalculateOwnerEtfs(db);
+
+  const stocksRaw = db.prepare(`
+    SELECT * FROM stocks 
+    WHERE status != 'delisted'
+    ORDER BY market_cap DESC
+  `).all();
+
+  const portfolio = getPortfolioSnapshot(db, userId);
+
+  const holdings = db.prepare(`
+    SELECT h.*, s.symbol, s.name, s.current_price, s.status, s.is_etf,
+           (s.current_price - h.average_price) * h.quantity as unrealized_pnl,
+           (s.current_price * h.quantity) as value
+    FROM stock_holdings h
+    JOIN stocks s ON h.stock_id = s.id
+    WHERE h.user_id = ? AND h.quantity > 0
+  `).all(userId);
+
+  const positions = db.prepare(`
+    SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price, s.status as stock_status,
+           (s.current_price - p.entry_price) * p.quantity as live_unrealized_pnl
+    FROM stock_positions p
+    JOIN stocks s ON p.stock_id = s.id
+    WHERE p.user_id = ? AND p.status = 'open'
+  `).all(userId);
+
+  res.json({
+    serverTime: new Date(now).toISOString(),
+    nextTickInSeconds,
+    stocks: stocksRaw,
+    portfolio: { ...portfolio, holdings, positions }
+  });
+});
+
 stocksRouter.get("/:id", (req, res) => {
   const { id } = req.params;
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
@@ -120,6 +171,9 @@ stocksRouter.post("/buy", (req, res) => {
     result = db.transaction(() => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
+      
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      assertCanTradeStock(user, stock);
 
       const amount = Math.floor(quantity * stock.current_price);
       if (amount <= 0) throw new Error("매수 금액이 너무 작습니다.");
@@ -176,6 +230,7 @@ stocksRouter.post("/buy-ipo", (req, res) => {
       if (now >= endsAt) throw new Error("공모 청약 기간이 종료되었습니다.");
 
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      assertCanTradeStock(user, stock);
       if (user.balance < amount) throw new Error("잔액이 부족해요.");
 
       const quantity = amount / stock.offering_price;
@@ -292,6 +347,9 @@ stocksRouter.post("/open-position", (req, res) => {
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
+      
+      assertCanTradeStock(user, stock);
+      if (stock.is_bluechip === 1 && leverage > 10) throw new Error("우량주는 10배까지만 레버리지가 가능합니다.");
 
       const positionSize = margin * leverage;
       const quantity = positionSize / stock.current_price;
@@ -399,6 +457,45 @@ stocksRouter.post("/:id/acquire", (req, res) => {
 
       const existingEtf = db.prepare("SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'").get(userId);
       if (existingEtf) throw new Error("인수자 ETF는 한 개만 보유할 수 있습니다.");
+
+      // Auto-clear existing holdings and positions to prevent owning own ETF
+      const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, id);
+      let clearedAmount = 0;
+      if (holding && holding.quantity > 0) {
+        const sellAmount = Math.floor(holding.quantity * stock.current_price);
+        clearedAmount += sellAmount;
+        db.prepare("UPDATE stock_holdings SET quantity = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(holding.id);
+        
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+          VALUES (?, 'stock_auto_sell_acquire', ?, ?, ?, ?)
+        `).run(userId, sellAmount, user.balance, user.balance + sellAmount, id);
+
+        db.prepare(`
+          INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
+          VALUES (?, ?, 'sell', ?, ?, ?, 1, ?, ?)
+        `).run(userId, id, sellAmount, holding.quantity, stock.current_price, user.balance, user.balance + sellAmount);
+      }
+
+      const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(userId, id);
+      for (const pos of positions) {
+        const pnl = Math.floor(pos.quantity * (stock.current_price - pos.entry_price));
+        const payout = Math.max(0, pos.margin_amount + pnl);
+        clearedAmount += payout;
+        
+        db.prepare("UPDATE stock_positions SET status = 'closed', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), close_price = ?, realized_pnl = ?, payout_amount = ? WHERE id = ?")
+          .run(stock.current_price, pnl, payout, pos.id);
+
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+          VALUES (?, 'stock_auto_close_acquire', ?, ?, ?, ?)
+        `).run(userId, payout, user.balance, user.balance + payout, id);
+      }
+      
+      if (clearedAmount > 0) {
+        user.balance += clearedAmount; // Update local user balance for the next check
+        db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(user.balance, userId);
+      }
 
       const cost = stock.market_cap;
       const balanceAfter = user.balance - cost;

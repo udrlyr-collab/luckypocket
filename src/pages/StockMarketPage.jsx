@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
+import AnimatedMoney from "../components/AnimatedMoney";
 
 export default function StockMarketPage() {
   const [market, setMarket] = useState(null);
@@ -12,18 +13,23 @@ export default function StockMarketPage() {
 
   const fetchMarket = async () => {
     try {
-      const data = await api("/stocks");
-      setMarket(data);
-      setTimer(10); // reset timer
+      const data = await api("/stocks/market-snapshot");
+      setMarket(prev => ({
+        ...prev,
+        stocks: data.stocks,
+        summary: prev ? prev.summary : { listed: data.stocks.length }
+      }));
+      setPortfolio(data.portfolio);
+      setTimer(data.nextTickInSeconds);
     } catch (e) {
       console.error(e);
     }
   };
 
-  const fetchPortfolio = async () => {
+  const fetchFullMarket = async () => {
     try {
-      const data = await api("/stocks/portfolio");
-      setPortfolio(data);
+      const data = await api("/stocks");
+      setMarket(data);
     } catch (e) {
       console.error(e);
     }
@@ -39,17 +45,21 @@ export default function StockMarketPage() {
   };
 
   useEffect(() => {
-    fetchMarket();
-    fetchPortfolio();
+    fetchFullMarket().then(() => fetchMarket());
     fetchNews();
 
-    const interval = setInterval(() => {
+    const fastInterval = setInterval(() => {
       fetchMarket();
-      fetchPortfolio();
+    }, 2000);
+
+    const newsInterval = setInterval(() => {
       fetchNews();
     }, 10000);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(fastInterval);
+      clearInterval(newsInterval);
+    };
   }, []);
 
   useEffect(() => {
@@ -147,9 +157,11 @@ export default function StockMarketPage() {
           <h2 className="section-title text-xl mb-4">내 포트폴리오</h2>
           <div className="soft-card mb-4 p-4 border-2 border-primary/20">
             <h3 className="text-xs font-bold text-base-content/50 mb-2">총 평가 자산</h3>
-            <div className="text-2xl font-black">{formatMoney(totalHoldingsValue + totalMargin + totalPositionsUnrealized)}</div>
-            <div className={`text-sm font-bold mt-1 ${totalHoldingsUnrealized + totalPositionsUnrealized >= 0 ? "text-success" : "text-error"}`}>
-              {totalHoldingsUnrealized + totalPositionsUnrealized >= 0 ? "+" : ""}{formatSignedMoney(totalHoldingsUnrealized + totalPositionsUnrealized)}
+            <div className="text-2xl font-black">
+              <AnimatedMoney value={portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized)} />
+            </div>
+            <div className={`text-sm font-bold mt-1 ${portfolio.unrealizedPnl >= 0 ? "text-success" : "text-error"}`}>
+              {portfolio.unrealizedPnl >= 0 ? "+" : ""}<AnimatedMoney value={portfolio.unrealizedPnl} />
             </div>
           </div>
 

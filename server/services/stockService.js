@@ -226,43 +226,18 @@ function processNormalTick(db, stock) {
   }
 }
 
-function getUserTotalAsset(db, userId) {
-  const user = db.prepare("SELECT balance FROM users WHERE id = ?").get(userId);
-  if (!user) return 0;
-  
-  let total = user.balance;
-
-  const holdings = db.prepare(`
-    SELECT SUM(h.quantity * s.current_price) as value
-    FROM stock_holdings h
-    JOIN stocks s ON h.stock_id = s.id
-    WHERE h.user_id = ? AND s.status != 'delisted'
-  `).get(userId);
-  
-  if (holdings && holdings.value) {
-    total += holdings.value;
+export function recalculateOwnerEtfs(db) {
+  const etfs = db.prepare("SELECT * FROM stocks WHERE is_etf = 1 AND status = 'acquired'").all();
+  for (const stock of etfs) {
+    processEtfTick(db, stock);
   }
-
-  const positions = db.prepare(`
-    SELECT p.margin_amount, p.quantity, p.entry_price, s.current_price
-    FROM stock_positions p
-    JOIN stocks s ON p.stock_id = s.id
-    WHERE p.user_id = ? AND p.status = 'open' AND s.status != 'delisted'
-  `).all(userId);
-
-  for (const p of positions) {
-    const unrealized_pnl = Math.floor(p.quantity * (p.current_price - p.entry_price));
-    total += Math.max(0, p.margin_amount + unrealized_pnl);
-  }
-  
-  return Math.floor(total);
 }
 
 function processEtfTick(db, stock) {
-  const ownerUser = db.prepare("SELECT id FROM users WHERE id = ?").get(stock.owner_user_id);
+  const ownerUser = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
   if (!ownerUser) return;
 
-  const currentOwnerAsset = getUserTotalAsset(db, stock.owner_user_id);
+  const currentOwnerAsset = Math.max(ownerUser.balance, 1);
   
   if (!stock.etf_base_price || !stock.etf_base_owner_asset) {
     db.prepare("UPDATE stocks SET etf_base_price = ?, etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ? WHERE id = ?")
