@@ -6,6 +6,14 @@ import { delistStock, recalculateOwnerEtfs } from "../services/stockService.js";
 import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
 
 function assertCanTradeStock(user, stock) {
+  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
+  if (marketOpenConfig && marketOpenConfig.value === 'false') {
+    throw new Error("현재 주식장이 닫혀 있어 거래할 수 없습니다.");
+  }
+  if (stock.is_trading_suspended) {
+    throw new Error("해당 종목은 현재 거래가 정지되었습니다.");
+  }
+
   const isOwnOwnerEtf = stock.is_etf === 1 && stock.etf_tracking_type === "owner_asset" && stock.owner_user_id === user.id;
   if (isOwnOwnerEtf) {
     throw new Error("본인이 인수한 ETF는 직접 구매할 수 없어요.");
@@ -135,9 +143,13 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     };
   };
 
+  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
+  const marketOpen = marketOpenConfig ? marketOpenConfig.value === 'true' : true;
+
   res.json({
     serverTime: new Date(now).toISOString(),
     nextTickInSeconds,
+    marketOpen,
     stocks: stocksRaw.map(processStock),
     portfolio: { ...portfolio, holdings, positions }
   });
@@ -170,7 +182,10 @@ stocksRouter.get("/:id", (req, res) => {
   const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, id);
   const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(req.user.id, id);
 
-  res.json({ stock: stockWithCalculations, history, holding, positions });
+  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
+  const marketOpen = marketOpenConfig ? marketOpenConfig.value === 'true' : true;
+
+  res.json({ stock: stockWithCalculations, history, holding, positions, marketOpen });
 });
 
 stocksRouter.post("/buy", (req, res) => {

@@ -271,3 +271,75 @@ adminRouter.post("/impersonate/:id", async (req, res) => {
   target.isAdmin = true;
   res.json({ token, user: publicUser(target) });
 });
+
+adminRouter.post("/users/:id/reset", (req, res) => {
+  const targetId = Number(req.params.id);
+  const target = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
+  if (!target) return res.status(404).json({ message: "유저를 찾을 수 없어요." });
+
+  try {
+    db.transaction(() => {
+      db.prepare("DELETE FROM game_logs WHERE user_id = ?").run(targetId);
+      db.prepare("DELETE FROM game_sessions WHERE user_id = ?").run(targetId);
+      db.prepare("DELETE FROM asset_events WHERE user_id = ?").run(targetId);
+      db.prepare("DELETE FROM transfer_logs WHERE sender_user_id = ? OR receiver_user_id = ?").run(targetId, targetId);
+      db.prepare("DELETE FROM stock_holdings WHERE user_id = ?").run(targetId);
+      db.prepare("DELETE FROM stock_positions WHERE user_id = ?").run(targetId);
+      
+      const etfs = db.prepare("SELECT * FROM stocks WHERE owner_user_id = ?").all(targetId);
+      for (const etf of etfs) {
+        delistStock(db, etf);
+      }
+
+      db.prepare(`
+        UPDATE users SET 
+          balance = 5000000, 
+          initial_balance = 5000000,
+          highest_balance = 5000000,
+          total_profit = 0,
+          total_bet = 0,
+          total_win = 0,
+          total_loss = 0,
+          bankruptcy_count = 0,
+          mine_click_count = 0,
+          mine_total_earned = 0
+        WHERE id = ?
+      `).run(targetId);
+      
+      recordAssetEvent(targetId, "admin_force_reset", 5000000 - target.balance, target.balance, 5000000);
+    })();
+
+    const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
+    return res.json({ message: "해당 유저의 모든 기록이 초기화되었습니다.", user: publicUser(updated) });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+adminRouter.post("/stocks/market/close", (req, res) => {
+  db.prepare("UPDATE system_config SET value = 'false' WHERE key = 'market_open'").run();
+  return res.json({ message: "주식장을 닫았습니다." });
+});
+
+adminRouter.post("/stocks/market/open", (req, res) => {
+  db.prepare("UPDATE system_config SET value = 'true' WHERE key = 'market_open'").run();
+  return res.json({ message: "주식장을 열었습니다." });
+});
+
+adminRouter.post("/stocks/:id/suspend", (req, res) => {
+  const stockId = Number(req.params.id);
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+  
+  db.prepare("UPDATE stocks SET is_trading_suspended = 1 WHERE id = ?").run(stockId);
+  return res.json({ message: "해당 주식의 거래를 정지했습니다." });
+});
+
+adminRouter.post("/stocks/:id/resume", (req, res) => {
+  const stockId = Number(req.params.id);
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+  
+  db.prepare("UPDATE stocks SET is_trading_suspended = 0 WHERE id = ?").run(stockId);
+  return res.json({ message: "해당 주식의 거래 정지를 해제했습니다." });
+});

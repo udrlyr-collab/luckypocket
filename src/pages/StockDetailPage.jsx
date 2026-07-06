@@ -66,11 +66,13 @@ export default function StockDetailPage() {
     );
   }
 
-  const { stock, history, holding, positions } = data;
+  const { stock, history, holding, positions, marketOpen } = data;
   const isDelisted = stock.status === 'delisted';
   const isAcquired = stock.status === 'acquired' || Boolean(stock.is_etf);
   const isOwner = stock.owner_user_id === user.id;
   const isAdmin = user && (user.isAdmin || user.username === 'admin');
+  const isTradingSuspended = stock.is_trading_suspended === 1;
+  const isTradeBlocked = !marketOpen || isTradingSuspended;
 
   const executeAdminAction = async (endpoint) => {
     if (!window.confirm("정말 실행하시겠습니까?")) return;
@@ -226,12 +228,16 @@ export default function StockDetailPage() {
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <h1 className="text-3xl font-black">{stock.name}</h1>
             <span className="text-sm font-bold text-base-content/50">{stock.symbol}</span>
-            {stock.status === 'ipo_subscription' && <span className="badge badge-warning">공모주</span>}
-            {stock.status === 'newly_listed' && <span className="badge badge-warning">신규 상장</span>}
-            {isAcquired && <span className="badge badge-primary">인수됨</span>}
-            {stock.is_bluechip === 1 && <span className="badge badge-info">우량주</span>}
-            {stock.status === 'delist_warning' && <span className="badge badge-error animate-pulse">거래 주의</span>}
-            {isDelisted && <span className="badge badge-ghost">상장폐지</span>}
+          </div>
+          <div className="flex gap-2 mb-2 flex-wrap">
+            {stock.is_bluechip === 1 && <span className="badge badge-info font-bold">우량주</span>}
+            {stock.status === 'ipo_subscription' && <span className="badge badge-warning font-bold">공모주</span>}
+            {stock.status === 'newly_listed' && <span className="badge badge-warning font-bold">신규 상장</span>}
+            {isAcquired && <span className="badge badge-primary font-bold">인수됨</span>}
+            {stock.status === 'delist_warning' && <span className="badge badge-error font-bold animate-pulse">상장폐지 위험</span>}
+            {isDelisted && <span className="badge badge-ghost font-bold">상장폐지</span>}
+            {isTradingSuspended && <span className="badge badge-error font-bold">거래 정지</span>}
+            {!marketOpen && <span className="badge badge-error font-bold">휴장</span>}
           </div>
           <p className="text-sm font-bold text-base-content/60">
             {isAcquired ? (
@@ -269,6 +275,23 @@ export default function StockDetailPage() {
         <section className="soft-card mb-6 border-2 border-error/50 bg-error/5">
           <h2 className="section-title text-xl text-error mb-4">어드민 제어판</h2>
           <div className="flex flex-wrap gap-2">
+            {!isTradingSuspended ? (
+              <button 
+                className="btn btn-error btn-sm" 
+                onClick={() => executeAdminAction('/suspend')}
+                disabled={busy}
+              >
+                거래 정지 시키기
+              </button>
+            ) : (
+              <button 
+                className="btn btn-success btn-sm" 
+                onClick={() => executeAdminAction('/resume')}
+                disabled={busy}
+              >
+                거래 정지 해제
+              </button>
+            )}
             {!isDelisted && stock.status !== 'ipo_subscription' && stock.status !== 'newly_listed' && !isAcquired && stock.is_bluechip !== 1 && (
               <button 
                 className="btn btn-error btn-sm" 
@@ -419,7 +442,7 @@ export default function StockDetailPage() {
                     />
                     <button 
                       className={`btn rounded-2xl px-6 shrink-0 ${leverage >= 50 ? "btn-error" : "btn-primary"}`} 
-                      disabled={busy || !amountInput || Number(amountInput) <= 0}
+                      disabled={busy || !amountInput || Number(amountInput) <= 0 || isTradeBlocked}
                       onClick={handleBuy}
                     >
                       {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? "매수" : "롱 오픈")}
@@ -494,7 +517,7 @@ export default function StockDetailPage() {
                     </div>
                     <button 
                       className="btn btn-sm btn-error rounded-xl px-4" 
-                      disabled={busy} 
+                      disabled={busy || isTradeBlocked} 
                       onClick={handleSell}
                     >
                       {busy ? <span className="loading loading-spinner loading-xs"/> : "매도"}

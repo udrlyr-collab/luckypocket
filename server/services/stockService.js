@@ -16,7 +16,7 @@ const IPO_EVENT_PROBABILITIES = {
 
 import { STOCK_NAME_POOL } from "../constants/stockNamePool.js";
 
-function pickRandomStockIdentity(db) {
+function pickRandomStockIdentity(db, usedSymbols = new Set()) {
   const activeStocks = db.prepare("SELECT name, symbol FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
   const recentDelisted = db.prepare("SELECT name FROM stocks WHERE status = 'delisted' ORDER BY delisted_at DESC LIMIT 5").all();
   
@@ -28,21 +28,25 @@ function pickRandomStockIdentity(db) {
     return (
       !activeNames.has(item.name) &&
       !activeSymbols.has(item.symbol) &&
-      !recentDelistedNames.has(item.name)
+      !recentDelistedNames.has(item.name) &&
+      !usedSymbols.has(item.symbol)
     );
   });
 
+  let identity;
   if (candidates.length > 0) {
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    identity = candidates[Math.floor(Math.random() * candidates.length)];
+  } else {
+    const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
+    const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    identity = {
+      name: `${fallback.name}${suffix}`,
+      symbol: `${fallback.symbol}${suffix}`
+    };
   }
 
-  const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
-  const suffix = Date.now().toString().slice(-4);
-
-  return {
-    name: `${fallback.name}${suffix}`,
-    symbol: `${fallback.symbol}${suffix}`
-  };
+  usedSymbols.add(identity.symbol);
+  return identity;
 }
 
 export function initStockMarket(db) {
@@ -54,8 +58,9 @@ export function initStockMarket(db) {
     `);
     
     db.transaction(() => {
+      const usedSymbols = new Set();
       for (let i = 0; i < 8; i++) {
-        const st = pickRandomStockIdentity(db);
+        const st = pickRandomStockIdentity(db, usedSymbols);
         const price = Math.floor(Math.random() * 49000) + 1000;
         const shares = Math.floor(Math.random() * 990000) + 10000;
         const cap = price * shares;
@@ -77,23 +82,27 @@ function getRandomEvent(probs) {
 }
 
 export function tickStockMarket(db) {
-  db.transaction(() => {
-    const stocks = db.prepare("SELECT * FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
-
-    for (const stock of stocks) {
-      if (stock.is_etf) {
-        processEtfTick(db, stock);
-      } else {
-        processNormalTick(db, stock);
+  try {
+    db.transaction(() => {
+      const stocks = db.prepare("SELECT * FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
+      const usedSymbols = new Set();
+      for (const stock of stocks) {
+        if (stock.is_etf) {
+          processEtfTick(db, stock);
+        } else {
+          processNormalTick(db, stock, usedSymbols);
+        }
       }
-    }
 
-    // Process liquidations globally after price updates
-    liquidatePositionsIfNeeded(db);
-  })();
+      // Process liquidations globally after price updates
+      liquidatePositionsIfNeeded(db);
+    })();
+  } catch (error) {
+    console.error("[CRITICAL] Error in tickStockMarket:", error);
+  }
 }
 
-function processNormalTick(db, stock) {
+function processNormalTick(db, stock, usedSymbols) {
   let newPrice = stock.current_price;
   let eventType = null;
   let eventMsg = null;
@@ -112,7 +121,7 @@ function processNormalTick(db, stock) {
     if (now >= endsAt) {
       newStatus = "newly_listed";
       const newlyListedUntil = new Date(now + 3 * 60 * 1000).toISOString();
-      const identity = pickRandomStockIdentity(db);
+      const identity = pickRandomStockIdentity(db, usedSymbols);
       
       db.prepare("UPDATE stocks SET newly_listed_until = ?, name = ?, symbol = ? WHERE id = ?").run(newlyListedUntil, identity.name, identity.symbol, stock.id);
       

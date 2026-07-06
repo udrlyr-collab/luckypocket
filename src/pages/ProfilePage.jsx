@@ -326,6 +326,7 @@ function AdminPanel() {
 
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [showBalanceModal, setShowBalanceModal] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -391,6 +392,41 @@ function AdminPanel() {
       setUsers((current) =>
         current.map((item) => (item.id === data.user.id ? data.user : item)));
       setNewBalance("");
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forceResetUser = async () => {
+    setShowResetModal(false);
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/users/${selected.id}/reset`, { method: "POST" });
+      setSelected(data.user);
+      setUsers((current) =>
+        current.map((item) => (item.id === data.user.id ? data.user : item)));
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleMarket = async (open) => {
+    if (!window.confirm(`정말로 주식장을 ${open ? '개장' : '휴장'}하시겠습니까?`)) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const endpoint = open ? "/admin/stocks/market/open" : "/admin/stocks/market/close";
+      const data = await api(endpoint, { method: "POST" });
       setMessage(data.message);
     } catch (requestError) {
       setError(requestError.message);
@@ -486,14 +522,22 @@ function AdminPanel() {
               자산 강제 변경
             </button>
           </div>
-          <div className="mt-4 pt-4 border-t border-base-300">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row border-t border-base-300 pt-4">
             <button
               type="button"
-              className="btn btn-warning w-full h-12 rounded-2xl"
+              className="btn btn-warning flex-1 h-12 rounded-2xl"
               disabled={busy}
               onClick={forceLogin}
             >
-              이 계정으로 강제 로그인 (어드민 유지)
+              이 계정으로 강제 로그인
+            </button>
+            <button
+              type="button"
+              className="btn btn-error flex-1 h-12 rounded-2xl"
+              disabled={busy}
+              onClick={() => setShowResetModal(true)}
+            >
+              유저 데이터 완전 초기화
             </button>
           </div>
         </div>
@@ -527,6 +571,39 @@ function AdminPanel() {
           onClose={() => setShowBalanceModal(false)}
         />
       )}
+      {showResetModal && (
+        <AdminConfirmModal
+          title="경고: 이 유저의 모든 자산과 기록을 초기화하시겠습니까?"
+          beforeLabel="기존 자산"
+          beforeValue={formatMoney(selected?.balance)}
+          afterLabel="초기화 후 자산"
+          afterValue="5,000,000 원"
+          onConfirm={forceResetUser}
+          onClose={() => setShowResetModal(false)}
+        />
+      )}
+      
+      <div className="mt-8 border-t-2 border-primary/25 pt-6">
+        <h2 className="section-title text-xl mb-4">관리자 권한: 주식장 제어</h2>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            className="btn btn-success flex-1 h-12 rounded-2xl"
+            disabled={busy}
+            onClick={() => toggleMarket(true)}
+          >
+            주식장 개장
+          </button>
+          <button
+            type="button"
+            className="btn btn-error flex-1 h-12 rounded-2xl"
+            disabled={busy}
+            onClick={() => toggleMarket(false)}
+          >
+            주식장 휴장 (정지)
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

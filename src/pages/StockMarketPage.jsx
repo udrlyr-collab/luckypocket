@@ -261,6 +261,7 @@ function StockRow({ stock }) {
           {stock.status === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">거래 주의</span>}
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
+          {stock.is_trading_suspended === 1 && <span className="badge badge-error badge-xs py-1 font-bold">거래 정지</span>}
           {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
         </div>
       </div>
