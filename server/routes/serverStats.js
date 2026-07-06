@@ -11,7 +11,7 @@ serverStatsRouter.get("/", (_req, res) => {
       `SELECT
          (SELECT COUNT(*) FROM users) AS total_users,
          (SELECT COUNT(*) FROM game_logs) AS total_games,
-         (SELECT COALESCE(SUM(balance), 0) FROM users) AS total_assets,
+         (SELECT TOTAL(balance) FROM users) AS total_assets,
          (SELECT COUNT(*) FROM users
           WHERE date(created_at, '+9 hours') = date('now', '+9 hours')) AS today_new_users,
          (SELECT COUNT(DISTINCT user_id) FROM game_logs

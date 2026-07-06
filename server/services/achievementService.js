@@ -55,9 +55,9 @@ function getStats(database, userId) {
          COUNT(*) AS games,
          SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
          COALESCE(MAX(profit), 0) AS max_profit,
-         COALESCE(SUM(profit), 0) AS net_profit,
-         COALESCE(SUM(CASE WHEN profit < 0 THEN -profit ELSE 0 END), 0) AS total_loss,
-         COALESCE(SUM(CASE WHEN date(created_at, '+9 hours') = date('now', '+9 hours') THEN profit ELSE 0 END), 0) AS today_profit
+         TOTAL(profit) AS net_profit,
+         TOTAL(CASE WHEN profit < 0 THEN -profit ELSE 0 END) AS total_loss,
+         TOTAL(CASE WHEN date(created_at, '+9 hours') = date('now', '+9 hours') THEN profit ELSE 0 END) AS today_profit
        FROM game_logs WHERE user_id = ?`,
     )
     .get(userId);

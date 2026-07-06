@@ -87,8 +87,8 @@ export default function AppShell() {
               <span className="text-[10px] font-bold text-base-content/40">오늘도 행운 가득</span>
             </div>
             <div className="hidden min-w-0 text-right lg:block">
-              <span className="block truncate text-sm font-black text-primary">{formatMoney(user.balance)}</span>
-              <span className="text-[10px] font-bold text-base-content/40">보유 자산</span>
+              <span className="block truncate text-sm font-black text-primary">{formatMoney(user.totalAsset || user.balance)}</span>
+              <span className="text-[10px] font-bold text-base-content/40">총 평가 자산</span>
             </div>
             <button
               type="button"

@@ -6,7 +6,7 @@ import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 
 const rewards = [
-  ["777", "0.1%", "170배"],
+  ["777", "0.1%", "현재 자산 777배"],
   ["같은 숫자 3개", "0.9%", "27배"],
   ["연속 숫자", "1.6%", "8.8배"],
   ["같은 숫자 2개", "27.0%", "1.75배"],
@@ -72,16 +72,19 @@ export default function SlotMachineGame() {
       description="세 릴이 하나씩 멈추며 행운의 숫자 조합을 완성해요."
       stats={{
         chance: 0.296,
-        multiplier: 1.0263 / 0.296,
-        multiplierLabel: "결과별",
-        expectedLabel: "+2.63%",
+        multiplier: 0,
+        multiplierLabel: "자산 연동",
+        expectedLabel: "자산에 따라 변동",
       }}
       betAmount={Number(bet)}
     >
       <div className="grid min-w-0 gap-5 lg:grid-cols-[0.8fr_1.2fr]">
         <div className="min-w-0 space-y-5">
           <section className="soft-card">
-            <h2 className="mb-3 font-black">보상표 · 총 RTP 102.63%</h2>
+            <h2 className="mb-1 font-black">보상표 · 777 자산 연동</h2>
+            <p className="mb-3 text-xs font-bold leading-relaxed text-base-content/55">
+              777 당첨 시 게임 시작 전 현금 자산이 777배가 돼요. 업적 보상은 별도로 지급돼요.
+            </p>
             <div className="space-y-2">
               {rewards.map(([name, chance, multiplier]) => (
                 <div className="grid grid-cols-[1fr_auto_auto] gap-3 rounded-xl bg-base-200/60 p-3 text-sm" key={name}>

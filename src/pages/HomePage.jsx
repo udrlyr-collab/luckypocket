@@ -61,13 +61,30 @@ export default function HomePage() {
             </div>
           </div>
           <div className="balance-summary-main border-b-0 pb-0">
-            <span className="summary-label">현재 자산</span>
+            <span className="summary-label">총 평가 자산</span>
             <strong className="balance-summary-amount">
-              <AnimatedMoney value={user.balance} />
+              <AnimatedMoney value={user.totalAsset || user.balance} />
             </strong>
             <span className={`mt-2 inline-flex items-center gap-1 text-sm font-black tabular-nums ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
               {todayProfit >= 0 ? "↗" : "↘"} 오늘 손익 {formatSignedMoney(todayProfit)}
             </span>
+          </div>
+          <div className="balance-summary-metrics">
+            <div className="balance-summary-metric">
+              <span className="text-xl" aria-hidden="true">✨</span>
+              <div className="min-w-0">
+                <span className="summary-label">최고 자산</span>
+                <strong className="block truncate text-sm font-black tabular-nums">{formatMoney(user.highestBalance)}</strong>
+              </div>
+            </div>
+            <div className="balance-summary-metric">
+              <span className="text-xl" aria-hidden="true">🏆</span>
+              <div className="min-w-0">
+                <span className="summary-label">내 순위</span>
+                <strong className="block truncate text-sm font-black tabular-nums">{user.currentRank ? `${user.currentRank.toLocaleString("ko-KR")}위` : "-"}</strong>
+                {user.totalUsers && <span className="text-[10px] font-bold text-base-content/40">전체 {user.totalUsers.toLocaleString("ko-KR")}명</span>}
+              </div>
+            </div>
           </div>
           {isLowBalance && (
             <div className="relative z-10 mt-2 flex items-center justify-between rounded-xl bg-error/15 p-3 shadow-inner">

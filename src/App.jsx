@@ -15,8 +15,11 @@ import RankingPage from "./pages/RankingPage";
 import WalletPage from "./pages/WalletPage";
 import StockMarketPage from "./pages/StockMarketPage";
 import StockDetailPage from "./pages/StockDetailPage";
+import AdminPage from "./pages/AdminPage";
+import { useAppVersionRefresh } from "./hooks/useAppVersionRefresh";
 
 export default function App() {
+  useAppVersionRefresh();
   const { user, loading } = useAuth();
   if (loading) {
     return (
@@ -44,6 +47,10 @@ export default function App() {
         <Route path="/history" element={<HistoryPage />} />
         <Route path="/wallet" element={<WalletPage />} />
         <Route path="/profile" element={<ProfilePage />} />
+        <Route
+          path="/admin"
+          element={user.isAdmin ? <AdminPage /> : <Navigate to="/" replace />}
+        />
         <Route path="/stocks" element={<StockMarketPage />} />
         <Route path="/stocks/:id" element={<StockDetailPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,0 +1,782 @@
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../api/client";
+import { useAuth } from "../context/AuthContext";
+import { useEnterConfirm } from "../hooks/useEnterConfirm";
+import { formatMoney } from "../utils/format";
+
+const adminResetOptions = [
+  {
+    key: "balance",
+    label: "자산·금액",
+    description: "잔액과 최고 자산을 500만원으로, 누적 손익을 0원으로 초기화",
+  },
+  {
+    key: "games",
+    label: "게임 기록·횟수",
+    description: "게임 로그, 진행 중 게임, 배팅액, 승리·패배 횟수를 초기화",
+  },
+  {
+    key: "achievements",
+    label: "업적",
+    description: "획득한 모든 업적과 업적 보상 기록을 초기화",
+  },
+  {
+    key: "history",
+    label: "활동 기록",
+    description: "자산 변동 기록과 보내고 받은 송금 기록을 삭제",
+  },
+  {
+    key: "stocks",
+    label: "주식·회사",
+    description: "보유 주식, 포지션, 거래 기록을 삭제하고 인수한 회사를 상장폐지",
+  },
+  {
+    key: "mine",
+    label: "탄광",
+    description: "채굴 기록, 채굴 횟수, 누적 채굴액과 마지막 채굴 시간을 초기화",
+  },
+  {
+    key: "account",
+    label: "계정 부가 상태",
+    description: "닉네임 변경 횟수, 파산 횟수·날짜와 회생 신청 기록을 초기화",
+  },
+];
+
+const allAdminResetTargets = adminResetOptions.map((option) => option.key);
+
+export default function AdminPage() {
+  const { user, authenticate, refreshUser } = useAuth();
+  const [draftQuery, setDraftQuery] = useState("");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [result, setResult] = useState({
+    users: [],
+    total: 0,
+    totalPages: 1,
+    page: 1,
+  });
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [activeUser, setActiveUser] = useState(null);
+  const [newNickname, setNewNickname] = useState("");
+  const [singleBalance, setSingleBalance] = useState("");
+  const [bulkBalance, setBulkBalance] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [marketOpen, setMarketOpen] = useState(null);
+  const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
+  const [balanceConfirm, setBalanceConfirm] = useState(null);
+  const [resetConfirmIds, setResetConfirmIds] = useState([]);
+  const [resetTargets, setResetTargets] = useState(() => [
+    ...allAdminResetTargets,
+  ]);
+
+  const loadUsers = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api(
+        `/admin/users/search?q=${encodeURIComponent(query)}&page=${page}&pageSize=50`,
+      );
+      setResult(data);
+      if (activeUser) {
+        const refreshed = data.users.find((item) => item.id === activeUser.id);
+        if (refreshed) setActiveUser(refreshed);
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    loadUsers();
+  }, [page, query]);
+
+  useEffect(() => {
+    api("/admin/stocks/market/status")
+      .then((data) => setMarketOpen(data.marketOpen))
+      .catch((requestError) => setError(requestError.message));
+  }, []);
+
+  const currentPageIds = useMemo(
+    () => result.users.map((item) => item.id),
+    [result.users],
+  );
+  const allCurrentPageSelected =
+    currentPageIds.length > 0 &&
+    currentPageIds.every((id) => selectedIds.has(id));
+
+  const updateUsers = (updatedUsers) => {
+    const byId = new Map(updatedUsers.map((item) => [item.id, item]));
+    setResult((current) => ({
+      ...current,
+      users: current.users.map((item) => byId.get(item.id) || item),
+    }));
+    setActiveUser((current) => (current ? byId.get(current.id) || current : null));
+  };
+
+  const toggleUser = (userId) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(userId)) next.delete(userId);
+      else next.add(userId);
+      return next;
+    });
+  };
+
+  const toggleCurrentPage = () => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (allCurrentPageSelected) {
+        currentPageIds.forEach((id) => next.delete(id));
+      } else {
+        currentPageIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  const search = () => {
+    setPage(1);
+    setQuery(draftQuery.trim());
+  };
+
+  const forceChangeNickname = async () => {
+    setNicknameConfirmOpen(false);
+    if (!activeUser || !newNickname.trim()) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/users/${activeUser.id}/nickname`, {
+        method: "POST",
+        body: JSON.stringify({ newNickname }),
+      });
+      updateUsers([data.user]);
+      setNewNickname("");
+      setMessage(data.message);
+      if (activeUser.id === user.id) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyBalance = async () => {
+    const pending = balanceConfirm;
+    setBalanceConfirm(null);
+    if (!pending?.ids.length) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/users/bulk/balance", {
+        method: "POST",
+        body: JSON.stringify({
+          userIds: pending.ids,
+          balance: pending.balance,
+        }),
+      });
+      updateUsers(data.users);
+      setSingleBalance("");
+      setBulkBalance("");
+      setMessage(data.message);
+      if (pending.ids.includes(user.id)) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openReset = (ids) => {
+    if (!ids.length) return;
+    setResetTargets([...allAdminResetTargets]);
+    setResetConfirmIds(ids);
+  };
+
+  const applyReset = async () => {
+    const ids = resetConfirmIds;
+    setResetConfirmIds([]);
+    if (!ids.length || !resetTargets.length) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/users/bulk/reset", {
+        method: "POST",
+        body: JSON.stringify({ userIds: ids, targets: resetTargets }),
+      });
+      updateUsers(data.users);
+      setMessage(data.message);
+      if (ids.includes(user.id)) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forceLogin = async () => {
+    if (!activeUser) return;
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api(`/admin/impersonate/${activeUser.id}`, {
+        method: "POST",
+      });
+      await authenticate(data);
+      window.location.replace("/");
+    } catch (requestError) {
+      setError(requestError.message);
+      setBusy(false);
+    }
+  };
+
+  const toggleMarket = async (open) => {
+    if (!window.confirm(`정말로 주식장을 ${open ? "개장" : "휴장"}하시겠습니까?`)) {
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const endpoint = open
+        ? "/admin/stocks/market/open"
+        : "/admin/stocks/market/close";
+      const data = await api(endpoint, { method: "POST" });
+      setMarketOpen(data.marketOpen);
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedIdList = [...selectedIds];
+
+  return (
+    <div className="page-content">
+      <header className="mb-6">
+        <p className="eyebrow">Admin control center</p>
+        <h1 className="text-3xl font-black">관리자 제어</h1>
+        <p className="mt-2 text-sm font-bold text-base-content/55">
+          전체 플레이어를 검색·선택하고 단일 또는 일괄 작업을 실행합니다.
+        </p>
+      </header>
+
+      <section className="soft-card border-2 border-primary/20">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="section-title text-xl">전체 플레이어</h2>
+            <p className="mt-1 text-xs font-bold text-base-content/50">
+              총 {result.total.toLocaleString("ko-KR")}명 · 선택{" "}
+              {selectedIds.size.toLocaleString("ko-KR")}명
+            </p>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row lg:max-w-2xl">
+            <input
+              className="input input-bordered h-12 min-w-0 flex-1 rounded-2xl"
+              value={draftQuery}
+              onChange={(event) => setDraftQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") search();
+              }}
+              placeholder="아이디 또는 닉네임 검색"
+            />
+            <button
+              type="button"
+              className="btn btn-primary h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy}
+              onClick={search}
+            >
+              검색
+            </button>
+            {query && (
+              <button
+                type="button"
+                className="btn btn-outline h-12 whitespace-nowrap rounded-2xl"
+                disabled={busy}
+                onClick={() => {
+                  setDraftQuery("");
+                  setQuery("");
+                  setPage(1);
+                }}
+              >
+                전체 보기
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline rounded-xl"
+            disabled={!currentPageIds.length}
+            onClick={toggleCurrentPage}
+          >
+            {allCurrentPageSelected ? "현재 페이지 선택 해제" : "현재 페이지 전체 선택"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost rounded-xl"
+            disabled={!selectedIds.size}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            전체 선택 해제
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-2">
+          {result.users.map((item) => (
+            <article
+              key={item.id}
+              className={`grid gap-3 rounded-2xl border p-3 sm:grid-cols-[auto_1fr_auto] sm:items-center ${
+                activeUser?.id === item.id
+                  ? "border-primary bg-primary/10"
+                  : "border-base-300 bg-base-100"
+              }`}
+            >
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-primary"
+                  checked={selectedIds.has(item.id)}
+                  onChange={() => toggleUser(item.id)}
+                  aria-label={`${item.nickname} 선택`}
+                />
+              </label>
+              <button
+                type="button"
+                className="min-w-0 text-left"
+                onClick={() => {
+                  setActiveUser(item);
+                  setNewNickname("");
+                  setSingleBalance("");
+                  setMessage("");
+                  setError("");
+                }}
+              >
+                <strong className="block truncate">{item.nickname}</strong>
+                <span className="text-xs font-bold text-base-content/45">
+                  @{item.username} · 가입 {new Date(item.createdAt).toLocaleDateString("ko-KR")}
+                </span>
+              </button>
+              <div className="text-left sm:text-right">
+                <strong className="tabular-nums text-primary">
+                  {formatMoney(item.balance)}
+                </strong>
+                {item.isAdmin && (
+                  <span className="badge badge-warning badge-sm ml-2">관리자</span>
+                )}
+              </div>
+            </article>
+          ))}
+          {!busy && result.users.length === 0 && (
+            <p className="rounded-2xl bg-base-200 p-6 text-center text-sm font-bold text-base-content/50">
+              표시할 플레이어가 없습니다.
+            </p>
+          )}
+        </div>
+
+        <div className="mt-4 flex items-center justify-center gap-3">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline rounded-xl"
+            disabled={busy || page <= 1}
+            onClick={() => setPage((current) => Math.max(1, current - 1))}
+          >
+            이전
+          </button>
+          <span className="text-sm font-black tabular-nums">
+            {result.page} / {result.totalPages}
+          </span>
+          <button
+            type="button"
+            className="btn btn-sm btn-outline rounded-xl"
+            disabled={busy || page >= result.totalPages}
+            onClick={() =>
+              setPage((current) => Math.min(result.totalPages, current + 1))
+            }
+          >
+            다음
+          </button>
+        </div>
+      </section>
+
+      {selectedIds.size > 0 && (
+        <section className="soft-card mt-6 border-2 border-secondary/30">
+          <p className="eyebrow">Bulk actions</p>
+          <h2 className="section-title text-xl">
+            선택한 {selectedIds.size.toLocaleString("ko-KR")}명 일괄 설정
+          </h2>
+          <p className="mt-2 text-xs font-bold text-base-content/50">
+            관리자 본인도 선택 대상에 포함할 수 있습니다.
+          </p>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl"
+              type="number"
+              min="0"
+              step="1"
+              value={bulkBalance}
+              onChange={(event) => setBulkBalance(event.target.value)}
+              placeholder="모두에게 적용할 새 자산"
+            />
+            <button
+              type="button"
+              className="btn btn-warning h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy || bulkBalance === ""}
+              onClick={() =>
+                setBalanceConfirm({
+                  ids: selectedIdList,
+                  balance: Number(bulkBalance),
+                  label: `선택한 ${selectedIds.size}명`,
+                })
+              }
+            >
+              자산 일괄 변경
+            </button>
+            <button
+              type="button"
+              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy}
+              onClick={() => openReset(selectedIdList)}
+            >
+              선택 항목 일괄 초기화
+            </button>
+          </div>
+        </section>
+      )}
+
+      {activeUser && (
+        <section className="soft-card mt-6 border-2 border-primary/25">
+          <p className="eyebrow">Single player</p>
+          <h2 className="section-title text-xl">플레이어별 설정</h2>
+          <p className="mt-2 text-sm font-bold">
+            <span className="text-primary">{activeUser.nickname}</span> (@
+            {activeUser.username}) · {formatMoney(activeUser.balance)}
+          </p>
+
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl"
+              value={newNickname}
+              maxLength="12"
+              onChange={(event) => setNewNickname(event.target.value)}
+              placeholder="새 닉네임 2~12자"
+            />
+            <button
+              type="button"
+              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy || !newNickname.trim()}
+              onClick={() => setNicknameConfirmOpen(true)}
+            >
+              닉네임 강제 변경
+            </button>
+          </div>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl"
+              type="number"
+              min="0"
+              step="1"
+              value={singleBalance}
+              onChange={(event) => setSingleBalance(event.target.value)}
+              placeholder="새 자산"
+            />
+            <button
+              type="button"
+              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy || singleBalance === ""}
+              onClick={() =>
+                setBalanceConfirm({
+                  ids: [activeUser.id],
+                  balance: Number(singleBalance),
+                  label: `${activeUser.nickname}님`,
+                })
+              }
+            >
+              자산 강제 변경
+            </button>
+          </div>
+          <div className="mt-4 grid gap-2 border-t border-base-300 pt-4 sm:grid-cols-2">
+            <button
+              type="button"
+              className="btn btn-warning h-12 rounded-2xl"
+              disabled={busy}
+              onClick={forceLogin}
+            >
+              이 계정으로 강제 로그인
+            </button>
+            <button
+              type="button"
+              className="btn btn-error h-12 rounded-2xl"
+              disabled={busy}
+              onClick={() => openReset([activeUser.id])}
+            >
+              초기화 항목 선택
+            </button>
+          </div>
+        </section>
+      )}
+
+      <section className="soft-card mt-6 border-2 border-primary/20">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="eyebrow">Stock market</p>
+            <h2 className="section-title text-xl">주식장 제어</h2>
+          </div>
+          <span
+            className={`badge font-black ${
+              marketOpen === false
+                ? "badge-error"
+                : marketOpen === true
+                  ? "badge-success"
+                  : "badge-ghost"
+            }`}
+          >
+            {marketOpen === false
+              ? "휴장 중"
+              : marketOpen === true
+                ? "개장 중"
+                : "상태 확인 중"}
+          </span>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            className="btn btn-success h-12 rounded-2xl"
+            disabled={busy || marketOpen === true}
+            onClick={() => toggleMarket(true)}
+          >
+            주식장 개장
+          </button>
+          <button
+            type="button"
+            className="btn btn-error h-12 rounded-2xl"
+            disabled={busy || marketOpen === false}
+            onClick={() => toggleMarket(false)}
+          >
+            주식장 휴장
+          </button>
+        </div>
+      </section>
+
+      <p
+        className={`mt-3 min-h-6 text-sm font-bold ${
+          error ? "text-error" : "text-success"
+        }`}
+        aria-live="polite"
+      >
+        {error || message || "\u00a0"}
+      </p>
+
+      {nicknameConfirmOpen && (
+        <AdminConfirmModal
+          title="이 유저의 닉네임을 변경할까요?"
+          beforeLabel="기존 닉네임"
+          beforeValue={activeUser?.nickname}
+          afterLabel="새 닉네임"
+          afterValue={newNickname}
+          onConfirm={forceChangeNickname}
+          onClose={() => setNicknameConfirmOpen(false)}
+        />
+      )}
+      {balanceConfirm && (
+        <AdminConfirmModal
+          title={`${balanceConfirm.label}의 자산을 변경할까요?`}
+          beforeLabel="적용 대상"
+          beforeValue={`${balanceConfirm.ids.length}명`}
+          afterLabel="새 자산"
+          afterValue={formatMoney(balanceConfirm.balance)}
+          onConfirm={applyBalance}
+          onClose={() => setBalanceConfirm(null)}
+        />
+      )}
+      {resetConfirmIds.length > 0 && (
+        <AdminResetModal
+          targetCount={resetConfirmIds.length}
+          selectedTargets={resetTargets}
+          onToggle={(target) =>
+            setResetTargets((current) =>
+              current.includes(target)
+                ? current.filter((item) => item !== target)
+                : [...current, target],
+            )
+          }
+          onSelectAll={() => setResetTargets([...allAdminResetTargets])}
+          onClearAll={() => setResetTargets([])}
+          onConfirm={applyReset}
+          onClose={() => setResetConfirmIds([])}
+        />
+      )}
+    </div>
+  );
+}
+
+function AdminResetModal({
+  targetCount,
+  selectedTargets,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+  onConfirm,
+  onClose,
+}) {
+  const hasSelection = selectedTargets.length > 0;
+  const allSelected = selectedTargets.length === adminResetOptions.length;
+
+  return (
+    <div
+      className="modal modal-open"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="admin-reset-title"
+    >
+      <div className="modal-box max-w-3xl rounded-[2rem]">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Selective reset</p>
+            <h2 id="admin-reset-title" className="mt-1 text-xl font-black text-error">
+              {targetCount.toLocaleString("ko-KR")}명의 데이터를 초기화할까요?
+            </h2>
+          </div>
+          <span className="badge badge-error badge-outline font-black">
+            {selectedTargets.length} / {adminResetOptions.length}개 선택
+          </span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn btn-sm btn-outline rounded-xl"
+            disabled={allSelected}
+            onClick={onSelectAll}
+          >
+            전체 선택
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost rounded-xl"
+            disabled={!hasSelection}
+            onClick={onClearAll}
+          >
+            전체 해제
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {adminResetOptions.map((option) => {
+            const checked = selectedTargets.includes(option.key);
+            return (
+              <label
+                key={option.key}
+                className={`flex cursor-pointer gap-3 rounded-2xl border p-4 ${
+                  checked
+                    ? "border-error/45 bg-error/10"
+                    : "border-base-300 bg-base-100"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-error mt-0.5"
+                  checked={checked}
+                  onChange={() => onToggle(option.key)}
+                />
+                <span className="min-w-0">
+                  <strong className="block text-sm">{option.label}</strong>
+                  <span className="mt-1 block text-xs leading-relaxed text-base-content/55">
+                    {option.description}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 rounded-2xl bg-warning/15 px-4 py-3 text-xs leading-relaxed text-base-content/70">
+          초기화한 데이터는 복구할 수 없습니다. 자산을 선택하면 각 대상의 현재
+          잔액은 5,000,000원으로 설정됩니다.
+        </p>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            className="btn btn-outline rounded-2xl"
+            onClick={onClose}
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            className="btn btn-error rounded-2xl"
+            disabled={!hasSelection}
+            onClick={onConfirm}
+          >
+            선택 항목 초기화
+          </button>
+        </div>
+      </div>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="닫기"
+        onClick={onClose}
+      />
+    </div>
+  );
+}
+
+function AdminConfirmModal({
+  title,
+  beforeLabel,
+  beforeValue,
+  afterLabel,
+  afterValue,
+  onConfirm,
+  onClose,
+}) {
+  useEnterConfirm(true, onConfirm);
+
+  return (
+    <div className="modal modal-open" role="dialog">
+      <div className="modal-box rounded-[2rem] text-center">
+        <h2 className="mb-3 text-xl font-black text-error">{title}</h2>
+        <p className="mb-1 text-sm">
+          {beforeLabel}: <strong>{beforeValue}</strong>
+        </p>
+        <p className="mb-4 text-sm">
+          {afterLabel}: <strong>{afterValue}</strong>
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            className="btn btn-outline rounded-2xl"
+            onClick={onClose}
+          >
+            취소
+          </button>
+          <button
+            type="button"
+            className="btn btn-error rounded-2xl"
+            onClick={onConfirm}
+          >
+            확인 (Enter)
+          </button>
+        </div>
+      </div>
+      <button
+        className="modal-backdrop"
+        type="button"
+        aria-label="닫기"
+        onClick={onClose}
+      />
+    </div>
+  );
+}

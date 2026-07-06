@@ -121,7 +121,7 @@ export default function WalletPage() {
             <span className="grid size-12 place-items-center rounded-2xl bg-success/15 text-2xl">💸</span>
             <div>
               <h2 className="text-xl font-black">송금하기</h2>
-              <p className="text-xs text-base-content/50">보유한 자산 안에서 자유롭게 송금할 수 있어요.</p>
+              <p className="text-xs text-base-content/50">보유 자산 안에서 송금할 수 있어요. 회사 인수자는 송금을 받을 수 없어요.</p>
             </div>
           </div>
 

@@ -17,7 +17,7 @@ function combination(n, k) {
 
 function stageFor(bombCount, safeCount) {
   const chance = combination(16 - bombCount, safeCount) / combination(16, safeCount);
-  const targetRtp = Math.min(1.15, 1.03 + safeCount * 0.01 + bombCount * 0.004);
+  const targetRtp = 1.02;
   return {
     chance,
     targetRtp,
@@ -50,14 +50,14 @@ export default function BombDodgeGame() {
       return {
         chance: game.cumulativeChance,
         multiplier: game.multiplier,
-        expectedLabel: `+${((game.targetRtp - 1) * 100).toFixed(2)}%`,
+        expectedLabel: `${game.targetRtp >= 1 ? "+" : ""}${((game.targetRtp - 1) * 100).toFixed(2)}%`,
       };
     }
     const first = stageFor(bombCount, 1);
     return {
       chance: first.chance,
       multiplier: first.multiplier,
-      expectedLabel: `+${((first.targetRtp - 1) * 100).toFixed(2)}%`,
+      expectedLabel: `${first.targetRtp >= 1 ? "+" : ""}${((first.targetRtp - 1) * 100).toFixed(2)}%`,
     };
   }, [bombCount, game]);
 

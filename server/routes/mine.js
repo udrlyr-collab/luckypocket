@@ -2,6 +2,7 @@ import express from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
+import { formatSignedWon, formatWon } from "../utils/formatWon.js";
 
 export const mineRouter = express.Router();
 
@@ -87,7 +88,7 @@ mineRouter.post("/click", (req, res) => {
         nickname: user.nickname,
         type: "big_win",
         title: "탄광 대박",
-        message: `${user.nickname}님이 탄광에서 ${item.label}을(를) 발견해 ${actualReward.toLocaleString("ko-KR")}원을 획득했어요!`,
+        message: `${user.nickname}님이 탄광에서 ${item.label}을(를) 발견해 ${formatWon(actualReward)}을 획득했어요!`,
         amount: actualReward,
         gameType: "mine",
         gameName: "탄광",
@@ -100,7 +101,7 @@ mineRouter.post("/click", (req, res) => {
     const isStone = item.type === "stone";
     const msg = isStone 
       ? `앗! 작은 돌멩이를 캤어요. 그래도 +100원!` 
-      : `${item.label}을(를) 발견했어요! +${actualReward.toLocaleString('ko-KR')}원`;
+      : `${item.label}을(를) 발견했어요! ${formatSignedWon(actualReward)}`;
 
     return {
       success: true,

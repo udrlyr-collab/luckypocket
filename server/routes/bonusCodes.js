@@ -5,6 +5,7 @@ import { awardAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { bonusCodeLimitState } from "../services/bonusCodeService.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
+import { formatWon } from "../utils/formatWon.js";
 
 export const bonusCodesRouter = Router();
 bonusCodesRouter.use(requireAuth);
@@ -101,7 +102,7 @@ bonusCodesRouter.post("/redeem", (req, res, next) => {
           nickname: user.nickname,
           type: "bonus_code",
           title: "행운코드 보너스",
-          message: `${user.nickname}님이 행운코드로 ${code.reward_amount.toLocaleString("ko-KR")}원을 받았어요!`,
+          message: `${user.nickname}님이 행운코드로 ${formatWon(code.reward_amount)}을 받았어요!`,
           amount: code.reward_amount,
           metadata: { bonusCodeId: code.id },
           sourceType: "bonus_redemption",
@@ -119,7 +120,7 @@ bonusCodesRouter.post("/redeem", (req, res, next) => {
 
     const result = redeem();
     return res.json({
-      message: `행운코드 성공! ${result.rewardAmount.toLocaleString("ko-KR")}원을 받았어요.`,
+      message: `행운코드 성공! ${formatWon(result.rewardAmount)}을 받았어요.`,
       ...result,
     });
   } catch (error) {

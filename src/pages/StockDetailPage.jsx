@@ -208,10 +208,10 @@ export default function StockDetailPage() {
 
   const setPercent = (pct) => {
     const budget = Math.floor(user.balance * pct);
-    if (leverage === 1) {
-      setAmountInput(String(Math.floor(budget / stock.current_price)));
-    } else {
+    if (stock.status === 'ipo_subscription' || leverage > 1) {
       setAmountInput(String(budget));
+    } else {
+      setAmountInput(String(Math.floor(budget / stock.current_price)));
     }
   };
 

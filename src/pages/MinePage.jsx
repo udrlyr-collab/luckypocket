@@ -2,6 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
+import { formatMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
 
 export default function MinePage() {
@@ -156,7 +157,7 @@ export default function MinePage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-base-200 rounded-xl p-3">
                 <span className="block text-[10px] font-bold text-base-content/50">총 캔 자원</span>
-                <strong className="text-sm font-black tabular-nums">{status.totalMineEarned.toLocaleString()}원</strong>
+                <strong className="text-sm font-black tabular-nums">{formatMoney(status.totalMineEarned)}</strong>
               </div>
               <div className="bg-base-200 rounded-xl p-3">
                 <span className="block text-[10px] font-bold text-base-content/50">곡괭이질 횟수</span>
@@ -174,7 +175,7 @@ export default function MinePage() {
                     {find.resultType === 'diamond' ? '💎' : find.resultType === 'gold' ? '🟡' : find.resultType === 'iron' ? '⚪' : find.resultType === 'coal' ? '⚫' : '🪨'}
                     <span className="font-bold opacity-80">{find.label}</span>
                   </span>
-                  <span className="font-black tabular-nums text-primary">+{find.reward.toLocaleString()}</span>
+                  <span className="font-black tabular-nums text-primary">+{formatMoney(find.reward)}</span>
                 </div>
               ))}
               {status.recentFinds.length === 0 && (

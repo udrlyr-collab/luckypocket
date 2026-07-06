@@ -1,33 +1,111 @@
 import { createServerNotification } from "./serverNotificationService.js";
+import { isStockMarketOpen } from "./marketStateService.js";
+import { calculateUserTotalEvaluatedAsset } from "./portfolioValuationService.js";
+import { formatSignedWon } from "../utils/formatWon.js";
 
 const STOCK_TICK_INTERVAL_MS = 10_000;
 
 const EVENT_PROBABILITIES = {
-  normal: 0.95,
-  surge: 0.025,
-  crash: 0.025
+  normal: 0.98,
+  surge: 0.01,
+  crash: 0.01
 };
 
 const IPO_EVENT_PROBABILITIES = {
-  ipoSurge: 0.60,
-  ipoNormal: 0.30,
-  ipoCrash: 0.10
+  ipoSurge: 0.10,
+  ipoNormal: 0.75,
+  ipoCrash: 0.15
 };
+
+export const STOCK_MARKET_POLICY = {
+  maxActiveStocks: 8,
+  companyAcquisitionBalanceMultiplier: 5,
+  minimumMarketCap: 5_000_000_000,
+  marketCapWarningThreshold: 6_000_000_000,
+  finalCrashMarketCap: 1_000_000_000,
+  cautionRequiredTicks: 3,
+  recoveryRequiredTicks: 60,
+  delistReviewMaxTicks: 180,
+  newlyListedDurationMs: 60_000,
+  ownerEtfDelistPriceRatio: 0.15,
+  bluechipMaxTickVolatility: 0.003,
+  regularMaxTickVolatility: 0.015,
+  ipoMinVolatility: 0.01,
+  ipoMaxVolatility: 0.025,
+};
+
+export function requiredCompanyAcquisitionBalance(acquisitionCost) {
+  const cost = Number(acquisitionCost);
+  if (!Number.isFinite(cost) || cost < 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.ceil(cost * STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier);
+}
+
+export function getMarketCapPolicyState(marketCap) {
+  const value = Number(marketCap);
+  if (!Number.isFinite(value) || value < STOCK_MARKET_POLICY.finalCrashMarketCap) {
+    return "final_crash";
+  }
+  if (value < STOCK_MARKET_POLICY.minimumMarketCap) {
+    return "delist_review";
+  }
+  if (value < STOCK_MARKET_POLICY.marketCapWarningThreshold) {
+    return "caution";
+  }
+  return "normal";
+}
+
+export function minimumSharesForTradableMarketCap(price) {
+  const numericPrice = Number(price);
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.ceil(
+    (STOCK_MARKET_POLICY.marketCapWarningThreshold + 1) / numericPrice,
+  );
+}
+
+export function shouldDelistOwnerEtf(basePrice, currentPrice) {
+  return (
+    Number.isFinite(basePrice) &&
+    Number.isFinite(currentPrice) &&
+    basePrice > 0 &&
+    currentPrice / basePrice <= STOCK_MARKET_POLICY.ownerEtfDelistPriceRatio
+  );
+}
+
+const ACTIVE_STOCK_STATUSES = [
+  "listed",
+  "ipo_subscription",
+  "newly_listed",
+  "acquired",
+  "delist_warning",
+  "final_crash",
+];
+
+function activeStockCount(database) {
+  return database
+    .prepare("SELECT COUNT(*) AS count FROM stocks WHERE status != 'delisted'")
+    .get().count;
+}
 
 import { STOCK_NAME_POOL } from "../constants/stockNamePool.js";
 
-function pickRandomStockIdentity(db, usedSymbols = new Set()) {
-  const activeStocks = db.prepare("SELECT name, symbol FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
+export function pickRandomStockIdentity(db, usedSymbols = new Set()) {
+  const allStocks = db.prepare("SELECT name, symbol, status FROM stocks").all();
   const recentDelisted = db.prepare("SELECT name FROM stocks WHERE status = 'delisted' ORDER BY delisted_at DESC LIMIT 5").all();
   
-  const activeNames = new Set(activeStocks.map(s => s.name));
-  const activeSymbols = new Set(activeStocks.map(s => s.symbol));
+  const activeNames = new Set(
+    allStocks.filter((stock) => stock.status !== "delisted").map((stock) => stock.name),
+  );
+  const existingSymbols = new Set(allStocks.map((stock) => stock.symbol));
   const recentDelistedNames = new Set(recentDelisted.map(s => s.name));
 
   const candidates = STOCK_NAME_POOL.filter(item => {
     return (
       !activeNames.has(item.name) &&
-      !activeSymbols.has(item.symbol) &&
+      !existingSymbols.has(item.symbol) &&
       !recentDelistedNames.has(item.name) &&
       !usedSymbols.has(item.symbol)
     );
@@ -38,10 +116,15 @@ function pickRandomStockIdentity(db, usedSymbols = new Set()) {
     identity = candidates[Math.floor(Math.random() * candidates.length)];
   } else {
     const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
-    const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    let symbol;
+    let suffix;
+    do {
+      suffix = Math.random().toString(36).substring(2, 8).toUpperCase();
+      symbol = `${fallback.symbol}${suffix}`;
+    } while (existingSymbols.has(symbol) || usedSymbols.has(symbol));
     identity = {
       name: `${fallback.name}${suffix}`,
-      symbol: `${fallback.symbol}${suffix}`
+      symbol,
     };
   }
 
@@ -50,8 +133,11 @@ function pickRandomStockIdentity(db, usedSymbols = new Set()) {
 }
 
 export function initStockMarket(db) {
-  const count = db.prepare("SELECT COUNT(*) as c FROM stocks").get().c;
-  if (count === 0) {
+  const missing = Math.max(
+    0,
+    STOCK_MARKET_POLICY.maxActiveStocks - activeStockCount(db),
+  );
+  if (missing > 0) {
     const insert = db.prepare(`
       INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility)
       VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?)
@@ -59,16 +145,93 @@ export function initStockMarket(db) {
     
     db.transaction(() => {
       const usedSymbols = new Set();
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < missing; i++) {
         const st = pickRandomStockIdentity(db, usedSymbols);
         const price = Math.floor(Math.random() * 49000) + 1000;
-        const shares = Math.floor(Math.random() * 990000) + 10000;
+        const shares = Math.max(
+          Math.floor(Math.random() * 990000) + 10000,
+          minimumSharesForTradableMarketCap(price),
+        );
         const cap = price * shares;
         const volatility = 0.01 + Math.random() * 0.04;
         insert.run(st.symbol, st.name, price, price, price, shares, cap, volatility);
       }
     })();
   }
+}
+
+export function enforceStockMarketLimit(database) {
+  return database.transaction(() => {
+    const rows = database.prepare(`
+      SELECT
+        s.id,
+        s.symbol,
+        s.name,
+        s.status,
+        s.market_cap,
+        s.is_bluechip,
+        s.is_etf,
+        s.owner_user_id,
+        EXISTS(
+          SELECT 1 FROM stock_holdings h
+          WHERE h.stock_id = s.id AND h.quantity > 0
+        ) AS has_holders,
+        EXISTS(
+          SELECT 1 FROM stock_positions p
+          WHERE p.stock_id = s.id AND p.status = 'open'
+        ) AS has_positions
+      FROM stocks s
+      WHERE s.status != 'delisted'
+      ORDER BY
+        (
+          s.is_bluechip = 1 OR
+          s.is_etf = 1 OR
+          s.owner_user_id IS NOT NULL OR
+          EXISTS(SELECT 1 FROM stock_holdings h WHERE h.stock_id = s.id AND h.quantity > 0) OR
+          EXISTS(SELECT 1 FROM stock_positions p WHERE p.stock_id = s.id AND p.status = 'open')
+        ) DESC,
+        CASE WHEN s.status IN (${ACTIVE_STOCK_STATUSES.map(() => "?").join(", ")}) THEN 1 ELSE 0 END DESC,
+        s.market_cap DESC,
+        s.id ASC
+    `).all(...ACTIVE_STOCK_STATUSES);
+
+    let activeCount = rows.length;
+    const retiredIds = [];
+    const retire = database.prepare(`
+      UPDATE stocks
+      SET previous_price = current_price,
+          current_price = 0,
+          market_cap = 0,
+          status = 'delisted',
+          delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `);
+    const record = database.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message)
+      VALUES (?, 'market_capacity_retired', '시장 종목 정리', ?)
+    `);
+
+    for (const stock of rows.slice(STOCK_MARKET_POLICY.maxActiveStocks)) {
+      if (activeCount <= STOCK_MARKET_POLICY.maxActiveStocks) break;
+      const protectedStock =
+        stock.is_bluechip === 1 ||
+        stock.is_etf === 1 ||
+        stock.owner_user_id !== null ||
+        stock.has_holders === 1 ||
+        stock.has_positions === 1;
+      if (protectedStock) continue;
+      retire.run(stock.id);
+      record.run(
+        stock.id,
+        `${stock.name} 종목이 시장 최대 종목 수 조정으로 거래 목록에서 정리되었어요.`,
+      );
+      retiredIds.push(stock.id);
+      activeCount -= 1;
+    }
+
+    return { activeCount, retiredIds };
+  })();
 }
 
 function getRandomEvent(probs) {
@@ -83,10 +246,22 @@ function getRandomEvent(probs) {
 
 export function tickStockMarket(db) {
   try {
+    if (!isStockMarketOpen(db)) return;
     db.transaction(() => {
-      const stocks = db.prepare("SELECT * FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash')").all();
+      const stocks = db
+        .prepare("SELECT * FROM stocks WHERE status != 'delisted' ORDER BY id ASC")
+        .all();
       const usedSymbols = new Set();
       for (const stock of stocks) {
+        if (stock.is_trading_suspended) continue;
+        if (
+          ["delist_review", "unstable", "recovery", "final_crash"].includes(
+            stock.delist_risk_status,
+          )
+        ) {
+          processDelistingLifecycleTick(db, stock, usedSymbols);
+          continue;
+        }
         if (stock.is_etf) {
           processEtfTick(db, stock);
         } else {
@@ -102,7 +277,12 @@ export function tickStockMarket(db) {
   }
 }
 
-function processNormalTick(db, stock, usedSymbols) {
+function processNormalTick(
+  db,
+  stock,
+  usedSymbols,
+  { manageDelistRisk = true } = {},
+) {
   let newPrice = stock.current_price;
   let eventType = null;
   let eventMsg = null;
@@ -120,7 +300,7 @@ function processNormalTick(db, stock, usedSymbols) {
     const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
     if (now >= endsAt) {
       newStatus = "newly_listed";
-      const newlyListedUntil = new Date(now + 3 * 60 * 1000).toISOString();
+      const newlyListedUntil = new Date(now + STOCK_MARKET_POLICY.newlyListedDurationMs).toISOString();
       const identity = pickRandomStockIdentity(db, usedSymbols);
       
       db.prepare("UPDATE stocks SET newly_listed_until = ?, name = ?, symbol = ? WHERE id = ?").run(newlyListedUntil, identity.name, identity.symbol, stock.id);
@@ -145,74 +325,43 @@ function processNormalTick(db, stock, usedSymbols) {
 
     const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
     if (event === "ipoSurge") {
-      newPrice = Math.floor(newPrice * (1 + 0.2 + Math.random() * 0.8)); // +20% ~ +100%
+      newPrice = Math.floor(newPrice * (1 + 0.05 + Math.random() * 0.10)); // +5% ~ +15%
       eventType = "ipo_surge";
       eventMsg = `${stock.name}이(가) 신규 상장 프리미엄으로 급등 중이에요!`;
     } else if (event === "ipoCrash") {
-      newPrice = Math.floor(newPrice * (1 - 0.1 - Math.random() * 0.3)); // -10% ~ -40%
+      newPrice = Math.floor(newPrice * (1 - 0.10 - Math.random() * 0.15)); // -10% ~ -25%
       eventType = "ipo_crash";
       eventMsg = `${stock.name}이(가) 신규 상장 직후 급락했어요.`;
     } else {
-      const change = (Math.random() * 0.2 - 0.1); // -10% ~ +10%
+      const change = Math.random() * 0.06 - 0.03; // -3% ~ +3%
       newPrice = Math.floor(newPrice * (1 + change));
-    }
-  } else if (stock.status === "final_crash") {
-    delistStock(db, stock);
-    return;
-  } else if (stock.status === "delist_warning") {
-    const phase = stock.delist_phase || 0;
-    const totalPhase = stock.delist_phase_total || 5;
-
-    if (phase < totalPhase - 1) {
-      const direction = phase % 2 === 0 ? 1 : -1;
-      const changeRate = direction === 1
-        ? (0.25 + Math.random() * 0.55) // +25% ~ +80%
-        : -(0.30 + Math.random() * 0.40); // -30% ~ -70%
-
-      newPrice = Math.floor(newPrice * (1 + changeRate));
-      db.prepare("UPDATE stocks SET delist_phase = delist_phase + 1 WHERE id = ?").run(stock.id);
-      eventType = direction === 1 ? "unstable_surge" : "unstable_crash";
-    } else {
-      // Final crash
-      const finalCrashRate = -(0.85 + Math.random() * 0.10); // -85% ~ -95%
-      newPrice = Math.floor(newPrice * (1 + finalCrashRate));
-      eventType = "final_crash";
-      eventMsg = `${stock.name}이(가) 최종 대폭락했어요.`;
-      newStatus = "final_crash";
     }
   } else {
     // Normal listed stock
-    if (Math.random() < 0.005 && stock.is_bluechip !== 1) { // 0.5% chance to become delist_warning, ignore if bluechip
-      const totalPhases = Math.floor(Math.random() * 3) + 5; // 5~7 phases
-      db.prepare("UPDATE stocks SET delist_phase = 0, delist_phase_total = ?, delist_warning_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
-        .run(totalPhases, stock.id);
-      newStatus = "delist_warning";
-      eventType = "delist_warning";
-      eventMsg = `${stock.name} 종목에서 이상 변동이 감지되었어요!`;
-    } else {
-      let isSurgeOrCrash = false;
-      if (stock.is_bluechip !== 1) {
-        const event = getRandomEvent(EVENT_PROBABILITIES);
-        if (event === "surge") {
-          newPrice = Math.floor(newPrice * (1 + 0.1 + Math.random() * 0.2)); // +10% ~ +30%
-          eventType = "surge";
-          eventMsg = `${stock.name} 주가가 반등했어요!`;
-          isSurgeOrCrash = true;
-        } else if (event === "crash") {
-          newPrice = Math.floor(newPrice * (1 - 0.1 - Math.random() * 0.3)); // -10% ~ -40%
-          eventType = "crash";
-          eventMsg = `${stock.name} 주가가 급락했어요!`;
-          isSurgeOrCrash = true;
-        }
+    let isSurgeOrCrash = false;
+    if (stock.is_bluechip !== 1) {
+      const event = getRandomEvent(EVENT_PROBABILITIES);
+      if (event === "surge") {
+        newPrice = Math.floor(newPrice * (1 + 0.05 + Math.random() * 0.10)); // +5% ~ +15%
+        eventType = "surge";
+        eventMsg = `${stock.name} 주가가 반등했어요!`;
+        isSurgeOrCrash = true;
+      } else if (event === "crash") {
+        newPrice = Math.floor(newPrice * (1 - 0.07 - Math.random() * 0.13)); // -7% ~ -20%
+        eventType = "crash";
+        eventMsg = `${stock.name} 주가가 급락했어요!`;
+        isSurgeOrCrash = true;
       }
-      
-      if (!isSurgeOrCrash) {
-        const maxChange = stock.volatility;
-        const change = stock.is_bluechip === 1
-          ? (Math.random() * 2 - 0.8) * maxChange + stock.trend // 우상향 (평균 +0.2 * maxChange)
-          : (Math.random() * 2 - 1) * maxChange + stock.trend;
-        newPrice = Math.floor(newPrice * (1 + change));
-      }
+    }
+
+    if (!isSurgeOrCrash) {
+      const volatilityCap = stock.is_bluechip === 1
+        ? STOCK_MARKET_POLICY.bluechipMaxTickVolatility
+        : STOCK_MARKET_POLICY.regularMaxTickVolatility;
+      const maxChange = Math.min(stock.volatility, volatilityCap);
+      const trend = Math.max(-0.0002, Math.min(0.0002, stock.trend || 0));
+      const change = (Math.random() * 2 - 1) * maxChange + trend;
+      newPrice = Math.floor(newPrice * (1 + change));
     }
   }
 
@@ -231,26 +380,50 @@ function processNormalTick(db, stock, usedSymbols) {
     const basis = (eventType === "ipo_surge" || eventType === "ipo_crash") ? "offering_price" 
       : eventType === "final_crash" ? "delist_final_crash" 
       : "previous_tick";
-    updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, basis);
+    updateStockPrice(
+      db,
+      stock,
+      newPrice,
+      newStatus,
+      eventType,
+      eventMsg,
+      basis,
+      { manageDelistRisk },
+    );
+  } else if (manageDelistRisk) {
+    updateDelistRiskAfterPrice(db, stock);
   }
 }
 
 export function recalculateOwnerEtfs(db) {
   const etfs = db.prepare("SELECT * FROM stocks WHERE is_etf = 1 AND status = 'acquired'").all();
   for (const stock of etfs) {
-    processEtfTick(db, stock);
+    if (["normal", "caution"].includes(stock.delist_risk_status || "normal")) {
+      processEtfTick(db, stock, { manageDelistRisk: false });
+    }
   }
 }
 
-function processEtfTick(db, stock) {
+function processEtfTick(
+  db,
+  stock,
+  { manageDelistRisk = true } = {},
+) {
   const ownerUser = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
   if (!ownerUser) return;
 
-  const currentOwnerAsset = Math.max(ownerUser.balance, 1);
+  const ownerValuation = calculateUserTotalEvaluatedAsset(db, ownerUser.id);
+  const currentOwnerAsset = Math.max(ownerValuation.totalEvaluatedAsset, 1);
   
   if (!stock.etf_base_price || !stock.etf_base_owner_asset) {
     db.prepare("UPDATE stocks SET etf_base_price = ?, etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ? WHERE id = ?")
       .run(stock.current_price, currentOwnerAsset, currentOwnerAsset, stock.id);
+    if (manageDelistRisk) updateDelistRiskAfterPrice(db, stock);
+    return;
+  }
+
+  if (shouldDelistOwnerEtf(stock.etf_base_price, stock.current_price)) {
+    delistStock(db, stock, { reason: "owner_etf_drawdown" });
     return;
   }
 
@@ -259,18 +432,58 @@ function processEtfTick(db, stock) {
     const ratio = safeOwnerAsset / Math.max(stock.etf_base_owner_asset, 1);
     let newPrice = Math.floor(stock.etf_base_price * ratio);
     newPrice = Math.max(1, newPrice); // minimum 1 won
-    
-    updateStockPrice(db, stock, newPrice, stock.status, "etf_update", null);
+
+    if (shouldDelistOwnerEtf(stock.etf_base_price, newPrice)) {
+      updateStockPrice(
+        db,
+        stock,
+        newPrice,
+        stock.status,
+        "etf_delist_threshold",
+        `${stock.name}이(가) 인수 기준가 대비 85% 이상 하락해 자동 상장폐지됩니다.`,
+        "etf_base_price",
+        { manageDelistRisk: false },
+      );
+      delistStock(
+        db,
+        { ...stock, current_price: newPrice },
+        { reason: "owner_etf_drawdown" },
+      );
+      return;
+    }
+
+    updateStockPrice(
+      db,
+      stock,
+      newPrice,
+      stock.status,
+      "etf_update",
+      null,
+      "previous_tick",
+      { manageDelistRisk },
+    );
     db.prepare("UPDATE stocks SET etf_last_tracked_owner_asset = ? WHERE id = ?").run(currentOwnerAsset, stock.id);
+  } else if (manageDelistRisk) {
+    updateDelistRiskAfterPrice(db, stock);
   }
 }
 
-function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, basis = "previous_tick") {
+function updateStockPrice(
+  db,
+  stock,
+  newPrice,
+  newStatus,
+  eventType,
+  eventMsg,
+  basis = "previous_tick",
+  { manageDelistRisk = true } = {},
+) {
   const newCap = newPrice * stock.total_shares;
   
   db.prepare(`
     UPDATE stocks 
-    SET previous_price = current_price, current_price = ?, market_cap = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    SET previous_price = current_price, current_price = ?, market_cap = ?, status = ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE id = ?
   `).run(newPrice, newCap, newStatus, stock.id);
 
@@ -293,9 +506,7 @@ function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, b
       return "0.0%";
     };
     const formatAmount = (amt) => {
-      if (amt > 0) return `+${amt.toLocaleString()}원`;
-      if (amt < 0) return `${amt.toLocaleString()}원`;
-      return "0원";
+      return formatSignedWon(amt);
     };
 
     if (basis === "previous_tick" || basis === "delist_final_crash") {
@@ -311,14 +522,34 @@ function updateStockPrice(db, stock, newPrice, newStatus, eventType, eventMsg, b
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(stock.id, eventType, eventType === "surge" || eventType === "ipo_surge" ? "급등" : eventType === "crash" || eventType === "ipo_crash" ? "급락" : "위기", finalMsg, priceBefore, priceAfter, changeAmount, changeRate, basis);
   }
+
+  if (manageDelistRisk) {
+    updateDelistRiskAfterPrice(db, {
+      ...stock,
+      current_price: newPrice,
+      market_cap: newCap,
+      status: newStatus,
+    });
+  }
 }
 
-export function delistStock(db, stock) {
+export function delistStock(db, stock, { reason = "market_crash" } = {}) {
+  const currentStock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!currentStock || currentStock.status === "delisted") return false;
+
+  const isOwnerEtfDrawdown = reason === "owner_etf_drawdown";
+  const notificationMessage = isOwnerEtfDrawdown
+      ? `${currentStock.name}이(가) 인수 기준가 대비 85% 이상 하락해 자동 상장폐지되었어요.`
+      : `${currentStock.name}이(가) 급등락을 반복하다가 최종 대폭락 후 상장폐지되었어요.`;
+  const eventMessage = isOwnerEtfDrawdown
+      ? `${currentStock.name} 종목이 인수 기준가 대비 85% 이상 하락해 자동 상장폐지되었습니다.`
+      : `${currentStock.name} 종목이 상장폐지되었습니다.`;
+
   // 1. Update stock status to delisted, price to 0, set delisted_at
-  db.prepare("UPDATE stocks SET status = 'delisted', current_price = 0, previous_price = current_price, market_cap = 0, delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(stock.id);
+  db.prepare("UPDATE stocks SET status = 'delisted', current_price = 0, previous_price = current_price, market_cap = 0, is_market_cap_warning = 0, delist_risk_status = 'delisted', delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(currentStock.id);
   
   // 2. Liquidate all positions for this stock
-  const openPositions = db.prepare("SELECT * FROM stock_positions WHERE stock_id = ? AND status = 'open'").all(stock.id);
+  const openPositions = db.prepare("SELECT * FROM stock_positions WHERE stock_id = ? AND status = 'open'").all(currentStock.id);
   for (const pos of openPositions) {
     liquidatePosition(db, pos, 0);
   }
@@ -326,30 +557,46 @@ export function delistStock(db, stock) {
   // 3. Mark holdings as worthless (no active deletion needed, just price is 0, but we can log)
   // 4. Create server notification
   createServerNotification(db, {
+    nickname: "행운시장",
     type: "stock_delisted",
     title: "상장폐지 발생",
-    message: `${stock.name}이(가) 급등락을 반복하다가 최종 대폭락 후 상장폐지되었어요.`,
+    message: notificationMessage,
     gameType: "stock",
     gameName: "주식",
-    metadata: { stockId: stock.id, symbol: stock.symbol }
+    metadata: { stockId: currentStock.id, symbol: currentStock.symbol, reason }
   });
 
   db.prepare(`
     INSERT INTO stock_events (stock_id, event_type, title, message)
     VALUES (?, ?, ?, ?)
-  `).run(stock.id, "delisted", "상장폐지", `${stock.name} 종목이 상장폐지되었습니다.`);
+  `).run(currentStock.id, "delisted", "상장폐지", eventMessage);
 
   // 5. Create new IPO
   createIpoStock(db);
+  return true;
 }
 
 export function createIpoStock(db) {
-  const symbol = `IPO-${Date.now().toString().slice(-4)}${Math.floor(Math.random() * 1000)}`;
+  if (activeStockCount(db) >= STOCK_MARKET_POLICY.maxActiveStocks) {
+    return null;
+  }
+
+  let symbol;
+  do {
+    symbol = `IPO-${Date.now().toString().slice(-6)}${Math.floor(Math.random() * 100000)}`;
+  } while (db.prepare("SELECT 1 FROM stocks WHERE symbol = ?").get(symbol));
   const name = "공모주";
   const price = Math.floor(Math.random() * 4500) + 500; // 500 ~ 5,000
-  const shares = Math.floor(Math.random() * 990000) + 10000;
+  const shares = Math.max(
+    Math.floor(Math.random() * 990000) + 10000,
+    minimumSharesForTradableMarketCap(price),
+  );
   const cap = price * shares;
-  const volatility = 0.05 + Math.random() * 0.05; // 5% ~ 10% highly volatile initially
+  const volatility =
+    STOCK_MARKET_POLICY.ipoMinVolatility +
+    Math.random() * (
+      STOCK_MARKET_POLICY.ipoMaxVolatility - STOCK_MARKET_POLICY.ipoMinVolatility
+    );
 
   const insert = db.prepare(`
     INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, ipo_subscription_started_at, ipo_subscription_ends_at, offering_price)
@@ -372,6 +619,443 @@ export function createIpoStock(db) {
     INSERT INTO stock_events (stock_id, event_type, title, message)
     VALUES (?, ?, ?, ?)
   `).run(stockId, "ipo_created", "신규 상장", `새 공모주 청약이 시작되었습니다.`);
+
+  return stockId;
+}
+
+function recordDelistLifecycleEvent(db, stockId, eventType, title, message) {
+  db.prepare(
+    `INSERT INTO stock_events (stock_id, event_type, title, message)
+     VALUES (?, ?, ?, ?)`,
+  ).run(stockId, eventType, title, message);
+}
+
+function enterDelistReview(db, stock) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+  const wasInReview = ["delist_review", "unstable", "recovery"].includes(
+    current.delist_risk_status,
+  );
+  db.prepare(
+    `UPDATE stocks
+     SET delist_risk_status = 'delist_review',
+         is_market_cap_warning = 1,
+         caution_tick_count = MAX(caution_tick_count, ?),
+         recovery_started_at = NULL,
+         recovery_tick_count = 0,
+         delist_review_started_at = COALESCE(
+           delist_review_started_at,
+           strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         ),
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(STOCK_MARKET_POLICY.cautionRequiredTicks, current.id);
+
+  if (!wasInReview) {
+    const message = `${current.name}의 시가총액이 50억원 미만으로 내려가 상장폐지 심사에 들어갔어요.`;
+    recordDelistLifecycleEvent(
+      db,
+      current.id,
+      "delist_review",
+      "상장폐지 심사",
+      message,
+    );
+    createServerNotification(db, {
+      nickname: "행운시장",
+      type: "stock_delist_review",
+      title: "상장폐지 심사",
+      message,
+      gameType: "stock",
+      gameName: "주식",
+      metadata: { stockId: current.id, symbol: current.symbol },
+    });
+  }
+}
+
+function enterRecovery(db, stock, reviewTickCount, recoveryTickCount = 1) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+  const wasRecovery = current.delist_risk_status === "recovery";
+  db.prepare(
+    `UPDATE stocks
+     SET delist_risk_status = 'recovery',
+         is_market_cap_warning = 1,
+         recovery_started_at = CASE
+           WHEN delist_risk_status = 'recovery' AND recovery_started_at IS NOT NULL
+             THEN recovery_started_at
+           ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         END,
+         recovery_tick_count = ?,
+         delist_review_tick_count = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(recoveryTickCount, reviewTickCount, current.id);
+
+  if (!wasRecovery) {
+    const message = `${current.name}이 60억원 이상으로 회복해 10분 유지 심사를 시작했어요.`;
+    recordDelistLifecycleEvent(
+      db,
+      current.id,
+      "recovery_started",
+      "회생 시작",
+      message,
+    );
+  }
+}
+
+function recoverStock(db, stock) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+  db.prepare(
+    `UPDATE stocks
+     SET delist_risk_status = 'normal',
+         is_market_cap_warning = 0,
+         caution_tick_count = 0,
+         recovery_started_at = NULL,
+         recovery_tick_count = 0,
+         delist_review_started_at = NULL,
+         delist_review_tick_count = 0,
+         final_crash_at = NULL,
+         final_crash_reason = NULL,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(current.id);
+
+  const message = `${current.name}이 60억원 이상 시가총액을 10분 동안 유지해 상장폐지 심사에서 벗어났어요.`;
+  recordDelistLifecycleEvent(
+    db,
+    current.id,
+    "recovery_success",
+    "회생 성공",
+    message,
+  );
+  createServerNotification(db, {
+    nickname: "행운시장",
+    type: "stock_recovery",
+    title: "주식 회생 성공",
+    message,
+    gameType: "stock",
+    gameName: "주식",
+    metadata: { stockId: current.id, symbol: current.symbol },
+  });
+}
+
+function triggerFinalCrash(db, stock, reason) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (
+    !current ||
+    current.status === "delisted" ||
+    current.delist_risk_status === "final_crash"
+  ) {
+    return;
+  }
+
+  const crashRate = -(0.85 + Math.random() * 0.1);
+  const newPrice = Math.max(1, Math.floor(current.current_price * (1 + crashRate)));
+  const reasonMessage =
+    reason === "market_cap_under_1b"
+      ? "시가총액이 10억원 미만으로 내려가"
+      : "상장폐지 심사 30분 안에 회생하지 못해";
+  const message = `${current.name}의 ${reasonMessage} 최종 폭락이 발생했어요. 다음 갱신에서 상장폐지됩니다.`;
+
+  updateStockPrice(
+    db,
+    current,
+    newPrice,
+    current.status,
+    "final_crash",
+    message,
+    "delist_final_crash",
+    { manageDelistRisk: false },
+  );
+  db.prepare(
+    `UPDATE stocks
+     SET delist_risk_status = 'final_crash',
+         is_market_cap_warning = 1,
+         final_crash_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+         final_crash_reason = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(reason, current.id);
+  createServerNotification(db, {
+    nickname: "행운시장",
+    type: "stock_final_crash",
+    title: "최종 폭락",
+    message,
+    gameType: "stock",
+    gameName: "주식",
+    metadata: { stockId: current.id, symbol: current.symbol, reason },
+  });
+}
+
+function updateDelistRiskAfterPrice(db, stock) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+  if (
+    !["normal", "caution"].includes(current.delist_risk_status || "normal")
+  ) {
+    return;
+  }
+
+  const band = getMarketCapPolicyState(current.market_cap);
+  if (band === "final_crash") {
+    triggerFinalCrash(db, current, "market_cap_under_1b");
+    return;
+  }
+  if (band === "delist_review") {
+    enterDelistReview(db, current);
+    return;
+  }
+  if (band === "caution") {
+    const cautionTicks = Number(current.caution_tick_count || 0) + 1;
+    const shouldWarn = cautionTicks >= STOCK_MARKET_POLICY.cautionRequiredTicks;
+    db.prepare(
+      `UPDATE stocks
+       SET caution_tick_count = ?,
+           delist_risk_status = ?,
+           is_market_cap_warning = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+    ).run(
+      cautionTicks,
+      shouldWarn ? "caution" : "normal",
+      shouldWarn ? 1 : 0,
+      current.id,
+    );
+    if (
+      shouldWarn &&
+      current.delist_risk_status !== "caution"
+    ) {
+      recordDelistLifecycleEvent(
+        db,
+        current.id,
+        "market_cap_caution",
+        "거래주의",
+        `${current.name}의 시가총액이 3틱 연속 60억원 미만으로 내려갔어요.`,
+      );
+    }
+    return;
+  }
+
+  if (
+    current.delist_risk_status === "caution" ||
+    Number(current.caution_tick_count || 0) > 0
+  ) {
+    db.prepare(
+      `UPDATE stocks
+       SET caution_tick_count = 0,
+           delist_risk_status = 'normal',
+           is_market_cap_warning = 0,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+    ).run(current.id);
+  }
+}
+
+function processDelistingLifecycleTick(db, stock, usedSymbols) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+
+  if (current.delist_risk_status === "final_crash") {
+    delistStock(db, current, {
+      reason: current.final_crash_reason || "recovery_failed",
+    });
+    return;
+  }
+
+  if (
+    current.is_etf === 1 &&
+    shouldDelistOwnerEtf(current.etf_base_price, current.current_price)
+  ) {
+    delistStock(db, current, { reason: "owner_etf_drawdown" });
+    return;
+  }
+
+  let reviewTicks = Number(current.delist_review_tick_count || 0) + 1;
+
+  if (current.delist_risk_status === "recovery") {
+    if (current.is_etf === 1) {
+      processEtfTick(db, current, { manageDelistRisk: false });
+    } else {
+      processNormalTick(db, current, usedSymbols, { manageDelistRisk: false });
+    }
+    const updated = db.prepare("SELECT * FROM stocks WHERE id = ?").get(current.id);
+    if (!updated || updated.status === "delisted") return;
+    if (
+      updated.is_etf === 1 &&
+      shouldDelistOwnerEtf(updated.etf_base_price, updated.current_price)
+    ) {
+      delistStock(db, updated, { reason: "owner_etf_drawdown" });
+      return;
+    }
+    if (updated.market_cap < STOCK_MARKET_POLICY.finalCrashMarketCap) {
+      triggerFinalCrash(db, updated, "market_cap_under_1b");
+      return;
+    }
+
+    if (updated.market_cap >= STOCK_MARKET_POLICY.marketCapWarningThreshold) {
+      const recoveryTicks = Number(current.recovery_tick_count || 0) + 1;
+      if (recoveryTicks >= STOCK_MARKET_POLICY.recoveryRequiredTicks) {
+        recoverStock(db, updated);
+        return;
+      }
+      if (reviewTicks >= STOCK_MARKET_POLICY.delistReviewMaxTicks) {
+        triggerFinalCrash(db, updated, "recovery_failed");
+        return;
+      }
+      enterRecovery(db, updated, reviewTicks, recoveryTicks);
+      return;
+    }
+    if (reviewTicks >= STOCK_MARKET_POLICY.delistReviewMaxTicks) {
+      triggerFinalCrash(db, updated, "recovery_failed");
+      return;
+    }
+
+    db.prepare(
+      `UPDATE stocks
+       SET delist_risk_status = 'delist_review',
+           is_market_cap_warning = 1,
+           recovery_started_at = NULL,
+           recovery_tick_count = 0,
+           delist_review_tick_count = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?`,
+    ).run(reviewTicks, updated.id);
+    recordDelistLifecycleEvent(
+      db,
+      updated.id,
+      "recovery_interrupted",
+      "회생 중단",
+      `${updated.name}의 시가총액이 다시 60억원 미만으로 내려가 회생 유지 시간이 초기화됐어요.`,
+    );
+    return;
+  }
+
+  if (current.market_cap < STOCK_MARKET_POLICY.finalCrashMarketCap) {
+    triggerFinalCrash(db, current, "market_cap_under_1b");
+    return;
+  }
+  if (current.market_cap >= STOCK_MARKET_POLICY.marketCapWarningThreshold) {
+    enterRecovery(db, current, reviewTicks, 1);
+    return;
+  }
+  if (reviewTicks >= STOCK_MARKET_POLICY.delistReviewMaxTicks) {
+    triggerFinalCrash(db, current, "recovery_failed");
+    return;
+  }
+
+  const isSurge = Math.random() < 0.45;
+  const changeRate = isSurge
+    ? 0.2 + Math.random() * 0.6
+    : -(0.25 + Math.random() * 0.45);
+  const newPrice = Math.max(
+    1,
+    Math.floor(current.current_price * (1 + changeRate)),
+  );
+  const eventType = isSurge ? "unstable_surge" : "unstable_crash";
+  const eventMessage = isSurge
+    ? `${current.name}이 상장폐지 심사 중 급반등했어요.`
+    : `${current.name}이 상장폐지 심사 중 급락했어요.`;
+  updateStockPrice(
+    db,
+    current,
+    newPrice,
+    current.status,
+    eventType,
+    eventMessage,
+    "previous_tick",
+    { manageDelistRisk: false },
+  );
+
+  const updated = db.prepare("SELECT * FROM stocks WHERE id = ?").get(current.id);
+  if (
+    updated.is_etf === 1 &&
+    shouldDelistOwnerEtf(updated.etf_base_price, updated.current_price)
+  ) {
+    delistStock(db, updated, { reason: "owner_etf_drawdown" });
+    return;
+  }
+  if (updated.market_cap < STOCK_MARKET_POLICY.finalCrashMarketCap) {
+    triggerFinalCrash(db, updated, "market_cap_under_1b");
+    return;
+  }
+  if (updated.market_cap >= STOCK_MARKET_POLICY.marketCapWarningThreshold) {
+    enterRecovery(db, updated, reviewTicks, 1);
+    return;
+  }
+
+  db.prepare(
+    `UPDATE stocks
+     SET delist_risk_status = 'unstable',
+         is_market_cap_warning = 1,
+         recovery_started_at = NULL,
+         recovery_tick_count = 0,
+         delist_review_tick_count = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(reviewTicks, updated.id);
+}
+
+export function initializeStockDelistingLifecycle(database) {
+  const migrationKey = "stock_delisting_lifecycle_v2";
+  if (
+    database.prepare("SELECT 1 FROM system_config WHERE key = ?").get(migrationKey)
+  ) {
+    return { initialized: false };
+  }
+
+  return database.transaction(() => {
+    const stocks = database
+      .prepare("SELECT * FROM stocks WHERE status != 'delisted' ORDER BY id ASC")
+      .all();
+    for (const stock of stocks) {
+      let baseStatus = stock.status;
+      let riskStatus = "normal";
+      if (stock.status === "final_crash") {
+        baseStatus = stock.is_etf === 1 ? "acquired" : "listed";
+        riskStatus = "final_crash";
+      } else if (stock.status === "delist_warning") {
+        baseStatus = stock.is_etf === 1 ? "acquired" : "listed";
+        riskStatus = "delist_review";
+      } else {
+        const band = getMarketCapPolicyState(stock.market_cap);
+        if (band === "final_crash" || band === "delist_review") {
+          riskStatus = "delist_review";
+        }
+      }
+
+      database.prepare(
+        `UPDATE stocks
+         SET status = ?,
+             delist_risk_status = ?,
+             is_market_cap_warning = ?,
+             caution_tick_count = 0,
+             recovery_tick_count = 0,
+             delist_review_started_at = CASE
+               WHEN ? = 'delist_review'
+                 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+               ELSE NULL
+             END,
+             final_crash_at = CASE
+               WHEN ? = 'final_crash'
+                 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+               ELSE NULL
+             END
+         WHERE id = ?`,
+      ).run(
+        baseStatus,
+        riskStatus,
+        riskStatus === "normal" ? 0 : 1,
+        riskStatus,
+        riskStatus,
+        stock.id,
+      );
+    }
+    database
+      .prepare("INSERT INTO system_config (key, value) VALUES (?, 'complete')")
+      .run(migrationKey);
+    return { initialized: true, stockCount: stocks.length };
+  })();
 }
 
 function liquidatePositionsIfNeeded(db) {

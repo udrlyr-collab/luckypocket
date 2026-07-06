@@ -18,23 +18,23 @@ profileRouter.get("/summary", (req, res) => {
       `SELECT
          COUNT(*) AS total_games,
          COUNT(*) AS total_bets,
-         COALESCE(SUM(CASE WHEN profit > 0 THEN profit ELSE 0 END), 0) AS total_profit,
-         COALESCE(SUM(CASE WHEN profit < 0 THEN -profit ELSE 0 END), 0) AS total_loss,
-         COALESCE(SUM(profit), 0) AS net_profit,
-         COALESCE(SUM(payout), 0) AS total_payout,
-         COALESCE(SUM(CASE WHEN result = 'loss' THEN bet_amount ELSE 0 END), 0) AS total_lost_amount
+         TOTAL(CASE WHEN profit > 0 THEN profit ELSE 0 END) AS total_profit,
+         TOTAL(CASE WHEN profit < 0 THEN -profit ELSE 0 END) AS total_loss,
+         TOTAL(profit) AS net_profit,
+         TOTAL(payout) AS total_payout,
+         TOTAL(CASE WHEN result = 'loss' THEN bet_amount ELSE 0 END) AS total_lost_amount
        FROM game_logs WHERE user_id = ?`,
     )
     .get(user.id);
   const walletTotals = db
     .prepare(
       `SELECT
-         COALESCE(SUM(CASE WHEN event_type = 'transfer_in' THEN amount ELSE 0 END), 0) AS received_transfer,
-         COALESCE(SUM(CASE WHEN event_type = 'transfer_out' THEN -amount ELSE 0 END), 0) AS sent_transfer,
-         COALESCE(SUM(CASE WHEN event_type = 'bonus_code' THEN amount ELSE 0 END), 0) AS bonus_code_total,
-         COALESCE(SUM(CASE WHEN event_type = 'nickname_change_fee' THEN -amount ELSE 0 END), 0) AS nickname_fee_total,
-         COALESCE(SUM(CASE WHEN event_type = 'transfer_in' AND date(created_at, '+9 hours') = date('now', '+9 hours') THEN amount ELSE 0 END), 0) AS today_received_transfer,
-         COALESCE(SUM(CASE WHEN event_type = 'transfer_out' AND date(created_at, '+9 hours') = date('now', '+9 hours') THEN -amount ELSE 0 END), 0) AS today_sent_transfer
+         TOTAL(CASE WHEN event_type = 'transfer_in' THEN amount ELSE 0 END) AS received_transfer,
+         TOTAL(CASE WHEN event_type = 'transfer_out' THEN -amount ELSE 0 END) AS sent_transfer,
+         TOTAL(CASE WHEN event_type = 'bonus_code' THEN amount ELSE 0 END) AS bonus_code_total,
+         TOTAL(CASE WHEN event_type = 'nickname_change_fee' THEN -amount ELSE 0 END) AS nickname_fee_total,
+         TOTAL(CASE WHEN event_type = 'transfer_in' AND date(created_at, '+9 hours') = date('now', '+9 hours') THEN amount ELSE 0 END) AS today_received_transfer,
+         TOTAL(CASE WHEN event_type = 'transfer_out' AND date(created_at, '+9 hours') = date('now', '+9 hours') THEN -amount ELSE 0 END) AS today_sent_transfer
        FROM asset_events WHERE user_id = ?`,
     )
     .get(user.id);
@@ -209,10 +209,10 @@ profileRouter.get("/game-stats", (req, res) => {
          COUNT(*) AS total_bets,
          SUM(CASE WHEN result = 'win' THEN 1 ELSE 0 END) AS wins,
          SUM(CASE WHEN result = 'loss' THEN 1 ELSE 0 END) AS losses,
-         COALESCE(SUM(bet_amount), 0) AS total_bet,
-         COALESCE(SUM(payout), 0) AS total_payout,
-         COALESCE(SUM(CASE WHEN result = 'loss' THEN bet_amount ELSE 0 END), 0) AS lost_amount,
-         COALESCE(SUM(profit), 0) AS net_profit,
+         TOTAL(bet_amount) AS total_bet,
+         TOTAL(payout) AS total_payout,
+         TOTAL(CASE WHEN result = 'loss' THEN bet_amount ELSE 0 END) AS lost_amount,
+         TOTAL(profit) AS net_profit,
          COALESCE(MAX(payout), 0) AS max_payout
        FROM game_logs
        WHERE user_id = ?

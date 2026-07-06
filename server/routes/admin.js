@@ -4,6 +4,17 @@ import { requireAuth } from "../middleware/auth.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { findUserByNickname, validateNickname } from "../services/nicknameService.js";
 import { delistStock } from "../services/stockService.js";
+import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import { parseAdminResetTargets } from "../services/adminResetPolicy.js";
+import {
+  parseAdminUserIds,
+  resetAdminUsers,
+  setAdminUsersBalance,
+} from "../services/adminUserManagementService.js";
+import {
+  isStockMarketOpen,
+  setStockMarketOpen,
+} from "../services/marketStateService.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
@@ -16,19 +27,91 @@ adminRouter.use((req, res, next) => {
 
 adminRouter.get("/users/search", (req, res) => {
   const query = String(req.query.q || "").trim();
-  if (!query) return res.json({ users: [] });
-  const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
-  const users = db
-    .prepare(
-      `SELECT * FROM users
-       WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
-          OR nickname LIKE ? ESCAPE '\\' COLLATE NOCASE
-       ORDER BY id ASC
-       LIMIT 20`,
-    )
-    .all(pattern, pattern)
-    .map(publicUser);
-  return res.json({ users });
+  const requestedPage = Number(req.query.page || 1);
+  const requestedPageSize = Number(req.query.pageSize || 50);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0
+    ? requestedPage
+    : 1;
+  const pageSize = Number.isSafeInteger(requestedPageSize)
+    ? Math.min(100, Math.max(10, requestedPageSize))
+    : 50;
+  const offset = (page - 1) * pageSize;
+
+  let users;
+  let total;
+  if (query) {
+    const pattern = `%${query.replaceAll("%", "\\%").replaceAll("_", "\\_")}%`;
+    total = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM users
+         WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR nickname LIKE ? ESCAPE '\\' COLLATE NOCASE`,
+      )
+      .get(pattern, pattern).count;
+    users = db
+      .prepare(
+        `SELECT * FROM users
+         WHERE username LIKE ? ESCAPE '\\' COLLATE NOCASE
+            OR nickname LIKE ? ESCAPE '\\' COLLATE NOCASE
+         ORDER BY id ASC
+         LIMIT ? OFFSET ?`,
+      )
+      .all(pattern, pattern, pageSize, offset);
+  } else {
+    total = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
+    users = db
+      .prepare("SELECT * FROM users ORDER BY id ASC LIMIT ? OFFSET ?")
+      .all(pageSize, offset);
+  }
+
+  return res.json({
+    users: users.map(publicUser),
+    total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+  });
+});
+
+adminRouter.post("/users/bulk/balance", (req, res) => {
+  try {
+    const userIds = parseAdminUserIds(req.body?.userIds);
+    const newBalance = Number(req.body?.balance);
+    if (!Number.isSafeInteger(newBalance) || newBalance < 0) {
+      return res.status(400).json({ message: "올바른 정수 잔액을 입력해 주세요." });
+    }
+    const users = setAdminUsersBalance(db, {
+      adminUserId: req.user.id,
+      userIds,
+      newBalance,
+    });
+    return res.json({
+      message: `${users.length}명의 자산을 변경했어요.`,
+      users: users.map(publicUser),
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+adminRouter.post("/users/bulk/reset", (req, res) => {
+  try {
+    const userIds = parseAdminUserIds(req.body?.userIds);
+    const resetTargets = parseAdminResetTargets(req.body?.targets);
+    const users = resetAdminUsers(db, {
+      adminUserId: req.user.id,
+      userIds,
+      resetTargets,
+    });
+    return res.json({
+      message: `${users.length}명에게 선택한 ${resetTargets.length}개 초기화 항목을 적용했어요.`,
+      resetTargets,
+      users: users.map(publicUser),
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
 });
 
 adminRouter.post("/users/:userId/nickname", (req, res, next) => {
@@ -117,56 +200,19 @@ adminRouter.post("/users/:userId/balance", (req, res, next) => {
     if (!Number.isSafeInteger(targetId) || targetId < 1) {
       return res.status(400).json({ message: "대상 사용자를 확인해주세요." });
     }
-    if (isNaN(newBalance) || newBalance < 0) {
-      return res.status(400).json({ message: "올바른 잔액을 입력해주세요." });
+    if (!Number.isSafeInteger(newBalance) || newBalance < 0) {
+      return res.status(400).json({ message: "올바른 정수 잔액을 입력해 주세요." });
     }
 
-    const forceChange = db.transaction(() => {
-      const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (!admin || admin.username !== "admin") {
-        const error = new Error("관리자 권한이 필요해요.");
-        error.status = 403;
-        throw error;
-      }
-      const target = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
-      if (!target) {
-        const error = new Error("대상 사용자를 찾을 수 없어요.");
-        error.status = 404;
-        throw error;
-      }
-      
-      db.prepare(
-        `UPDATE users
-         SET balance = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ?`
-      ).run(newBalance, target.id);
-      
-      const log = db
-        .prepare(
-          `INSERT INTO admin_logs
-           (admin_user_id, target_user_id, action_type, before_value, after_value)
-           VALUES (?, ?, 'force_balance_change', ?, ?)`
-        )
-        .run(admin.id, target.id, target.balance.toString(), newBalance.toString());
-        
-      recordAssetEvent({
-        userId: target.id,
-        eventType: "admin_balance_adjustment",
-        amount: newBalance - target.balance,
-        balanceBefore: target.balance,
-        balanceAfter: newBalance,
-        sourceType: "admin_log",
-        sourceId: log.lastInsertRowid,
-        detail: {
-          label: "관리자 자산 조절"
-        },
-      });
-      return db.prepare("SELECT * FROM users WHERE id = ?").get(target.id);
+    const [updated] = setAdminUsersBalance(db, {
+      adminUserId: req.user.id,
+      userIds: [targetId],
+      newBalance,
     });
 
     return res.json({
       message: "대상 사용자의 자산을 변경했어요.",
-      user: publicUser(forceChange()),
+      user: publicUser(updated),
     });
   } catch (error) {
     return next(error);
@@ -185,14 +231,19 @@ adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("존재하지 않거나 상장폐지된 종목입니다.");
       if (stock.status === 'acquired' || stock.is_etf) throw new Error("이미 인수된 종목입니다.");
+      const ownerAsset = Math.max(
+        calculateUserTotalEvaluatedAsset(db, admin.id).totalEvaluatedAsset,
+        1,
+      );
 
       db.prepare(`
         UPDATE stocks 
         SET status = 'acquired', is_etf = 1, etf_tracking_type = 'owner_asset', 
             owner_user_id = ?, owner_nickname_snapshot = ?,
+            etf_base_price = current_price,
             etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?
         WHERE id = ?
-      `).run(admin.id, admin.nickname, admin.balance, admin.balance, stock.id);
+      `).run(admin.id, admin.nickname, ownerAsset, ownerAsset, stock.id);
 
       db.prepare(
         `INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
@@ -274,56 +325,38 @@ adminRouter.post("/impersonate/:id", async (req, res) => {
 
 adminRouter.post("/users/:id/reset", (req, res) => {
   const targetId = Number(req.params.id);
-  const target = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
-  if (!target) return res.status(404).json({ message: "유저를 찾을 수 없어요." });
-
+  if (!Number.isSafeInteger(targetId) || targetId < 1) {
+    return res.status(400).json({ message: "대상 사용자를 확인해 주세요." });
+  }
   try {
-    db.transaction(() => {
-      db.prepare("DELETE FROM game_logs WHERE user_id = ?").run(targetId);
-      db.prepare("DELETE FROM game_sessions WHERE user_id = ?").run(targetId);
-      db.prepare("DELETE FROM asset_events WHERE user_id = ?").run(targetId);
-      db.prepare("DELETE FROM transfer_logs WHERE sender_user_id = ? OR receiver_user_id = ?").run(targetId, targetId);
-      db.prepare("DELETE FROM stock_holdings WHERE user_id = ?").run(targetId);
-      db.prepare("DELETE FROM stock_positions WHERE user_id = ?").run(targetId);
-      
-      const etfs = db.prepare("SELECT * FROM stocks WHERE owner_user_id = ?").all(targetId);
-      for (const etf of etfs) {
-        delistStock(db, etf);
-      }
-
-      db.prepare(`
-        UPDATE users SET 
-          balance = 5000000, 
-          initial_balance = 5000000,
-          highest_balance = 5000000,
-          total_profit = 0,
-          total_bet = 0,
-          total_win = 0,
-          total_loss = 0,
-          bankruptcy_count = 0,
-          mine_click_count = 0,
-          mine_total_earned = 0
-        WHERE id = ?
-      `).run(targetId);
-      
-      recordAssetEvent(targetId, "admin_force_reset", 5000000 - target.balance, target.balance, 5000000);
-    })();
-
-    const updated = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
-    return res.json({ message: "해당 유저의 모든 기록이 초기화되었습니다.", user: publicUser(updated) });
+    const resetTargets = parseAdminResetTargets(req.body?.targets);
+    const [updated] = resetAdminUsers(db, {
+      adminUserId: req.user.id,
+      userIds: [targetId],
+      resetTargets,
+    });
+    return res.json({
+      message: `선택한 ${resetTargets.length}개 항목을 초기화했습니다.`,
+      resetTargets,
+      user: publicUser(updated),
+    });
   } catch (error) {
     return res.status(400).json({ message: error.message });
   }
 });
 
-adminRouter.post("/stocks/market/close", (req, res) => {
-  db.prepare("UPDATE system_config SET value = 'false' WHERE key = 'market_open'").run();
-  return res.json({ message: "주식장을 닫았습니다." });
+adminRouter.get("/stocks/market/status", (_req, res) => {
+  return res.json({ marketOpen: isStockMarketOpen(db) });
 });
 
-adminRouter.post("/stocks/market/open", (req, res) => {
-  db.prepare("UPDATE system_config SET value = 'true' WHERE key = 'market_open'").run();
-  return res.json({ message: "주식장을 열었습니다." });
+adminRouter.post("/stocks/market/close", (_req, res) => {
+  setStockMarketOpen(db, false);
+  return res.json({ message: "주식장을 닫았습니다.", marketOpen: false });
+});
+
+adminRouter.post("/stocks/market/open", (_req, res) => {
+  setStockMarketOpen(db, true);
+  return res.json({ message: "주식장을 열었습니다.", marketOpen: true });
 });
 
 adminRouter.post("/stocks/:id/suspend", (req, res) => {

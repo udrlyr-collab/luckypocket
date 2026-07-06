@@ -3,7 +3,13 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
-import { formatDate, formatMoney, formatPercent, formatSignedMoney } from "../utils/format";
+import {
+  formatDate,
+  formatKoreanNumber,
+  formatMoney,
+  formatPercent,
+  formatSignedMoney,
+} from "../utils/format";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 const rangeTabs = [
@@ -307,14 +313,53 @@ export default function ProfilePage() {
         </div>
       </section>
 
-      {user.isAdmin && <AdminPanel />}
-
       <button className="btn btn-outline btn-error mt-8 w-full rounded-2xl" onClick={logout}>로그아웃</button>
     </div>
   );
 }
 
+const adminResetOptions = [
+  {
+    key: "balance",
+    label: "자산·금액",
+    description: "잔액과 최고 자산을 500만원으로, 누적 손익을 0원으로 초기화",
+  },
+  {
+    key: "games",
+    label: "게임 기록·횟수",
+    description: "게임 로그, 진행 중 게임, 배팅액, 승리·패배 횟수를 초기화",
+  },
+  {
+    key: "achievements",
+    label: "업적",
+    description: "획득한 모든 업적과 업적 보상 기록을 초기화",
+  },
+  {
+    key: "history",
+    label: "활동 기록",
+    description: "자산 변동 기록과 보내고 받은 송금 기록을 삭제",
+  },
+  {
+    key: "stocks",
+    label: "주식·회사",
+    description: "보유 주식, 포지션, 거래 기록을 삭제하고 인수한 회사를 상장폐지",
+  },
+  {
+    key: "mine",
+    label: "탄광",
+    description: "채굴 기록, 채굴 횟수, 누적 채굴액과 마지막 채굴 시간을 초기화",
+  },
+  {
+    key: "account",
+    label: "계정 부가 상태",
+    description: "닉네임 변경 횟수, 파산 횟수·날짜와 회생 신청 기록을 초기화",
+  },
+];
+
+const allAdminResetTargets = adminResetOptions.map((option) => option.key);
+
 function AdminPanel() {
+  const { authenticate } = useAuth();
   const [query, setQuery] = useState("");
   const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -327,6 +372,14 @@ function AdminPanel() {
   const [showNicknameModal, setShowNicknameModal] = useState(false);
   const [showBalanceModal, setShowBalanceModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
+  const [resetTargets, setResetTargets] = useState(() => [...allAdminResetTargets]);
+  const [marketOpen, setMarketOpen] = useState(null);
+
+  useEffect(() => {
+    api("/admin/stocks/market/status")
+      .then((data) => setMarketOpen(data.marketOpen))
+      .catch((requestError) => setError(requestError.message));
+  }, []);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -352,6 +405,20 @@ function AdminPanel() {
   const openBalanceConfirm = () => {
     if (!selected || newBalance === "") return;
     setShowBalanceModal(true);
+  };
+
+  const openResetConfirm = () => {
+    if (!selected) return;
+    setResetTargets([...allAdminResetTargets]);
+    setShowResetModal(true);
+  };
+
+  const toggleResetTarget = (target) => {
+    setResetTargets((current) =>
+      current.includes(target)
+        ? current.filter((item) => item !== target)
+        : [...current, target],
+    );
   };
 
   const forceChangeNickname = async () => {
@@ -401,17 +468,36 @@ function AdminPanel() {
   };
 
   const forceResetUser = async () => {
+    if (!selected || resetTargets.length === 0) return;
     setShowResetModal(false);
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/users/${selected.id}/reset`, {
+        method: "POST",
+        body: JSON.stringify({ targets: resetTargets }),
+      });
+      setSelected(data.user);
+      setUsers((current) =>
+        current.map((item) => (item.id === data.user.id ? data.user : item)));
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const forceLogin = async () => {
     if (!selected) return;
     setBusy(true);
     setError("");
     setMessage("");
     try {
-      const data = await api(`/admin/users/${selected.id}/reset`, { method: "POST" });
-      setSelected(data.user);
-      setUsers((current) =>
-        current.map((item) => (item.id === data.user.id ? data.user : item)));
-      setMessage(data.message);
+      const data = await api(`/admin/impersonate/${selected.id}`, { method: "POST" });
+      await authenticate(data);
+      window.location.replace("/");
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -427,6 +513,7 @@ function AdminPanel() {
     try {
       const endpoint = open ? "/admin/stocks/market/open" : "/admin/stocks/market/close";
       const data = await api(endpoint, { method: "POST" });
+      setMarketOpen(data.marketOpen);
       setMessage(data.message);
     } catch (requestError) {
       setError(requestError.message);
@@ -535,9 +622,9 @@ function AdminPanel() {
               type="button"
               className="btn btn-error flex-1 h-12 rounded-2xl"
               disabled={busy}
-              onClick={() => setShowResetModal(true)}
+              onClick={openResetConfirm}
             >
-              유저 데이터 완전 초기화
+              초기화 항목 선택
             </button>
           </div>
         </div>
@@ -572,24 +659,29 @@ function AdminPanel() {
         />
       )}
       {showResetModal && (
-        <AdminConfirmModal
-          title="경고: 이 유저의 모든 자산과 기록을 초기화하시겠습니까?"
-          beforeLabel="기존 자산"
-          beforeValue={formatMoney(selected?.balance)}
-          afterLabel="초기화 후 자산"
-          afterValue="5,000,000 원"
+        <AdminResetModal
+          user={selected}
+          selectedTargets={resetTargets}
+          onToggle={toggleResetTarget}
+          onSelectAll={() => setResetTargets([...allAdminResetTargets])}
+          onClearAll={() => setResetTargets([])}
           onConfirm={forceResetUser}
           onClose={() => setShowResetModal(false)}
         />
       )}
       
       <div className="mt-8 border-t-2 border-primary/25 pt-6">
-        <h2 className="section-title text-xl mb-4">관리자 권한: 주식장 제어</h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="section-title text-xl">관리자 권한: 주식장 제어</h2>
+          <span className={`badge font-black ${marketOpen === false ? "badge-error" : marketOpen === true ? "badge-success" : "badge-ghost"}`}>
+            {marketOpen === false ? "휴장 중" : marketOpen === true ? "개장 중" : "상태 확인 중"}
+          </span>
+        </div>
         <div className="flex gap-2">
           <button
             type="button"
             className="btn btn-success flex-1 h-12 rounded-2xl"
-            disabled={busy}
+            disabled={busy || marketOpen === true}
             onClick={() => toggleMarket(true)}
           >
             주식장 개장
@@ -597,7 +689,7 @@ function AdminPanel() {
           <button
             type="button"
             className="btn btn-error flex-1 h-12 rounded-2xl"
-            disabled={busy}
+            disabled={busy || marketOpen === false}
             onClick={() => toggleMarket(false)}
           >
             주식장 휴장 (정지)
@@ -605,6 +697,107 @@ function AdminPanel() {
         </div>
       </div>
     </section>
+  );
+}
+
+function AdminResetModal({
+  user,
+  selectedTargets,
+  onToggle,
+  onSelectAll,
+  onClearAll,
+  onConfirm,
+  onClose,
+}) {
+  const hasSelection = selectedTargets.length > 0;
+  const allSelected = selectedTargets.length === adminResetOptions.length;
+
+  return (
+    <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="admin-reset-title">
+      <div className="modal-box max-h-[90vh] max-w-3xl overflow-y-auto rounded-[2rem] p-5 sm:p-7">
+        <div className="text-center">
+          <p className="eyebrow">Selective reset</p>
+          <h2 id="admin-reset-title" className="mt-1 text-xl font-black text-error sm:text-2xl">
+            초기화할 항목을 선택해 주세요
+          </h2>
+          <p className="mt-2 text-sm text-base-content/65">
+            <strong>{user?.nickname}</strong> (@{user?.username}) 계정에서 선택한 데이터만 초기화합니다.
+          </p>
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-2">
+          <span className="text-sm font-bold">
+            {selectedTargets.length} / {adminResetOptions.length}개 선택
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm whitespace-nowrap rounded-xl"
+              disabled={allSelected}
+              onClick={onSelectAll}
+            >
+              전체 선택
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm whitespace-nowrap rounded-xl"
+              disabled={!hasSelection}
+              onClick={onClearAll}
+            >
+              전체 해제
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {adminResetOptions.map((option) => {
+            const checked = selectedTargets.includes(option.key);
+            return (
+              <label
+                key={option.key}
+                className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-4 transition ${
+                  checked
+                    ? "border-error/50 bg-error/10"
+                    : "border-base-300 bg-base-100"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-error mt-0.5 shrink-0"
+                  checked={checked}
+                  onChange={() => onToggle(option.key)}
+                />
+                <span className="min-w-0">
+                  <strong className="block text-sm">{option.label}</strong>
+                  <span className="mt-1 block text-xs leading-relaxed text-base-content/55">
+                    {option.description}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+
+        <p className="mt-4 rounded-2xl bg-warning/15 px-4 py-3 text-xs leading-relaxed text-base-content/70">
+          초기화한 데이터는 복구할 수 없습니다. 자산을 선택하면 현재 잔액은 5,000,000원으로 설정됩니다.
+        </p>
+
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <button type="button" className="btn btn-outline rounded-2xl" onClick={onClose}>
+            취소
+          </button>
+          <button
+            type="button"
+            className="btn btn-error rounded-2xl"
+            disabled={!hasSelection}
+            onClick={onConfirm}
+          >
+            선택 항목 초기화
+          </button>
+        </div>
+      </div>
+      <button className="modal-backdrop" type="button" aria-label="닫기" onClick={onClose} />
+    </div>
   );
 }
 
@@ -719,8 +912,7 @@ function AssetChart({ points, range, scaleMode }) {
         ? { weekday: "short", month: "numeric", day: "numeric", timeZone: "Asia/Seoul" }
         : { month: "numeric", day: "numeric", timeZone: "Asia/Seoul" }).format(new Date(value));
 
-  const compactMoney = (value) =>
-    `${Math.round(value).toLocaleString("ko-KR")}`;
+  const compactMoney = (value) => formatKoreanNumber(value, 1);
 
   if (points.length < 2) {
     return <div className="empty-state py-16">아직 표시할 변화가 충분하지 않아요.</div>;

@@ -4,15 +4,17 @@ import { requireAuth } from "../middleware/auth.js";
 import { serializeAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { canPromptBankruptcy } from "../services/bankruptcyService.js";
+import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
 
 export const meRouter = Router();
 meRouter.use(requireAuth);
 
 meRouter.get("/", (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  if (req.user.isAdmin) user.isAdmin = true;
   const todayProfit = db
     .prepare(
-      `SELECT COALESCE(SUM(profit), 0) AS value
+      `SELECT TOTAL(profit) AS value
        FROM game_logs
        WHERE user_id = ? AND date(created_at, '+9 hours') = date('now', '+9 hours')`,
     )
@@ -28,9 +30,12 @@ meRouter.get("/", (req, res) => {
     .get(user.balance).rank;
   const totalUsers = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
 
+  const { totalEvaluatedAsset } = calculateUserTotalEvaluatedAsset(db, user.id);
+
   return res.json({
     user: {
       ...publicUser(user),
+      totalAsset: totalEvaluatedAsset,
       todayProfit,
       achievements,
       revivalsRemaining: Math.max(0, 3 - revivalCount),

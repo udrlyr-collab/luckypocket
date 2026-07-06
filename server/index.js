@@ -21,8 +21,12 @@ import { serverStatsRouter } from "./routes/serverStats.js";
 import { mineRouter } from "./routes/mine.js";
 import { stocksRouter } from "./routes/stocks.js";
 import { initStockMarket, tickStockMarket } from "./services/stockService.js";
+import { readClientAssetVersion } from "./services/clientVersionService.js";
 
 const app = express();
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.resolve(currentDir, "../dist");
+const clientAssetVersion = readClientAssetVersion(path.join(distPath, "index.html"));
 if (config.trustProxy) app.set("trust proxy", 1);
 
 app.use(
@@ -85,6 +89,14 @@ app.use(
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", service: "haengun-pocket" });
 });
+app.get("/api/version", (_req, res) => {
+  res.set({
+    "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+    Pragma: "no-cache",
+    Expires: "0",
+  });
+  res.json({ version: clientAssetVersion });
+});
 app.use("/api/auth", authRouter);
 app.use("/api/bonus-code", bonusCodesRouter);
 app.use("/api/me", meRouter);
@@ -106,11 +118,14 @@ app.use("/api", (_req, res) => {
 });
 
 if (config.isProduction) {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const distPath = path.resolve(currentDir, "../dist");
   app.use(express.static(distPath, { maxAge: "1d", index: false }));
   app.use((req, res, next) => {
     if (req.method !== "GET") return next();
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      Pragma: "no-cache",
+      Expires: "0",
+    });
     return res.sendFile(path.join(distPath, "index.html"));
   });
 }

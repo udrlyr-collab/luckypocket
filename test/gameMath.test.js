@@ -6,12 +6,13 @@ import {
   RISK_STAGES,
   bombStage,
   bombSurvivalChance,
+  calculateSlotPayout,
   classifySlot,
   isDartWin,
   payoutFor,
 } from "../server/services/gameMath.js";
 
-test("all configured single-outcome games have positive player expectation", () => {
+test("all configured single-outcome games have RTP above 100%", () => {
   for (const stage of RISK_STAGES) {
     assert.ok(stage.cumulativeChance * stage.multiplier > 1);
   }
@@ -19,7 +20,7 @@ test("all configured single-outcome games have positive player expectation", () 
     for (let safeCount = 1; safeCount <= 16 - bombCount; safeCount += 1) {
       const stage = bombStage(bombCount, safeCount);
       assert.ok(stage.chance * stage.multiplier > 1);
-      assert.ok(stage.targetRtp <= 1.15);
+      assert.equal(stage.targetRtp, 1.02);
     }
   }
   for (const spec of Object.values(CARD_BETS)) {
@@ -40,14 +41,26 @@ test("slot classifier produces the documented 1000-outcome distribution", () => 
     }
   }
   assert.deepEqual(counts, { "777": 1, triple: 9, sequence: 16, pair: 270, miss: 704 });
-  const rtp = (1 * 170 + 9 * 27 + 16 * 8.8 + 270 * 1.75) / 1000;
-  assert.equal(rtp, 1.0263);
+  const nonJackpotRtp = (9 * 27 + 16 * 8.8 + 270 * 1.75) / 1000;
+  assert.equal(nonJackpotRtp, 0.8563);
+});
+
+test("slot 777 makes the pre-game cash balance exactly 777 times larger", () => {
+  const balance = 1_000_000;
+  const bet = 10_000;
+  const outcome = classifySlot([7, 7, 7]);
+  const payout = calculateSlotPayout({ balance, bet, outcome });
+
+  assert.equal(outcome.balanceMultiplier, 777);
+  assert.equal(payout, 776_010_000);
+  assert.equal(balance - bet + payout, balance * 777);
+  assert.equal(payout - bet, balance * 776);
 });
 
 test("4x4 bomb survival probability follows the combination formula", () => {
   assert.equal(bombSurvivalChance(2, 1), 14 / 16);
   assert.equal(bombSurvivalChance(8, 8), 1 / 12870);
-  assert.equal(bombStage(2, 1).multiplier, 1.2);
+  assert.equal(bombStage(2, 1).multiplier, 1.17);
 });
 
 test("dart target checks radius and sector together", () => {
@@ -60,5 +73,5 @@ test("dart target checks radius and sector together", () => {
 
 test("payouts use integer won amounts and represent gross payment", () => {
   assert.equal(payoutFor(10000, 2.04), 20400);
-  assert.equal(payoutFor(1000, 1.17), 1170);
+  assert.equal(payoutFor(1000, 1.16), 1160);
 });

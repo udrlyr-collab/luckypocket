@@ -6,6 +6,7 @@ import {
   DART_BETS,
   RISK_STAGES,
   bombStage,
+  calculateSlotPayout,
   chance,
   classifySlot,
   createBombPositions,
@@ -415,13 +416,25 @@ gamesRouter.post("/slot/play", (req, res, next) => {
       const bet = validateBet(user, req.body.betAmount);
       const numbers = spinSlot();
       const outcome = classifySlot(numbers);
-      const payout = outcome.multiplier ? payoutFor(bet, outcome.multiplier) : 0;
+      const payout = calculateSlotPayout({
+        balance: user.balance,
+        bet,
+        outcome,
+      });
+      const detail = outcome.outcome === "777"
+        ? {
+            numbers,
+            ...outcome,
+            jackpotBalanceBefore: user.balance,
+            jackpotBalanceAfter: user.balance * outcome.balanceMultiplier,
+          }
+        : { numbers, ...outcome };
       return finishInstantGame({
         user,
         gameType: "slot",
         bet,
         payout,
-        detail: { numbers, ...outcome },
+        detail,
         achievementContext: { outcome: outcome.outcome },
       });
     });

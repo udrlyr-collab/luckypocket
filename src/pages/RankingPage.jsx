@@ -55,6 +55,7 @@ export default function RankingPage() {
   const [type, setType] = useState("currentBalance");
   const [data, setData] = useState({ rankings: [], myStats: null, myRank: null });
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [isDateFilterOpen, setIsDateFilterOpen] = useState(false);
   
   const myRankRef = useRef(null);
@@ -70,15 +71,10 @@ export default function RankingPage() {
 
   useEffect(() => {
     setLoading(true);
+    setError("");
     api(`/leaderboard?date=${date}&period=${period}&type=${type}`)
       .then(setData)
-      .finally(() => setLoading(false));
-  }, [date, period, type, user.balance]);
-
-  useEffect(() => {
-    setLoading(true);
-    api(`/leaderboard?date=${date}&period=${period}&type=${type}`)
-      .then(setData)
+      .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
   }, [date, period, type, user.balance]);
 
@@ -148,7 +144,11 @@ export default function RankingPage() {
         )}
       </section>
 
-      {loading ? (
+      {error ? (
+        <div className="alert alert-error mt-5 rounded-2xl">
+          <span>{error}</span>
+        </div>
+      ) : loading ? (
         <div className="loading-block mt-5" />
       ) : (
         <div className="ranking-transition">

@@ -27,7 +27,7 @@ export default function AuthPage() {
         method: "POST",
         body: JSON.stringify(form),
       });
-      authenticate(data);
+      await authenticate(data);
     } catch (requestError) {
       setError(requestError.message);
     } finally {

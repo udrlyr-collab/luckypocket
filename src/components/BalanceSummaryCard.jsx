@@ -19,9 +19,9 @@ export default function BalanceSummaryCard({ user }) {
       </div>
 
       <div className="balance-summary-main">
-        <span className="summary-label">현재 자산</span>
+        <span className="summary-label">총 평가 자산</span>
         <strong className="balance-summary-amount">
-          <AnimatedMoney value={user.balance} />
+          <AnimatedMoney value={user.totalAsset || user.balance} />
         </strong>
         <span className={`mt-2 inline-flex items-center gap-1 text-sm font-black tabular-nums ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
           {todayProfit >= 0 ? "↗" : "↘"} 오늘 손익 {formatSignedMoney(todayProfit)}

@@ -27,6 +27,21 @@ transferRouter.post("/", (req, res, next) => {
         error.status = 400;
         throw error;
       }
+      const receiverOwnsCompany = db
+        .prepare(
+          `SELECT 1
+           FROM stocks
+           WHERE owner_user_id = ?
+             AND is_etf = 1
+             AND status = 'acquired'
+           LIMIT 1`,
+        )
+        .get(receiver.id);
+      if (receiverOwnsCompany) {
+        const error = new Error("회사를 인수한 사용자는 다른 플레이어의 송금을 받을 수 없어요.");
+        error.status = 400;
+        throw error;
+      }
       if (amount > sender.balance) {
         const error = new Error("자산이 부족해요.");
         error.status = 400;

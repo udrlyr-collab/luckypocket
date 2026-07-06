@@ -1,41 +1,41 @@
 import { randomBytes, randomInt } from "node:crypto";
 
 export const RISK_STAGES = [
-  { stepChance: 0.88, cumulativeChance: 0.88, multiplier: 1.17 },
-  { stepChance: 0.75, cumulativeChance: 0.66, multiplier: 1.58 },
-  { stepChance: 0.62, cumulativeChance: 0.4092, multiplier: 2.6 },
-  { stepChance: 0.48, cumulativeChance: 0.196416, multiplier: 5.55 },
-  { stepChance: 0.33, cumulativeChance: 0.06481728, multiplier: 17.2 },
-  { stepChance: 0.21, cumulativeChance: 0.0136116288, multiplier: 84 },
-  { stepChance: 0.1, cumulativeChance: 0.00136116288, multiplier: 850 },
+  { stepChance: 0.88, cumulativeChance: 0.88, multiplier: 1.16 },
+  { stepChance: 0.75, cumulativeChance: 0.66, multiplier: 1.55 },
+  { stepChance: 0.62, cumulativeChance: 0.4092, multiplier: 2.5 },
+  { stepChance: 0.48, cumulativeChance: 0.196416, multiplier: 5.2 },
+  { stepChance: 0.33, cumulativeChance: 0.06481728, multiplier: 15.74 },
+  { stepChance: 0.21, cumulativeChance: 0.0136116288, multiplier: 74.94 },
+  { stepChance: 0.1, cumulativeChance: 0.00136116288, multiplier: 749.36 },
 ];
 
 export const CARD_BETS = {
   odd: { label: "홀수", chance: 0.5, multiplier: 2.04, test: (n) => n % 2 === 1 },
   even: { label: "짝수", chance: 0.5, multiplier: 2.04, test: (n) => n % 2 === 0 },
-  ge7: { label: "7 이상", chance: 0.4, multiplier: 2.6, test: (n) => n >= 7 },
-  ge8: { label: "8 이상", chance: 0.3, multiplier: 3.5, test: (n) => n >= 8 },
-  ge9: { label: "9 이상", chance: 0.2, multiplier: 5.3, test: (n) => n >= 9 },
-  exact: { label: "정확한 숫자", chance: 0.1, multiplier: 10.7 },
+  ge7: { label: "7 이상", chance: 0.4, multiplier: 2.55, test: (n) => n >= 7 },
+  ge8: { label: "8 이상", chance: 0.3, multiplier: 3.4, test: (n) => n >= 8 },
+  ge9: { label: "9 이상", chance: 0.2, multiplier: 5.1, test: (n) => n >= 9 },
+  exact: { label: "정확한 숫자", chance: 0.1, multiplier: 10.2 },
 };
 
 export const DART_BETS = {
-  wide: { label: "넓은 원", chance: 0.49, multiplier: 2.1, radius: 0.7 },
-  middle: { label: "중간 원", chance: 0.25, multiplier: 4.15, radius: 0.5 },
-  small: { label: "작은 원", chance: 0.0625, multiplier: 16.8, radius: 0.25 },
-  bullseye: { label: "불스아이", chance: 0.01, multiplier: 108, radius: 0.1 },
-  sector: { label: "특정 섹터", chance: 0.05, multiplier: 20.8, needsSector: true },
+  wide: { label: "넓은 원", chance: 0.49, multiplier: 2.09, radius: 0.7 },
+  middle: { label: "중간 원", chance: 0.25, multiplier: 4.08, radius: 0.5 },
+  small: { label: "작은 원", chance: 0.0625, multiplier: 16.32, radius: 0.25 },
+  bullseye: { label: "불스아이", chance: 0.01, multiplier: 102, radius: 0.1 },
+  sector: { label: "특정 섹터", chance: 0.05, multiplier: 20.4, needsSector: true },
   sector_middle: {
     label: "섹터 + 중간 원",
     chance: 0.0125,
-    multiplier: 84,
+    multiplier: 81.6,
     radius: 0.5,
     needsSector: true,
   },
   sector_bullseye: {
     label: "섹터 + 불스아이",
     chance: 0.0005,
-    multiplier: 2150,
+    multiplier: 2040,
     radius: 0.1,
     needsSector: true,
     event: true,
@@ -88,7 +88,7 @@ export function bombStage(bombCount, safeOpened) {
     };
   }
   const chanceValue = bombSurvivalChance(bombCount, safeOpened);
-  const targetRtp = Math.min(1.15, 1.03 + safeOpened * 0.01 + bombCount * 0.004);
+  const targetRtp = 1.02;
   return {
     chance: chanceValue,
     targetRtp,
@@ -108,7 +108,12 @@ export function spinSlot() {
 export function classifySlot(numbers) {
   const code = numbers.join("");
   if (code === "777") {
-    return { outcome: "777", label: "777 잭팟", multiplier: 170 };
+    return {
+      outcome: "777",
+      label: "777 잭팟",
+      multiplier: null,
+      balanceMultiplier: 777,
+    };
   }
   if (new Set(numbers).size === 1) {
     return { outcome: "triple", label: "같은 숫자 3개", multiplier: 27 };
@@ -120,6 +125,14 @@ export function classifySlot(numbers) {
     return { outcome: "pair", label: "같은 숫자 2개", multiplier: 1.75 };
   }
   return { outcome: "miss", label: "다음 행운을 기다려요", multiplier: 0 };
+}
+
+export function calculateSlotPayout({ balance, bet, outcome }) {
+  if (outcome.outcome === "777") {
+    const targetBalance = balance * outcome.balanceMultiplier;
+    return Math.floor(targetBalance - balance + bet);
+  }
+  return outcome.multiplier ? payoutFor(bet, outcome.multiplier) : 0;
 }
 
 export function throwDart() {

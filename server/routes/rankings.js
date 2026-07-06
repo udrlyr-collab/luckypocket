@@ -90,15 +90,15 @@ rankingsRouter.get("/", (req, res, next) => {
         `WITH event_stats AS (
            SELECT
              user_id,
-             COALESCE(SUM(CASE
+             TOTAL(CASE
                WHEN event_type IN ('game_win', 'achievement_reward', 'bonus_code', 'support_grant', 'stock_sell', 'stock_position_close', 'stock_acquire_refund')
                  AND amount > 0
-               THEN amount ELSE 0 END), 0) AS today_earned,
-             COALESCE(SUM(CASE
+               THEN amount ELSE 0 END) AS today_earned,
+             TOTAL(CASE
                WHEN (event_type = 'game_loss' OR event_type IN ('stock_buy', 'stock_ipo_subscribe', 'stock_margin_buy', 'stock_acquire')) AND amount < 0
-               THEN -amount ELSE 0 END), 0) AS today_lost,
-             COALESCE(SUM(CASE WHEN event_type = 'transfer_in' THEN amount ELSE 0 END), 0) AS transfer_received,
-             COALESCE(SUM(CASE WHEN event_type = 'transfer_out' THEN -amount ELSE 0 END), 0) AS transfer_sent
+               THEN -amount ELSE 0 END) AS today_lost,
+             TOTAL(CASE WHEN event_type = 'transfer_in' THEN amount ELSE 0 END) AS transfer_received,
+             TOTAL(CASE WHEN event_type = 'transfer_out' THEN -amount ELSE 0 END) AS transfer_sent
            FROM asset_events
            WHERE julianday(created_at) >= julianday(?)
              AND julianday(created_at) < julianday(?)

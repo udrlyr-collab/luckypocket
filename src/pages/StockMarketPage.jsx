@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
+import { StockRiskBadges } from "../components/StockRiskStatus";
 
 export default function StockMarketPage() {
   const [market, setMarket] = useState(null);
@@ -17,7 +18,8 @@ export default function StockMarketPage() {
       setMarket(prev => ({
         ...prev,
         stocks: data.stocks,
-        summary: prev ? prev.summary : { listed: data.stocks.length }
+        summary: prev ? prev.summary : { listed: data.stocks.length },
+        marketOpen: data.marketOpen,
       }));
       setPortfolio(data.portfolio);
       setTimer(data.nextTickInSeconds);
@@ -91,7 +93,8 @@ export default function StockMarketPage() {
       <div className="mb-6 rounded-2xl bg-base-200 p-4 text-center">
         <p className="text-sm font-bold text-base-content/70">
           실제 투자가 아닌 행운주머니 내부 수치 게임입니다.<br />
-          현금 결제·출금이 없는 가상 주식 시장이에요.
+          현금 결제·출금이 없는 가상 주식 시장이에요.<br />
+          시가총액이 3틱 연속 60억원 미만이면 거래주의, 50억원 미만이면 상장폐지 심사에 들어갑니다.
         </p>
       </div>
 
@@ -105,6 +108,12 @@ export default function StockMarketPage() {
           <p className="text-xl font-black text-primary">{timer}초</p>
         </div>
       </header>
+
+      {market.marketOpen === false && (
+        <div className="alert alert-warning mb-6 rounded-2xl font-bold">
+          <span>⏸ 현재 주식장은 휴장 중이에요. 가격 갱신과 모든 거래가 일시 중지됐어요.</span>
+        </div>
+      )}
 
       <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
@@ -258,7 +267,7 @@ function StockRow({ stock }) {
           {stock.status === 'ipo_subscription' && <span className="badge badge-warning badge-xs py-1 font-bold">공모주</span>}
           {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
-          {stock.status === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">거래 주의</span>}
+          <StockRiskBadges stock={stock} compact />
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
           {stock.is_trading_suspended === 1 && <span className="badge badge-error badge-xs py-1 font-bold">거래 정지</span>}

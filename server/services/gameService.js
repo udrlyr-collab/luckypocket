@@ -2,6 +2,7 @@ import { db } from "../db.js";
 import { awardAchievements } from "./achievementService.js";
 import { recordAssetEvent } from "./assetEventService.js";
 import { createGameNotification } from "./serverNotificationService.js";
+import { formatWon } from "../utils/formatWon.js";
 
 export class GameError extends Error {
   constructor(message, status = 400) {
@@ -27,7 +28,7 @@ export function validateBet(user, value, absoluteCap = Number.POSITIVE_INFINITY)
   const ratioCap = Math.floor(user.balance * 0.5);
   const maximum = Math.min(ratioCap, absoluteCap);
   if (bet > maximum) {
-    throw new GameError(`현재 최대 배팅금은 ${maximum.toLocaleString("ko-KR")}원이에요.`);
+    throw new GameError(`현재 최대 배팅금은 ${formatWon(maximum)}이에요.`);
   }
   if (bet > user.balance) {
     throw new GameError("현재 자산보다 많이 배팅할 수 없어요.");

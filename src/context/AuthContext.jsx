@@ -32,10 +32,13 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener("lucky-pocket-auth-expired", expire);
   }, [refreshUser]);
 
-  const authenticate = useCallback((result) => {
+  const authenticate = useCallback(async (result) => {
     setToken(result.token);
     setUser(result.user);
-    refreshUser();
+    setLoading(false);
+    const refreshed = await refreshUser();
+    if (!refreshed) setUser(result.user);
+    return refreshed || result.user;
   }, [refreshUser]);
 
   const logout = useCallback(() => {

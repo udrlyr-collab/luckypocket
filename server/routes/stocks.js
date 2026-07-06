@@ -2,14 +2,22 @@ import express from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
-import { delistStock, recalculateOwnerEtfs } from "../services/stockService.js";
+import {
+  delistStock,
+  recalculateOwnerEtfs,
+  requiredCompanyAcquisitionBalance,
+  STOCK_MARKET_POLICY,
+} from "../services/stockService.js";
 import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
+import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import {
+  assertStockMarketOpen,
+  isStockMarketOpen,
+} from "../services/marketStateService.js";
+import { formatWon } from "../utils/formatWon.js";
 
 function assertCanTradeStock(user, stock) {
-  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
-  if (marketOpenConfig && marketOpenConfig.value === 'false') {
-    throw new Error("현재 주식장이 닫혀 있어 거래할 수 없습니다.");
-  }
+  assertStockMarketOpen(db);
   if (stock.is_trading_suspended) {
     throw new Error("해당 종목은 현재 거래가 정지되었습니다.");
   }
@@ -59,7 +67,12 @@ stocksRouter.get("/", (req, res) => {
     delisted: db.prepare("SELECT COUNT(*) as c FROM stocks WHERE status = 'delisted'").get().c
   };
 
-  res.json({ stocks, recentDelistedStocks, summary });
+  res.json({
+    stocks,
+    recentDelistedStocks,
+    summary,
+    marketOpen: isStockMarketOpen(db),
+  });
 });
 
 stocksRouter.get("/news", (req, res) => {
@@ -143,13 +156,10 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     };
   };
 
-  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
-  const marketOpen = marketOpenConfig ? marketOpenConfig.value === 'true' : true;
-
   res.json({
     serverTime: new Date(now).toISOString(),
     nextTickInSeconds,
-    marketOpen,
+    marketOpen: isStockMarketOpen(db),
     stocks: stocksRaw.map(processStock),
     portfolio: { ...portfolio, holdings, positions }
   });
@@ -181,11 +191,39 @@ stocksRouter.get("/:id", (req, res) => {
 
   const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, id);
   const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(req.user.id, id);
+  let hostileTakeover = null;
+  if (
+    stock.status === "acquired" &&
+    stock.is_etf === 1 &&
+    stock.owner_user_id &&
+    stock.owner_user_id !== req.user.id
+  ) {
+    const defender = db
+      .prepare("SELECT balance FROM users WHERE id = ?")
+      .get(stock.owner_user_id);
+    if (defender) {
+      const cost = Math.floor(defender.balance * 0.2);
+      hostileTakeover = {
+        cost,
+        requiredBalance: requiredCompanyAcquisitionBalance(cost),
+        balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
+      };
+    }
+  }
 
-  const marketOpenConfig = db.prepare("SELECT value FROM system_config WHERE key = 'market_open'").get();
-  const marketOpen = marketOpenConfig ? marketOpenConfig.value === 'true' : true;
-
-  res.json({ stock: stockWithCalculations, history, holding, positions, marketOpen });
+  res.json({
+    stock: stockWithCalculations,
+    history,
+    holding,
+    positions,
+    marketOpen: isStockMarketOpen(db),
+    acquisition: {
+      cost: stock.market_cap,
+      requiredBalance: requiredCompanyAcquisitionBalance(stock.market_cap),
+      balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
+    },
+    hostileTakeover,
+  });
 });
 
 stocksRouter.post("/buy", (req, res) => {
@@ -315,6 +353,8 @@ stocksRouter.post("/sell", (req, res) => {
         }
         throw new Error("거래할 수 없는 종목입니다.");
       }
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      assertCanTradeStock(user, stock);
 
       const sellQuantity = holding.quantity * fraction;
       const sellAmount = Math.floor(sellQuantity * stock.current_price);
@@ -323,7 +363,6 @@ stocksRouter.post("/sell", (req, res) => {
       const newQuantity = holding.quantity - sellQuantity;
       db.prepare("UPDATE stock_holdings SET quantity = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, holding.id);
 
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       const balanceAfter = user.balance + sellAmount;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
@@ -343,7 +382,7 @@ stocksRouter.post("/sell", (req, res) => {
           nickname: user.nickname,
           type: "stock_big_profit",
           title: "주식 대박",
-          message: `${user.nickname}님이 주식 현물 투자로 ${realizedPnl.toLocaleString()}원의 수익을 실현했어요!`,
+          message: `${user.nickname}님이 주식 현물 투자로 ${formatWon(realizedPnl)}의 수익을 실현했어요!`,
           amount: realizedPnl,
           gameType: "stock",
           gameName: "주식"
@@ -420,6 +459,9 @@ stocksRouter.post("/close-position", (req, res) => {
       if (!position) throw new Error("포지션을 찾을 수 없어요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(position.stock_id);
+      if (!stock) throw new Error("종목을 찾을 수 없어요.");
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      assertCanTradeStock(user, stock);
       const closePrice = (stock && stock.status !== 'delisted') ? stock.current_price : 0;
 
       const unrealizedPnl = (closePrice - position.entry_price) * position.quantity;
@@ -432,7 +474,6 @@ stocksRouter.post("/close-position", (req, res) => {
         WHERE id = ?
       `).run(unrealizedPnl, position.id);
 
-      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       const balanceAfter = user.balance + finalPayout;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
@@ -452,7 +493,7 @@ stocksRouter.post("/close-position", (req, res) => {
           nickname: user.nickname,
           type: "stock_big_profit",
           title: "레버리지 대박",
-          message: `${user.nickname}님이 ${position.leverage}배 레버리지로 ${Math.floor(unrealizedPnl).toLocaleString()}원의 수익을 올렸어요!`,
+          message: `${user.nickname}님이 ${position.leverage}배 레버리지로 ${formatWon(Math.floor(unrealizedPnl))}의 수익을 올렸어요!`,
           amount: unrealizedPnl,
           gameType: "stock",
           gameName: "주식"
@@ -478,9 +519,15 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
 
       if (!stock || stock.status === 'delisted') throw new Error("인수할 수 없는 종목입니다.");
+      assertCanTradeStock(user, stock);
       if (stock.is_bluechip === 1) throw new Error("우량주는 인수할 수 없습니다.");
       if (stock.is_etf || stock.status === 'acquired') throw new Error("이미 인수된 종목입니다.");
-      if (user.balance < stock.market_cap) throw new Error(`시가총액(${stock.market_cap.toLocaleString()}원)보다 잔액이 부족해요.`);
+      const requiredBalance = requiredCompanyAcquisitionBalance(stock.market_cap);
+      if (user.balance < requiredBalance) {
+        throw new Error(
+          `회사를 인수하려면 인수 금액의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredBalance)})를 보유해야 해요.`,
+        );
+      }
 
       const existingEtf = db.prepare("SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'").get(userId);
       if (existingEtf) throw new Error("인수자 ETF는 한 개만 보유할 수 있습니다.");
@@ -528,15 +575,20 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const balanceAfter = user.balance - cost;
       
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
+      const ownerAsset = Math.max(
+        calculateUserTotalEvaluatedAsset(db, userId).totalEvaluatedAsset,
+        1,
+      );
       
       db.prepare(`
         UPDATE stocks 
         SET status = 'acquired', is_etf = 1, etf_tracking_type = 'owner_asset', 
             owner_user_id = ?, owner_nickname_snapshot = ?,
+            etf_base_price = current_price,
             etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
             etf_acquisition_cost = ?
         WHERE id = ?
-      `).run(userId, user.nickname, user.balance, user.balance, cost, id);
+      `).run(userId, user.nickname, ownerAsset, ownerAsset, cost, id);
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
@@ -579,6 +631,7 @@ stocksRouter.post("/:id/revert-by-owner", (req, res) => {
       if (stock.owner_user_id !== userId) throw new Error("본인이 인수한 종목만 되돌릴 수 있습니다.");
 
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      assertStockMarketOpen(db);
       const refund = stock.etf_acquisition_cost ? Math.floor(stock.etf_acquisition_cost * 0.5) : 0;
       const newBalance = user.balance + refund;
 
@@ -635,12 +688,30 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
 
       const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(attackerId);
       const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
+      assertCanTradeStock(attacker, stock);
 
       if (!defender) throw new Error("기존 소유자를 찾을 수 없습니다.");
+      const attackerHolding = db
+        .prepare("SELECT quantity FROM stock_holdings WHERE user_id = ? AND stock_id = ?")
+        .get(attackerId, stock.id);
+      if (attackerHolding?.quantity > 0) {
+        throw new Error("적대적 M&A 전에 해당 ETF 보유분을 먼저 매도해 주세요.");
+      }
+      const attackerPosition = db
+        .prepare(
+          "SELECT id FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'",
+        )
+        .get(attackerId, stock.id);
+      if (attackerPosition) {
+        throw new Error("적대적 M&A 전에 해당 ETF 레버리지 포지션을 먼저 청산해 주세요.");
+      }
 
       const cost = Math.floor(defender.balance * 0.2);
-      if (attacker.balance < cost) {
-        throw new Error(`상대방 전체 재산의 20%(${cost.toLocaleString()}원)보다 잔액이 부족해요.`);
+      const requiredBalance = requiredCompanyAcquisitionBalance(cost);
+      if (attacker.balance < requiredBalance) {
+        throw new Error(
+          `적대적 M&A를 하려면 인수 비용의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredBalance)})를 보유해야 해요.`,
+        );
       }
 
       const attackerBalanceAfter = attacker.balance - cost;
@@ -660,14 +731,20 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
         VALUES (?, 'hostile_takeover_receive', ?, ?, ?, ?)
       `).run(defender.id, cost, defender.balance, defenderBalanceAfter, id);
 
+      const attackerAsset = Math.max(
+        calculateUserTotalEvaluatedAsset(db, attackerId).totalEvaluatedAsset,
+        1,
+      );
+
       // Transfer ETF ownership
       db.prepare(`
         UPDATE stocks 
         SET owner_user_id = ?, owner_nickname_snapshot = ?,
+            etf_base_price = current_price,
             etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
             etf_acquisition_cost = ?
         WHERE id = ?
-      `).run(attacker.id, attacker.nickname, attacker.balance, attacker.balance, cost, id);
+      `).run(attacker.id, attacker.nickname, attackerAsset, attackerAsset, cost, id);
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
@@ -716,6 +793,7 @@ stocksRouter.post("/:id/delist-by-owner", (req, res) => {
       
       if (!stock || stock.status !== 'acquired' || !stock.is_etf) throw new Error("상장폐지할 수 없는 상태입니다.");
       if (stock.owner_user_id !== userId) throw new Error("회사의 소유자만 상장폐지할 수 있어요.");
+      assertStockMarketOpen(db);
 
       delistStock(db, stock);
 

@@ -1,6 +1,4 @@
-function formatWon(value) {
-  return `${Number(value || 0).toLocaleString("ko-KR")}원`;
-}
+import { formatWon } from "../utils/formatWon.js";
 
 export const GAME_NAMES = {
   "risk-button": "위험버튼",

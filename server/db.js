@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { config } from "./config.js";
+import { calculateUserTotalEvaluatedAsset } from "./services/portfolioValuationService.js";
+import {
+  enforceStockMarketLimit,
+  initializeStockDelistingLifecycle,
+} from "./services/stockService.js";
 
 fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
 
@@ -218,6 +223,18 @@ db.exec(`
     owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     owner_nickname_snapshot TEXT,
     is_etf INTEGER NOT NULL DEFAULT 0 CHECK (is_etf IN (0, 1)),
+    is_trading_suspended INTEGER NOT NULL DEFAULT 0 CHECK (is_trading_suspended IN (0, 1)),
+    is_market_cap_warning INTEGER NOT NULL DEFAULT 0 CHECK (is_market_cap_warning IN (0, 1)),
+    delist_risk_status TEXT NOT NULL DEFAULT 'normal',
+    caution_tick_count INTEGER NOT NULL DEFAULT 0,
+    recovery_started_at TEXT,
+    recovery_tick_count INTEGER NOT NULL DEFAULT 0,
+    recovery_required_ticks INTEGER NOT NULL DEFAULT 60,
+    delist_review_started_at TEXT,
+    delist_review_tick_count INTEGER NOT NULL DEFAULT 0,
+    delist_review_max_ticks INTEGER NOT NULL DEFAULT 180,
+    final_crash_at TEXT,
+    final_crash_reason TEXT,
     etf_tracking_type TEXT,
     etf_base_price INTEGER,
     etf_base_top_balance INTEGER,
@@ -307,6 +324,11 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_stock_events_stock
     ON stock_events(stock_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS system_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
 
 const stockColumns = new Set(
@@ -327,6 +349,50 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
 if (!stockColumns.has("is_bluechip")) {
   db.exec("ALTER TABLE stocks ADD COLUMN is_bluechip INTEGER NOT NULL DEFAULT 0");
 }
+if (!stockColumns.has("is_trading_suspended")) {
+  db.exec(
+    "ALTER TABLE stocks ADD COLUMN is_trading_suspended INTEGER NOT NULL DEFAULT 0 CHECK (is_trading_suspended IN (0, 1))",
+  );
+}
+if (!stockColumns.has("is_market_cap_warning")) {
+  db.exec(
+    "ALTER TABLE stocks ADD COLUMN is_market_cap_warning INTEGER NOT NULL DEFAULT 0 CHECK (is_market_cap_warning IN (0, 1))",
+  );
+}
+if (!stockColumns.has("delist_risk_status")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_risk_status TEXT NOT NULL DEFAULT 'normal'");
+}
+if (!stockColumns.has("caution_tick_count")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN caution_tick_count INTEGER NOT NULL DEFAULT 0");
+}
+if (!stockColumns.has("recovery_started_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN recovery_started_at TEXT");
+}
+if (!stockColumns.has("recovery_tick_count")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN recovery_tick_count INTEGER NOT NULL DEFAULT 0");
+}
+if (!stockColumns.has("recovery_required_ticks")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN recovery_required_ticks INTEGER NOT NULL DEFAULT 60");
+}
+if (!stockColumns.has("delist_review_started_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_review_started_at TEXT");
+}
+if (!stockColumns.has("delist_review_tick_count")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_review_tick_count INTEGER NOT NULL DEFAULT 0");
+}
+if (!stockColumns.has("delist_review_max_ticks")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN delist_review_max_ticks INTEGER NOT NULL DEFAULT 180");
+}
+if (!stockColumns.has("final_crash_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN final_crash_at TEXT");
+}
+if (!stockColumns.has("final_crash_reason")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN final_crash_reason TEXT");
+}
+
+db.prepare(
+  "INSERT OR IGNORE INTO system_config (key, value) VALUES ('market_open', 'true')",
+).run();
 
 const stockEventColumns = new Set(
   db.prepare("PRAGMA table_info(stock_events)").all().map((column) => column.name),
@@ -557,36 +623,44 @@ import { STOCK_NAME_POOL } from "./constants/stockNamePool.js";
 
 const migrateDuplicateStocks = db.transaction(() => {
   const activeStocks = db.prepare("SELECT id, name, symbol FROM stocks WHERE status IN ('listed', 'ipo_subscription', 'newly_listed', 'acquired', 'delist_warning', 'final_crash') ORDER BY id ASC").all();
+  const allStocks = db.prepare("SELECT id, name, symbol FROM stocks").all();
   const seenNames = new Set();
   const seenSymbols = new Set();
+  const usedNames = new Set(allStocks.map((stock) => stock.name));
+  const usedSymbols = new Set(allStocks.map((stock) => stock.symbol));
   const update = db.prepare("UPDATE stocks SET name = ?, symbol = ? WHERE id = ?");
 
   for (const stock of activeStocks) {
     if (seenNames.has(stock.name) || seenSymbols.has(stock.symbol)) {
-      // Find a new identity from pool
-      const poolNames = new Set(STOCK_NAME_POOL.map(s => s.name));
-      const poolSymbols = new Set(STOCK_NAME_POOL.map(s => s.symbol));
-      
-      const candidates = STOCK_NAME_POOL.filter(item => 
-        !seenNames.has(item.name) && 
-        !seenSymbols.has(item.symbol)
+      const candidates = STOCK_NAME_POOL.filter(item =>
+        !usedNames.has(item.name) &&
+        !usedSymbols.has(item.symbol)
       );
-      
+
       let candidate;
       if (candidates.length > 0) {
         candidate = candidates[Math.floor(Math.random() * candidates.length)];
       } else {
         const fallback = STOCK_NAME_POOL[Math.floor(Math.random() * STOCK_NAME_POOL.length)];
-        const suffix = Date.now().toString().slice(-4);
-        candidate = {
-          name: `${fallback.name}${suffix}`,
-          symbol: `${fallback.symbol}${suffix}`
-        };
+        let attempt = 0;
+        do {
+          const suffix = `${stock.id}-${attempt}`;
+          candidate = {
+            name: `${fallback.name}-${suffix}`,
+            symbol: `${fallback.symbol}-${suffix}`,
+          };
+          attempt += 1;
+        } while (
+          usedNames.has(candidate.name) ||
+          usedSymbols.has(candidate.symbol)
+        );
       }
-      
+
       update.run(candidate.name, candidate.symbol, stock.id);
       seenNames.add(candidate.name);
       seenSymbols.add(candidate.symbol);
+      usedNames.add(candidate.name);
+      usedSymbols.add(candidate.symbol);
     } else {
       seenNames.add(stock.name);
       seenSymbols.add(stock.symbol);
@@ -616,7 +690,7 @@ const initBlueChips = db.transaction(() => {
       const price = 50000;
       const shares = 1000000000; // 1 billion shares * 50k = 50 trillion cap
       const cap = price * shares;
-      const volatility = 0.005 + Math.random() * 0.01; // low volatility
+      const volatility = 0.002 + Math.random() * 0.002;
       db.prepare(`
         INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, is_bluechip)
         VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?, 1)
@@ -625,6 +699,37 @@ const initBlueChips = db.transaction(() => {
   }
 });
 initBlueChips();
+enforceStockMarketLimit(db);
+initializeStockDelistingLifecycle(db);
+
+const rebaseOwnerEtfsToTotalAssets = db.transaction(() => {
+  const migrationKey = "owner_etf_total_asset_basis_v1";
+  if (db.prepare("SELECT 1 FROM system_config WHERE key = ?").get(migrationKey)) return;
+
+  const ownerEtfs = db
+    .prepare(
+      "SELECT id, owner_user_id FROM stocks WHERE is_etf = 1 AND status = 'acquired' AND owner_user_id IS NOT NULL",
+    )
+    .all();
+  const update = db.prepare(`
+    UPDATE stocks
+    SET etf_base_price = current_price,
+        etf_base_owner_asset = ?,
+        etf_last_tracked_owner_asset = ?
+    WHERE id = ?
+  `);
+
+  for (const stock of ownerEtfs) {
+    const valuation = calculateUserTotalEvaluatedAsset(db, stock.owner_user_id);
+    const ownerAsset = Math.max(valuation.totalEvaluatedAsset || 0, 1);
+    update.run(ownerAsset, ownerAsset, stock.id);
+  }
+
+  db.prepare("INSERT INTO system_config (key, value) VALUES (?, 'complete')").run(
+    migrationKey,
+  );
+});
+rebaseOwnerEtfsToTotalAssets();
 
 export function publicUser(user) {
   return {

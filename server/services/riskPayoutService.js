@@ -2,7 +2,7 @@ import { RISK_STAGES, payoutFor } from "./gameMath.js";
 
 /** 고액 배팅 배당률 조정 상수 */
 const THRESHOLD = 5_000_000;
-const MIN_RTP = 1.02;
+const MIN_RTP = 1.01;
 const TAPER_ALPHA = 0.45;
 
 /**
@@ -10,7 +10,7 @@ const TAPER_ALPHA = 0.45;
  * - betAmount <= THRESHOLD 이면 baseMultiplier 그대로 반환
  * - betAmount > THRESHOLD 이면 연속 함수(power-law)로 점진 감소
  * - 총 지급액은 배팅금이 커질수록 항상 증가
- * - 기대 지급률(RTP)은 최소 MIN_RTP(+2%) 이상 유지
+ * - 고액 배팅의 기대 지급률(RTP)은 최소 MIN_RTP(101%)까지 점진 조정
  */
 export function getAdjustedMultiplier({ betAmount, baseMultiplier, cumulativeProbability }) {
   if (betAmount <= THRESHOLD) {
