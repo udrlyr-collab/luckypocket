@@ -319,11 +319,13 @@ function AdminPanel() {
   const [users, setUsers] = useState([]);
   const [selected, setSelected] = useState(null);
   const [newNickname, setNewNickname] = useState("");
+  const [newBalance, setNewBalance] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [showNicknameModal, setShowNicknameModal] = useState(false);
+  const [showBalanceModal, setShowBalanceModal] = useState(false);
 
   const search = async () => {
     if (!query.trim()) return;
@@ -341,13 +343,18 @@ function AdminPanel() {
     }
   };
 
-  const openConfirm = () => {
+  const openNicknameConfirm = () => {
     if (!selected || !newNickname.trim()) return;
-    setShowConfirmModal(true);
+    setShowNicknameModal(true);
   };
 
-  const forceChange = async () => {
-    setShowConfirmModal(false);
+  const openBalanceConfirm = () => {
+    if (!selected || newBalance === "") return;
+    setShowBalanceModal(true);
+  };
+
+  const forceChangeNickname = async () => {
+    setShowNicknameModal(false);
     if (!selected || !newNickname.trim()) return;
     setBusy(true);
     setError("");
@@ -369,12 +376,35 @@ function AdminPanel() {
     }
   };
 
+  const forceChangeBalance = async () => {
+    setShowBalanceModal(false);
+    if (!selected || newBalance === "") return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/users/${selected.id}/balance`, {
+        method: "POST",
+        body: JSON.stringify({ balance: newBalance }),
+      });
+      setSelected(data.user);
+      setUsers((current) =>
+        current.map((item) => (item.id === data.user.id ? data.user : item)));
+      setNewBalance("");
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="soft-card mt-8 border-2 border-primary/25">
       <p className="eyebrow">Admin only</p>
-      <h2 className="section-title text-xl">관리자 닉네임 변경</h2>
+      <h2 className="section-title text-xl">관리자 권한: 유저 제어</h2>
       <p className="mt-2 text-xs text-base-content/50">
-        아이디 또는 닉네임으로 대상을 찾은 뒤 강제로 변경할 수 있어요. 비용과 변경 횟수는 증가하지 않아요.
+        아이디 또는 닉네임으로 대상을 찾은 뒤 강제로 정보를 변경할 수 있어요.
       </p>
       <div className="mt-4 flex flex-col gap-2 sm:flex-row">
         <input
@@ -405,6 +435,7 @@ function AdminPanel() {
               onClick={() => {
                 setSelected(item);
                 setNewNickname("");
+                setNewBalance("");
                 setError("");
                 setMessage("");
               }}
@@ -418,9 +449,9 @@ function AdminPanel() {
       {selected && (
         <div className="mt-4 rounded-2xl bg-base-200/60 p-4">
           <p className="mb-3 text-sm font-bold">
-            대상: <span className="text-primary">{selected.nickname}</span> (@{selected.username})
+            대상: <span className="text-primary">{selected.nickname}</span> (@{selected.username}) / 잔액: {formatMoney(selected.balance)}
           </p>
-          <div className="flex flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row mb-2">
             <input
               className="input input-bordered h-12 min-w-0 flex-1 rounded-2xl"
               value={newNickname}
@@ -432,9 +463,27 @@ function AdminPanel() {
               type="button"
               className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
               disabled={busy || !newNickname.trim()}
-              onClick={openConfirm}
+              onClick={openNicknameConfirm}
             >
-              강제 변경
+              닉네임 강제 변경
+            </button>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              className="input input-bordered h-12 min-w-0 flex-1 rounded-2xl"
+              value={newBalance}
+              type="number"
+              min="0"
+              onChange={(event) => setNewBalance(event.target.value)}
+              placeholder="새 잔액 (예: 1000000)"
+            />
+            <button
+              type="button"
+              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
+              disabled={busy || newBalance === ""}
+              onClick={openBalanceConfirm}
+            >
+              자산 강제 변경
             </button>
           </div>
         </div>
@@ -446,27 +495,41 @@ function AdminPanel() {
         {error || message || "\u00a0"}
       </p>
 
-      {showConfirmModal && (
+      {showNicknameModal && (
         <AdminConfirmModal
-          oldNickname={selected?.nickname}
-          newNickname={newNickname}
-          onConfirm={forceChange}
-          onClose={() => setShowConfirmModal(false)}
+          title="정말 이 유저의 닉네임을 변경할까요?"
+          beforeLabel="기존 닉네임"
+          beforeValue={selected?.nickname}
+          afterLabel="새 닉네임"
+          afterValue={newNickname}
+          onConfirm={forceChangeNickname}
+          onClose={() => setShowNicknameModal(false)}
+        />
+      )}
+      {showBalanceModal && (
+        <AdminConfirmModal
+          title="정말 이 유저의 자산을 변경할까요?"
+          beforeLabel="기존 자산"
+          beforeValue={formatMoney(selected?.balance)}
+          afterLabel="새 자산"
+          afterValue={formatMoney(newBalance)}
+          onConfirm={forceChangeBalance}
+          onClose={() => setShowBalanceModal(false)}
         />
       )}
     </section>
   );
 }
 
-function AdminConfirmModal({ oldNickname, newNickname, onConfirm, onClose }) {
+function AdminConfirmModal({ title, beforeLabel, beforeValue, afterLabel, afterValue, onConfirm, onClose }) {
   useEnterConfirm(true, onConfirm);
 
   return (
     <div className="modal modal-open" role="dialog">
       <div className="modal-box rounded-[2rem] text-center">
-        <h2 className="text-2xl font-black mb-3 text-error">정말 이 유저의 닉네임을 변경할까요?</h2>
-        <p className="text-sm mb-1">기존 닉네임: <strong>{oldNickname}</strong></p>
-        <p className="text-sm mb-4">새 닉네임: <strong>{newNickname}</strong></p>
+        <h2 className="text-xl font-black mb-3 text-error">{title}</h2>
+        <p className="text-sm mb-1">{beforeLabel}: <strong>{beforeValue}</strong></p>
+        <p className="text-sm mb-4">{afterLabel}: <strong>{afterValue}</strong></p>
         <div className="grid grid-cols-2 gap-2 mt-4">
           <button type="button" className="btn btn-outline rounded-2xl" onClick={onClose}>
             취소
@@ -478,6 +541,7 @@ function AdminConfirmModal({ oldNickname, newNickname, onConfirm, onClose }) {
       </div>
       <button className="modal-backdrop" type="button" aria-label="닫기" onClick={onClose} />
     </div>
+
   );
 }
 

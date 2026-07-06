@@ -69,6 +69,24 @@ export default function StockDetailPage() {
   const isDelisted = stock.status === 'delisted';
   const isAcquired = stock.status === 'acquired' || Boolean(stock.is_etf);
   const isOwner = stock.owner_user_id === user.id;
+  const isAdmin = user && (user.isAdmin || user.username === 'admin');
+
+  const executeAdminAction = async (endpoint) => {
+    if (!window.confirm("정말 실행하시겠습니까?")) return;
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/admin/stocks/${stock.id}${endpoint}`, { method: "POST" });
+      setMessage(res.message);
+      await fetchStock();
+      await refreshUser();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleBuy = async () => {
     if (leverage > 1) {
@@ -227,6 +245,42 @@ export default function StockDetailPage() {
       <section className="soft-card mb-6 p-4">
         <StockChart history={history} isDelisted={isDelisted} />
       </section>
+
+      {/* ADMIN CONTROL PANEL */}
+      {isAdmin && (
+        <section className="soft-card mb-6 border-2 border-error/50 bg-error/5">
+          <h2 className="section-title text-xl text-error mb-4">어드민 제어판</h2>
+          <div className="flex flex-wrap gap-2">
+            {!isDelisted && stock.status !== 'ipo_subscription' && stock.status !== 'newly_listed' && !isAcquired && stock.is_bluechip !== 1 && (
+              <button 
+                className="btn btn-error btn-sm" 
+                disabled={busy} 
+                onClick={() => executeAdminAction("/acquire")}
+              >
+                어드민 강제 인수
+              </button>
+            )}
+            {isAcquired && (
+              <button 
+                className="btn btn-warning btn-sm" 
+                disabled={busy} 
+                onClick={() => executeAdminAction("/revert")}
+              >
+                일반 주식으로 되돌리기
+              </button>
+            )}
+            {!isDelisted && (
+              <button 
+                className="btn btn-error btn-sm btn-outline" 
+                disabled={busy} 
+                onClick={() => executeAdminAction("/delist")}
+              >
+                강제 상장폐지
+              </button>
+            )}
+          </div>
+        </section>
+      )}
 
       {/* TRADE FORMS */}
       <div className="grid gap-6 md:grid-cols-2">

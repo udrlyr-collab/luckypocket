@@ -11,7 +11,7 @@ transferRouter.use(requireAuth);
 transferRouter.post("/", (req, res, next) => {
   try {
     const amount = Number(req.body.amount);
-    if (!Number.isSafeInteger(amount) || amount < 1000) {
+    if (!Number.isFinite(amount) || amount < 1000 || Math.floor(amount) !== amount) {
       return res.status(400).json({ message: "송금할 금액을 확인해주세요." });
     }
     const transfer = db.transaction(() => {

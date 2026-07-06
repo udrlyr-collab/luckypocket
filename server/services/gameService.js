@@ -18,7 +18,7 @@ export function getFreshUser(userId) {
 
 export function validateBet(user, value, absoluteCap = Number.POSITIVE_INFINITY) {
   const bet = Number(value);
-  if (!Number.isSafeInteger(bet)) {
+  if (!Number.isFinite(bet) || Math.floor(bet) !== bet) {
     throw new GameError("배팅금은 원 단위 정수로 입력해 주세요.");
   }
   if (bet < 1000) {
