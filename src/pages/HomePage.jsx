@@ -5,7 +5,7 @@ import AnimatedMoney from "../components/AnimatedMoney";
 import HistoryList from "../components/HistoryList";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
-import { formatMoney, formatSignedMoney } from "../utils/format";
+import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 export default function HomePage() {
@@ -150,7 +150,7 @@ export default function HomePage() {
                   {index + 1}
                 </span>
                 <strong className="flex-1 truncate text-sm">{ranking.nickname}</strong>
-                <span className="text-[13px] font-black tabular-nums text-primary">{formatMoney(ranking.balance)}</span>
+                <span className="text-[13px] font-black tabular-nums text-primary">{formatCompactMoney(ranking.balance)}</span>
               </div>
             ))}
             {!rankings.length && <div className="empty-state py-6">첫 랭커가 되어 보세요!</div>}

@@ -21,3 +21,23 @@ export function formatDate(value) {
     minute: "2-digit",
   }).format(new Date(value));
 }
+
+export function formatCompactMoney(value) {
+  const number = Math.round(Number(value) || 0);
+  const abs = Math.abs(number);
+  
+  if (abs >= 100000000) {
+    let result = '';
+    const jo = Math.floor(abs / 1000000000000);
+    const uk = Math.floor((abs % 1000000000000) / 100000000);
+    const man = Math.floor((abs % 100000000) / 10000);
+    
+    if (jo > 0) result += `${jo.toLocaleString("ko-KR")}조 `;
+    if (uk > 0) result += `${uk.toLocaleString("ko-KR")}억 `;
+    if (jo === 0 && man > 0) result += `${man.toLocaleString("ko-KR")}만 `;
+    
+    if (result === '') result = '0 ';
+    return (number < 0 ? "-" : "") + result.trim() + "원";
+  }
+  return formatMoney(value);
+}

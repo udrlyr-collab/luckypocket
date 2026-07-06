@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { formatMoney } from "../utils/format";
+import { formatMoney, formatCompactMoney } from "../utils/format";
 
 const rankingTypes = {
   currentBalance: {
@@ -220,20 +220,20 @@ function DateButton({ active, onClick, children }) {
 function primaryValue(ranking, type) {
   if (type === "achievements") return `${ranking.achievementCount.toLocaleString("ko-KR")}개 달성`;
   if (type === "games") return `${ranking.totalGames.toLocaleString("ko-KR")}판`;
-  return formatMoney(ranking.balance);
+  return formatCompactMoney(ranking.balance);
 }
 
 function secondaryStats(ranking, type) {
   if (type === "achievements") {
     return [
-      ["현재 자산", formatMoney(ranking.balance)],
+      ["현재 자산", formatCompactMoney(ranking.balance)],
       ["게임", `${ranking.totalGames.toLocaleString("ko-KR")}판`],
       ["재도전", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];
   }
   if (type === "games") {
     return [
-      ["현재 자산", formatMoney(ranking.balance)],
+      ["현재 자산", formatCompactMoney(ranking.balance)],
       ["업적", `${ranking.achievementCount.toLocaleString("ko-KR")}개`],
       ["재도전", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];
