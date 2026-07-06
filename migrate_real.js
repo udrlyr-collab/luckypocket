@@ -13,6 +13,8 @@ if (fs.existsSync(dbPath)) {
 const oldDbPath = dbPath + '.bak';
 if (!fs.existsSync(oldDbPath) && fs.existsSync(dbPath)) {
   fs.renameSync(dbPath, oldDbPath);
+  if (fs.existsSync(dbPath + '-wal')) fs.renameSync(dbPath + '-wal', oldDbPath + '-wal');
+  if (fs.existsSync(dbPath + '-shm')) fs.renameSync(dbPath + '-shm', oldDbPath + '-shm');
   console.log(`Backed up existing database to ${oldDbPath}`);
 } else {
   console.log(`Backup already exists or no DB to migrate.`);
