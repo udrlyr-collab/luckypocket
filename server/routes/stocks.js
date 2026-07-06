@@ -393,6 +393,7 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
 
       if (!stock || stock.status === 'delisted') throw new Error("인수할 수 없는 종목입니다.");
+      if (stock.is_bluechip === 1) throw new Error("우량주는 인수할 수 없습니다.");
       if (stock.is_etf || stock.status === 'acquired') throw new Error("이미 인수된 종목입니다.");
       if (user.balance < stock.market_cap) throw new Error(`시가총액(${stock.market_cap.toLocaleString()}원)보다 잔액이 부족해요.`);
 
