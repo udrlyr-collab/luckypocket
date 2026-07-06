@@ -378,7 +378,7 @@ export default function StockDetailPage() {
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-bold">{holding.quantity.toFixed(2)}주</span>
                   <span className={`font-bold ${holding.quantity * (stock.current_price - holding.average_price) >= 0 ? "text-success" : "text-error"}`}>
-                    {formatSignedMoney(holding.quantity * (stock.current_price - holding.average_price))}
+                    {formatSignedMoney(holding.quantity * (stock.current_price - holding.average_price))} ({holding.quantity * (stock.current_price - holding.average_price) >= 0 ? "+" : ""}{((stock.current_price / holding.average_price - 1) * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)
                   </span>
                 </div>
                 <div className="flex justify-between text-xs text-base-content/60 mb-4">
@@ -429,7 +429,7 @@ export default function StockDetailPage() {
                           LONG {p.leverage}x <span className="text-xs font-normal text-base-content/50 ml-1">진입 {formatMoney(p.entry_price)}</span>
                         </span>
                         <span className={`font-bold text-sm ${unrealized >= 0 ? "text-success" : "text-error"}`}>
-                          {formatSignedMoney(unrealized)}
+                          {formatSignedMoney(unrealized)} ({unrealized >= 0 ? "+" : ""}{((unrealized / p.margin_amount) * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)
                         </span>
                       </div>
                       <div className="flex justify-between text-[11px] text-base-content/60 mb-3">
