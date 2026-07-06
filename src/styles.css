@@ -206,14 +206,12 @@ textarea,
 .balance-summary-amount {
   display: block;
   margin-top: .2rem;
-  overflow: hidden;
   color: var(--color-primary);
-  font-size: clamp(1.9rem, 8vw, 3rem);
+  font-size: clamp(1.5rem, 6vw, 2.5rem);
   font-weight: 950;
   letter-spacing: -.045em;
-  line-height: 1.05;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.1;
+  word-break: break-all;
   font-variant-numeric: tabular-nums;
 }
 

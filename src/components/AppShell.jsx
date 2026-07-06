@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import PageContainer from "./PageContainer";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
+import { formatMoney } from "../utils/format";
 
 const links = [
   { to: "/", label: "홈", icon: "🏠", end: true },
@@ -13,6 +14,7 @@ const links = [
   { to: "/stocks", label: "주식", icon: "📈" },
   { to: "/profile", label: "내 정보", icon: "👛" },
 ];
+const adminLink = { to: "/admin", label: "관리자", icon: "🛠️" };
 
 function linkClass({ isActive }) {
   return `whitespace-nowrap rounded-2xl px-3 py-2 text-sm font-black transition ${isActive ? "bg-primary text-primary-content shadow-sm" : "hover:bg-base-200"}`;
@@ -24,6 +26,7 @@ export default function AppShell() {
   const [bankruptcyOpen, setBankruptcyOpen] = useState(false);
   const [bankruptcyBusy, setBankruptcyBusy] = useState(false);
   const [bankruptcyError, setBankruptcyError] = useState("");
+  const navigationLinks = user.isAdmin ? [...links, adminLink] : links;
 
   useEffect(() => {
     if (user.bankruptcyShouldPrompt) setBankruptcyOpen(true);
@@ -72,16 +75,20 @@ export default function AppShell() {
             </div>
           </NavLink>
           <nav className="hidden items-center gap-1 md:flex" aria-label="주요 메뉴">
-            {links.map((link) => (
+            {navigationLinks.map((link) => (
               <NavLink key={link.to} to={link.to} end={link.end} className={linkClass}>
                 {link.label}
               </NavLink>
             ))}
           </nav>
-          <div className="flex min-w-0 items-center gap-2">
-            <div className="hidden min-w-0 text-right lg:block">
-              <span className="block max-w-28 truncate text-sm font-black">{user.nickname}님</span>
+          <div className="flex min-w-0 items-center gap-4">
+            <div className="hidden min-w-0 text-right lg:block pr-4 border-r border-base-300">
+              <span className="block truncate text-sm font-black">{user.nickname}님</span>
               <span className="text-[10px] font-bold text-base-content/40">오늘도 행운 가득</span>
+            </div>
+            <div className="hidden min-w-0 text-right lg:block">
+              <span className="block truncate text-sm font-black text-primary">{formatMoney(user.balance)}</span>
+              <span className="text-[10px] font-bold text-base-content/40">보유 자산</span>
             </div>
             <button
               type="button"
@@ -105,8 +112,13 @@ export default function AppShell() {
           <Outlet />
         </PageContainer>
       </main>
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-6 border-t border-base-300 bg-base-100 p-2 md:hidden" aria-label="모바일 메뉴">
-        {links.map((link) => (
+      <nav
+        className={`fixed inset-x-0 bottom-0 z-40 grid border-t border-base-300 bg-base-100 p-2 md:hidden ${
+          user.isAdmin ? "grid-cols-7" : "grid-cols-6"
+        }`}
+        aria-label="모바일 메뉴"
+      >
+        {navigationLinks.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}

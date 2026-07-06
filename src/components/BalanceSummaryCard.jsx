@@ -11,7 +11,7 @@ export default function BalanceSummaryCard({ user }) {
         <span className="balance-summary-pouch" aria-hidden="true">👛</span>
         <div className="min-w-0">
           <p className="text-xs font-black text-primary/75">행운주머니가 이만큼 자랐어요</p>
-          <h2 className="mt-1 truncate text-base font-black">{user.nickname}님의 주머니</h2>
+          <h2 className="mt-1 text-base font-black break-keep">{user.nickname}님의 주머니</h2>
           <p className="mt-1 text-xs text-base-content/45">
             업적 {unlocked.toLocaleString("ko-KR")}개 수집
           </p>

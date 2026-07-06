@@ -51,13 +51,13 @@ export default function HomePage() {
   return (
     <div className="page-content">
       {/* Hero Card */}
-      <section className="mb-8 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+      <section className="mb-8 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
         <div className="balance-summary-card m-0! shadow-md">
           <div className="balance-summary-owner">
             <span className="balance-summary-pouch" aria-hidden="true">👛</span>
             <div className="min-w-0">
               <p className="text-xs font-black text-primary/80">행운주머니가 이만큼 자랐어요</p>
-              <h2 className="mt-1 truncate text-base font-black">{user.nickname}님의 주머니</h2>
+              <h2 className="mt-1 text-base font-black break-keep">{user.nickname}님의 주머니</h2>
             </div>
           </div>
           <div className="balance-summary-main border-b-0 pb-0">
