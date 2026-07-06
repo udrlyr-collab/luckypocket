@@ -323,6 +323,13 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN etf_last_tracked_owner_asset INTEGER");
 }
 
+const stockColumns = new Set(
+  db.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
+);
+if (!stockColumns.has("is_bluechip")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN is_bluechip INTEGER NOT NULL DEFAULT 0");
+}
+
 const stockEventColumns = new Set(
   db.prepare("PRAGMA table_info(stock_events)").all().map((column) => column.name),
 );
@@ -589,6 +596,37 @@ const migrateDuplicateStocks = db.transaction(() => {
   }
 });
 migrateDuplicateStocks();
+
+// Ensure 3 Blue-chip stocks exist
+const initBlueChips = db.transaction(() => {
+  const bluechips = [
+    { symbol: "SHINS", name: "신성에너지" },
+    { symbol: "DATAB", name: "데이터주머니" },
+    { symbol: "STARL", name: "별빛에너지" }
+  ];
+
+  for (const bc of bluechips) {
+    const existing = db.prepare("SELECT * FROM stocks WHERE name = ? AND is_bluechip = 1").get(bc.name);
+    if (!existing) {
+      // If the name exists but is not bluechip, maybe rename the old one or just delete it. We'll rename the old one.
+      const old = db.prepare("SELECT * FROM stocks WHERE name = ? AND is_bluechip = 0").get(bc.name);
+      if (old) {
+        const suffix = Date.now().toString().slice(-4);
+        db.prepare("UPDATE stocks SET name = ?, symbol = ? WHERE id = ?").run(`${old.name}${suffix}`, `${old.symbol}${suffix}`, old.id);
+      }
+      
+      const price = 50000;
+      const shares = 1000000000; // 1 billion shares * 50k = 50 trillion cap
+      const cap = price * shares;
+      const volatility = 0.005 + Math.random() * 0.01; // low volatility
+      db.prepare(`
+        INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, is_bluechip)
+        VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?, 1)
+      `).run(bc.symbol, bc.name, price, price, price, shares, cap, volatility);
+    }
+  }
+});
+initBlueChips();
 
 export function publicUser(user) {
   return {

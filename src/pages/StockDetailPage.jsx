@@ -67,7 +67,7 @@ export default function StockDetailPage() {
 
   const { stock, history, holding, positions } = data;
   const isDelisted = stock.status === 'delisted';
-  const isAcquired = stock.status === 'acquired' || stock.is_etf;
+  const isAcquired = stock.status === 'acquired' || Boolean(stock.is_etf);
   const isOwner = stock.owner_user_id === user.id;
 
   const handleBuy = async () => {
@@ -193,6 +193,7 @@ export default function StockDetailPage() {
             {stock.status === 'ipo_subscription' && <span className="badge badge-warning">공모주</span>}
             {stock.status === 'newly_listed' && <span className="badge badge-warning">신규 상장</span>}
             {isAcquired && <span className="badge badge-primary">인수됨</span>}
+            {stock.is_bluechip === 1 && <span className="badge badge-info">우량주</span>}
             {stock.status === 'delist_warning' && <span className="badge badge-error animate-pulse">거래 주의</span>}
             {isDelisted && <span className="badge badge-ghost">상장폐지</span>}
           </div>
@@ -212,10 +213,10 @@ export default function StockDetailPage() {
             {formatMoney(stock.current_price)}
           </div>
           {!isDelisted && (
-            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap ${stock.priceChangeAmount > 0 ? "text-success" : stock.priceChangeAmount < 0 ? "text-error" : "text-base-content"}`}>
-              <span>전 틱 대비 {stock.priceChangeAmount > 0 ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원 · {stock.priceChangeRate > 0 ? "+" : ""}{(stock.priceChangeRate * 100).toFixed(1)}%</span>
+            <div className={`text-lg font-bold tabular-nums flex gap-3 justify-end items-center mt-1 flex-wrap transition-colors duration-500 ${stock.priceChangeAmount > 0 ? "text-success" : stock.priceChangeAmount < 0 ? "text-error" : "text-base-content"}`}>
+              <span>전 틱 대비 {stock.priceChangeAmount > 0 ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원 · {stock.priceChangeRate > 0 ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</span>
               <span className={`text-sm px-2 py-0.5 rounded-lg bg-base-200 ${(stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) > 0 ? "text-success" : (stock.offeringChangeRate !== null ? stock.offeringChangeRate : todayRate) < 0 ? "text-error" : "text-base-content"}`}>
-                {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate > 0 ? "+" : ""}${(stock.offeringChangeRate * 100).toFixed(1)}%` : `상장가 대비 ${todayRate > 0 ? "+" : ""}${todayRate.toFixed(1)}%`}
+                {stock.offeringChangeRate !== null ? `공모가 대비 ${stock.offeringChangeRate > 0 ? "+" : ""}${(stock.offeringChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : `상장가 대비 ${todayRate > 0 ? "+" : ""}${todayRate.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`}
               </span>
             </div>
           )}

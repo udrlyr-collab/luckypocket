@@ -112,17 +112,19 @@ function processNormalTick(db, stock) {
     if (now >= endsAt) {
       newStatus = "newly_listed";
       const newlyListedUntil = new Date(now + 3 * 60 * 1000).toISOString();
-      db.prepare("UPDATE stocks SET newly_listed_until = ? WHERE id = ?").run(newlyListedUntil, stock.id);
+      const identity = pickRandomStockIdentity(db);
+      
+      db.prepare("UPDATE stocks SET newly_listed_until = ?, name = ?, symbol = ? WHERE id = ?").run(newlyListedUntil, identity.name, identity.symbol, stock.id);
       
       createServerNotification(db, {
         type: "stock_newly_listed",
         title: "신규 상장",
-        message: `${stock.name}이(가) 신규 상장했어요!`,
+        message: `공모주가 '${identity.name}'(으)로 신규 상장했어요!`,
         gameType: "stock",
         gameName: "주식",
-        metadata: { stockId: stock.id, symbol: stock.symbol }
+        metadata: { stockId: stock.id, symbol: identity.symbol }
       });
-      db.prepare("INSERT INTO stock_events (stock_id, event_type, title, message) VALUES (?, ?, ?, ?)").run(stock.id, "newly_listed", "신규 상장", `${stock.name} 종목이 신규 상장되어 거래가 시작되었습니다.`);
+      db.prepare("INSERT INTO stock_events (stock_id, event_type, title, message) VALUES (?, ?, ?, ?)").run(stock.id, "newly_listed", "신규 상장", `공모주가 '${identity.name}' 종목으로 신규 상장되어 거래가 시작되었습니다.`);
     } else {
       return; // In subscription period, price is locked
     }
@@ -171,7 +173,7 @@ function processNormalTick(db, stock) {
     }
   } else {
     // Normal listed stock
-    if (Math.random() < 0.005) { // 0.5% chance to become delist_warning
+    if (Math.random() < 0.005 && stock.is_bluechip !== 1) { // 0.5% chance to become delist_warning, ignore if bluechip
       const totalPhases = Math.floor(Math.random() * 3) + 5; // 5~7 phases
       db.prepare("UPDATE stocks SET delist_phase = 0, delist_phase_total = ?, delist_warning_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?")
         .run(totalPhases, stock.id);
@@ -309,9 +311,8 @@ export function delistStock(db, stock) {
 }
 
 export function createIpoStock(db) {
-  const st = pickRandomStockIdentity(db);
-  const symbol = st.symbol;
-  const name = st.name;
+  const symbol = "IPO";
+  const name = "공모주";
   const price = Math.floor(Math.random() * 4500) + 500; // 500 ~ 5,000
   const shares = Math.floor(Math.random() * 990000) + 10000;
   const cap = price * shares;
@@ -319,7 +320,7 @@ export function createIpoStock(db) {
 
   const insert = db.prepare(`
     INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, ipo_subscription_started_at, ipo_subscription_ends_at, offering_price)
-    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+3 minutes'), ?)
+    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+1 minute'), ?)
   `);
   
   const stockId = insert.run(symbol, name, price, price, price, shares, cap, volatility, price).lastInsertRowid;
@@ -328,7 +329,7 @@ export function createIpoStock(db) {
   createServerNotification(db, {
     type: "stock_ipo",
     title: "신규 공모주 청약",
-    message: `새 공모주 ${name}(${symbol})이 등장했어요. 3분 동안 공모가로 구매할 수 있어요.`,
+    message: `새 공모주가 등장했어요. 1분 동안 공모가로 구매할 수 있어요.`,
     gameType: "stock",
     gameName: "주식",
     metadata: { stockId, symbol, name }
@@ -337,7 +338,7 @@ export function createIpoStock(db) {
   db.prepare(`
     INSERT INTO stock_events (stock_id, event_type, title, message)
     VALUES (?, ?, ?, ?)
-  `).run(stockId, "ipo_created", "신규 상장", `${name} 종목이 주식시장에 신규 상장되었습니다.`);
+  `).run(stockId, "ipo_created", "신규 상장", `새 공모주 청약이 시작되었습니다.`);
 }
 
 function liquidatePositionsIfNeeded(db) {

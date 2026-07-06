@@ -96,22 +96,22 @@ export default function StockMarketPage() {
         </div>
       </header>
 
-      <div className="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">전체 종목</span>
-          <strong className="block text-lg tabular-nums">{summary.total}</strong>
+      <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">전체 종목</span>
+          <strong className="block text-2xl mt-1 tabular-nums">{summary.total}</strong>
         </div>
-        <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">상승 / 하락</span>
-          <strong className="block text-lg tabular-nums text-success">{summary.up} <span className="text-base-content/30">/</span> <span className="text-error">{summary.down}</span></strong>
+        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
+          <strong className="block text-2xl mt-1 tabular-nums text-success">{summary.up} <span className="text-base-content/30 text-lg">/</span> <span className="text-error">{summary.down}</span></strong>
         </div>
-        <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">공모주/신규 상장</span>
-          <strong className="block text-lg tabular-nums text-warning">{summary.ipo}</strong>
+        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주/신규 상장</span>
+          <strong className="block text-2xl mt-1 tabular-nums text-warning">{summary.ipo}</strong>
         </div>
-        <div className="soft-card min-w-0 p-3">
-          <span className="text-[10px] font-bold text-base-content/50">최근 상장폐지</span>
-          <strong className="block text-lg tabular-nums text-base-content/40">{recentDelistedStocks ? recentDelistedStocks.length : 0}</strong>
+        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">최근 상장폐지</span>
+          <strong className="block text-2xl mt-1 tabular-nums text-base-content/40">{recentDelistedStocks ? recentDelistedStocks.length : 0}</strong>
         </div>
       </div>
 
@@ -247,7 +247,8 @@ function StockRow({ stock }) {
           {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
           {stock.status === 'delist_warning' && <span className="badge badge-error badge-xs py-1 font-bold animate-pulse">거래 주의</span>}
-          {stock.is_etf && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
+          {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
+          {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
           {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
         </div>
       </div>
@@ -257,9 +258,9 @@ function StockRow({ stock }) {
           {formatMoney(stock.current_price)}
         </div>
         
-        <div className={`flex-1 text-right text-xs font-bold tabular-nums shrink-0 ${isDelisted ? "opacity-0" : color}`}>
+        <div className={`flex-1 text-right text-xs font-bold tabular-nums shrink-0 transition-colors duration-500 ${isDelisted ? "opacity-0" : color}`}>
           {isUp ? "+" : ""}{formatMoney(stock.priceChangeAmount)}원<br className="sm:hidden"/>
-          <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toFixed(1)}%)</span>
+          <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</span>
         </div>
 
         <div className="flex-1 text-right text-[11px] text-base-content/50 truncate hidden sm:block">
