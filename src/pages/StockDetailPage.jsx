@@ -181,6 +181,23 @@ export default function StockDetailPage() {
     }
   };
 
+  const executeAction = async (endpoint, actionName) => {
+    if (!window.confirm(`정말 ${actionName}하시겠습니까?`)) return;
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/${stock.id}${endpoint}`, { method: "POST" });
+      setMessage(res.message);
+      await refreshUser();
+      await fetchStock();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const addValue = (val) => {
     const cur = Number(amountInput) || 0;
     setAmountInput(String(cur + val));
@@ -343,6 +360,20 @@ export default function StockDetailPage() {
               </div>
               {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
+            </div>
+          ) : isAcquired && !isOwner ? (
+            <div className="bg-error/10 border-2 border-error/20 p-6 rounded-2xl text-center">
+              <h3 className="font-black text-error text-lg mb-2">이 종목은 다른 사람이 인수했습니다</h3>
+              <p className="text-sm font-bold text-base-content/70">
+                더 이상 주식 시장에서 거래할 수 없습니다.
+              </p>
+              <button 
+                className="btn btn-error mt-4 w-full"
+                disabled={busy}
+                onClick={() => executeAction('/hostile-takeover', '적대적 M&A')}
+              >
+                적대적 M&A (상대 전체 재산의 20% 지불)
+              </button>
             </div>
           ) : (
             <div>
@@ -528,21 +559,30 @@ export default function StockDetailPage() {
 
       {/* OWNER PANEL */}
       {isOwner && isAcquired && (
-        <section className="mt-6 soft-card border-2 border-error/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <section className="mt-6 soft-card border-2 border-warning/30 flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div>
-            <h3 className="font-black text-lg mb-1 text-error">⚠️ 오너 권한: 상장폐지</h3>
+            <h3 className="font-black text-lg mb-1 text-warning">👑 오너 권한</h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
-              당신은 이 회사의 소유자입니다. 언제든 이 회사를 상장폐지시킬 수 있습니다.<br />
-              상장폐지 시 모든 주주의 주식 가치는 0원이 되며, 새로운 공모주가 상장됩니다.
+              당신은 이 회사의 소유자입니다. 회사를 상장폐지시키거나 다시 일반 주식으로 되돌릴 수 있습니다.<br />
+              일반 주식으로 되돌릴 경우, 인수에 사용했던 금액의 50%를 돌려받습니다.
             </p>
           </div>
-          <button 
-            className="btn btn-error rounded-2xl px-6 shrink-0" 
-            disabled={busy}
-            onClick={() => setShowDelistConfirm(true)}
-          >
-            상장폐지 실행
-          </button>
+          <div className="flex flex-col gap-2 shrink-0 w-full sm:w-auto">
+            <button 
+              className="btn btn-warning rounded-2xl w-full" 
+              disabled={busy}
+              onClick={() => executeAction('/revert-by-owner', '일반 주식으로 되돌리기')}
+            >
+              일반 주식으로 되돌리기 (50% 환불)
+            </button>
+            <button 
+              className="btn btn-error btn-outline rounded-2xl w-full" 
+              disabled={busy}
+              onClick={() => setShowDelistConfirm(true)}
+            >
+              상장폐지 실행
+            </button>
+          </div>
         </section>
       )}
 

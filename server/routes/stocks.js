@@ -397,6 +397,9 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       if (stock.is_etf || stock.status === 'acquired') throw new Error("이미 인수된 종목입니다.");
       if (user.balance < stock.market_cap) throw new Error(`시가총액(${stock.market_cap.toLocaleString()}원)보다 잔액이 부족해요.`);
 
+      const existingEtf = db.prepare("SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'").get(userId);
+      if (existingEtf) throw new Error("인수자 ETF는 한 개만 보유할 수 있습니다.");
+
       const cost = stock.market_cap;
       const balanceAfter = user.balance - cost;
       
@@ -406,9 +409,10 @@ stocksRouter.post("/:id/acquire", (req, res) => {
         UPDATE stocks 
         SET status = 'acquired', is_etf = 1, etf_tracking_type = 'owner_asset', 
             owner_user_id = ?, owner_nickname_snapshot = ?,
-            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?
+            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
+            etf_acquisition_cost = ?
         WHERE id = ?
-      `).run(userId, user.nickname, user.balance, user.balance, id);
+      `).run(userId, user.nickname, user.balance, user.balance, cost, id);
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
@@ -438,6 +442,145 @@ stocksRouter.post("/:id/acquire", (req, res) => {
 
   res.json({ message: "회사 인수에 성공했어요!" });
 });
+
+stocksRouter.post("/:id/revert-by-owner", (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+
+  try {
+    db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
+      
+      if (!stock || stock.status !== 'acquired' || !stock.is_etf) throw new Error("일반 주식으로 되돌릴 수 없는 상태입니다.");
+      if (stock.owner_user_id !== userId) throw new Error("본인이 인수한 종목만 되돌릴 수 있습니다.");
+
+      const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+      const refund = stock.etf_acquisition_cost ? Math.floor(stock.etf_acquisition_cost * 0.5) : 0;
+      const newBalance = user.balance + refund;
+
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(newBalance, userId);
+
+      db.prepare(`
+        UPDATE stocks 
+        SET status = 'listed', is_etf = 0, etf_tracking_type = NULL, 
+            owner_user_id = NULL, owner_nickname_snapshot = NULL,
+            etf_base_owner_asset = 0, etf_last_tracked_owner_asset = 0,
+            etf_acquisition_cost = NULL
+        WHERE id = ?
+      `).run(id);
+
+      if (refund > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+          VALUES (?, 'stock_revert_refund', ?, ?, ?, ?)
+        `).run(userId, refund, user.balance, newBalance, id);
+      }
+
+      createServerNotification(db, {
+        userId,
+        nickname: user.nickname,
+        type: "stock_reverted",
+        title: "일반 주식 전환",
+        message: `${user.nickname}님이 ${stock.name}을(를) 일반 주식으로 되돌렸습니다.`,
+        amount: refund,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { stockId: id, symbol: stock.symbol }
+      });
+    })();
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+
+  res.json({ message: "일반 주식으로 되돌렸습니다. (인수 금액의 50% 환불)" });
+});
+
+stocksRouter.post("/:id/hostile-takeover", (req, res) => {
+  const { id } = req.params;
+  const attackerId = req.user.id;
+
+  try {
+    db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
+      
+      if (!stock || stock.status !== 'acquired' || !stock.is_etf) throw new Error("인수된 종목만 적대적 M&A가 가능합니다.");
+      if (stock.owner_user_id === attackerId) throw new Error("본인의 회사는 적대적 M&A를 할 수 없습니다.");
+
+      const existingEtf = db.prepare("SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'").get(attackerId);
+      if (existingEtf) throw new Error("인수자 ETF는 한 개만 보유할 수 있습니다.");
+
+      const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(attackerId);
+      const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
+
+      if (!defender) throw new Error("기존 소유자를 찾을 수 없습니다.");
+
+      const cost = Math.floor(defender.balance * 0.2);
+      if (attacker.balance < cost) {
+        throw new Error(`상대방 전체 재산의 20%(${cost.toLocaleString()}원)보다 잔액이 부족해요.`);
+      }
+
+      const attackerBalanceAfter = attacker.balance - cost;
+      const defenderBalanceAfter = defender.balance + cost;
+
+      // Attacker pays cost
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(attackerBalanceAfter, attackerId);
+      db.prepare(`
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'hostile_takeover_pay', ?, ?, ?, ?)
+      `).run(attackerId, -cost, attacker.balance, attackerBalanceAfter, id);
+
+      // Defender receives cost
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(defenderBalanceAfter, defender.id);
+      db.prepare(`
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
+        VALUES (?, 'hostile_takeover_receive', ?, ?, ?, ?)
+      `).run(defender.id, cost, defender.balance, defenderBalanceAfter, id);
+
+      // Transfer ETF ownership
+      db.prepare(`
+        UPDATE stocks 
+        SET owner_user_id = ?, owner_nickname_snapshot = ?,
+            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
+            etf_acquisition_cost = ?
+        WHERE id = ?
+      `).run(attacker.id, attacker.nickname, attacker.balance, attacker.balance, cost, id);
+
+      db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
+        VALUES (?, ?, 'hostile_takeover', ?, 0, ?, 1, ?, ?)
+      `).run(attackerId, id, cost, stock.current_price, attacker.balance, attackerBalanceAfter);
+
+      // Notify Defender
+      createServerNotification(db, {
+        userId: defender.id,
+        nickname: defender.nickname,
+        type: "hostile_takeover_lost",
+        title: "적대적 M&A 방어 실패",
+        message: `${attacker.nickname}님이 당신의 ${stock.name}을(를) 적대적 M&A로 강제 인수했습니다! 위로금으로 재산의 20%가 입금되었습니다.`,
+        amount: cost,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { stockId: id, symbol: stock.symbol, attackerId: attacker.id }
+      });
+
+      // Global Notification
+      createServerNotification(db, {
+        type: "hostile_takeover_success",
+        title: "적대적 M&A 성공",
+        message: `${attacker.nickname}님이 ${defender.nickname}님의 ${stock.name}을(를) 적대적 M&A로 빼앗았습니다!`,
+        amount: -cost,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { stockId: id, symbol: stock.symbol }
+      });
+    })();
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+
+  res.json({ message: "적대적 M&A에 성공하여 회사를 탈취했습니다!" });
+});
+
 
 stocksRouter.post("/:id/delist-by-owner", (req, res) => {
   const { id } = req.params;

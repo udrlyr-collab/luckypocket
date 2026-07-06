@@ -222,6 +222,7 @@ db.exec(`
     etf_base_price INTEGER,
     etf_base_top_balance INTEGER,
     etf_last_tracked_balance INTEGER,
+    etf_acquisition_cost REAL,
     listed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     delisted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
