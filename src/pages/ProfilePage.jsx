@@ -486,6 +486,16 @@ function AdminPanel() {
               자산 강제 변경
             </button>
           </div>
+          <div className="mt-4 pt-4 border-t border-base-300">
+            <button
+              type="button"
+              className="btn btn-warning w-full h-12 rounded-2xl"
+              disabled={busy}
+              onClick={forceLogin}
+            >
+              이 계정으로 강제 로그인 (어드민 유지)
+            </button>
+          </div>
         </div>
       )}
       <p

@@ -641,7 +641,7 @@ export function publicUser(user) {
     nicknameChangeCount: user.nickname_change_count || 0,
     bankruptcyCount: user.bankruptcy_count || 0,
     lastBankruptcyAt: user.last_bankruptcy_at || null,
-    isAdmin: user.username === "admin",
+    isAdmin: user.isAdmin === true || user.username === "admin",
     createdAt: user.created_at,
     mineClickCount: user.mine_click_count || 0,
     mineTotalEarned: user.mine_total_earned || 0,

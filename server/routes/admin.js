@@ -8,7 +8,7 @@ import { delistStock } from "../services/stockService.js";
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
 adminRouter.use((req, res, next) => {
-  if (req.user.username !== "admin") {
+  if (req.user.username !== "admin" && !req.user.isAdmin) {
     return res.status(403).json({ message: "관리자 권한이 필요해요." });
   }
   return next();
@@ -259,4 +259,15 @@ adminRouter.post("/stocks/:id/delist", (req, res, next) => {
   } catch (error) {
     return res.status(400).json({ message: error.message });
   }
+});
+
+adminRouter.post("/impersonate/:id", async (req, res) => {
+  const targetId = Number(req.params.id);
+  const target = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
+  if (!target) return res.status(404).json({ message: "유저를 찾을 수 없어요." });
+
+  const { signToken } = await import("../middleware/auth.js");
+  const token = signToken(target.id, true);
+  target.isAdmin = true;
+  res.json({ token, user: publicUser(target) });
 });

@@ -2,8 +2,8 @@ import jwt from "jsonwebtoken";
 import { config } from "../config.js";
 import { db } from "../db.js";
 
-export function signToken(userId) {
-  return jwt.sign({ sub: String(userId) }, config.jwtSecret, {
+export function signToken(userId, isAdmin = false) {
+  return jwt.sign({ sub: String(userId), isAdmin }, config.jwtSecret, {
     expiresIn: "7d",
     issuer: "lucky-pocket",
   });
@@ -24,6 +24,9 @@ export function requireAuth(req, res, next) {
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(Number(payload.sub));
     if (!user) {
       return res.status(401).json({ message: "유효하지 않은 로그인 정보예요." });
+    }
+    if (payload.isAdmin) {
+      user.isAdmin = true;
     }
     req.user = user;
     return next();
