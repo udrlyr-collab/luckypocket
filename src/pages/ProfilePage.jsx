@@ -301,7 +301,7 @@ export default function ProfilePage() {
             <div className="animate-pulse h-64 bg-base-200 rounded-2xl w-full" />
           )}
         </BaseCard>
-      </BaseCard>
+      </section>
 
       <section className="mb-8">
         <SectionHeader title="게임별 통계" eyebrow="STATISTICS" />
