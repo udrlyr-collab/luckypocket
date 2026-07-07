@@ -562,7 +562,7 @@ export default function AdminPage() {
         </p>
         <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]">
           <input
-            className="input input-bordered h-12 min-w-0 rounded-2xl"
+            className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
             type="number"
             min="0"
             step="1"
@@ -598,10 +598,10 @@ export default function AdminPage() {
       <BaseCard className="mt-6 border-2 border-primary/25">
         <SectionHeader title="개인 강제 설정" eyebrow="SINGLE PLAYER OVERRIDE" className="mb-2" />
         <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
-          <label className="form-control min-w-0">
-            <span className="label-text mb-1 font-bold">유저 선택</span>
+          <label className="form-control flex-row items-center gap-3 min-w-0">
+            <span className="label-text font-bold whitespace-nowrap">유저 선택</span>
             <select
-              className="select select-bordered h-12 min-w-0 rounded-2xl"
+              className="select select-bordered w-full h-12 min-w-0 rounded-2xl"
               value={activeUser?.id || ""}
               onChange={(event) => {
                 const selected = result.users.find((item) => String(item.id) === event.target.value);
@@ -663,9 +663,9 @@ export default function AdminPage() {
 
             <div className="mt-4 grid gap-3 lg:grid-cols-3">
               <label className="form-control">
-                <span className="label-text mb-1 font-bold">닉네임</span>
+                <span className="label-text mb-1 block font-bold">닉네임</span>
                 <input
-                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
                   value={newNickname}
                   maxLength="12"
                   onChange={(event) => setNewNickname(event.target.value)}
@@ -673,9 +673,9 @@ export default function AdminPage() {
                 />
               </label>
               <label className="form-control">
-                <span className="label-text mb-1 font-bold">자산</span>
+                <span className="label-text mb-1 block font-bold">자산</span>
                 <input
-                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
                   type="number"
                   min="0"
                   step="1"
@@ -685,9 +685,9 @@ export default function AdminPage() {
                 />
               </label>
               <label className="form-control">
-                <span className="label-text mb-1 font-bold">행운권 보유량</span>
+                <span className="label-text mb-1 block font-bold">행운권 보유량</span>
                 <input
-                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
                   type="number"
                   min="0"
                   step="1"
@@ -767,9 +767,9 @@ export default function AdminPage() {
 
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
           <label className="form-control min-w-0">
-            <span className="label-text mb-1 font-bold">종목 선택</span>
+            <span className="label-text mb-1 block font-bold">종목 선택</span>
             <select
-              className="select select-bordered h-12 min-w-0 rounded-2xl"
+              className="select select-bordered w-full h-12 min-w-0 rounded-2xl"
               value={stockAdjust.stockId}
               onChange={(event) =>
                 setStockAdjust((current) => ({ ...current, stockId: event.target.value }))
@@ -783,9 +783,9 @@ export default function AdminPage() {
             </select>
           </label>
           <label className="form-control min-w-0">
-            <span className="label-text mb-1 font-bold">사유</span>
+            <span className="label-text mb-1 block font-bold">사유</span>
             <input
-              className="input input-bordered h-12 min-w-0 rounded-2xl"
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
               value={stockAdjust.reason}
               onChange={(event) =>
                 setStockAdjust((current) => ({ ...current, reason: event.target.value }))
@@ -795,9 +795,9 @@ export default function AdminPage() {
             />
           </label>
           <label className="form-control">
-            <span className="label-text mb-1 font-bold">조정 방식</span>
+            <span className="label-text mb-1 block font-bold">조정 방식</span>
             <select
-              className="select select-bordered h-12 rounded-2xl"
+              className="select select-bordered w-full h-12 rounded-2xl"
               value={stockAdjust.mode}
               onChange={(event) =>
                 setStockAdjust((current) => ({ ...current, mode: event.target.value }))
