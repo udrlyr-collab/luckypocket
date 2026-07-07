@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { BaseCard } from "../components/ui";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatCompactMoney } from "../utils/format";

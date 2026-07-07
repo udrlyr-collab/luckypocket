@@ -1,5 +1,4 @@
 import { useEffect, useState, useMemo } from "react";
-import { BaseCard } from "../components/ui";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";

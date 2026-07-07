@@ -1,5 +1,4 @@
 import { useEffect, useState, useRef } from "react";
-import { BaseCard } from "../components/ui";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
