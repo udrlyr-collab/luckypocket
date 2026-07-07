@@ -35,7 +35,7 @@ import {
   applyLuckTicketPayout,
   prepareLuckTicket,
 } from "../services/economyRtpService.js";
-import { applyJackpotTickets, getJackpotPool } from "../services/jackpotService.js";
+import { applyJackpotTickets, getJackpotEntryStats, getJackpotPool } from "../services/jackpotService.js";
 
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
@@ -169,10 +169,12 @@ gamesRouter.get("/daily-jackpot", (req, res) => {
   const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
   const user = db.prepare("SELECT jackpot_tickets FROM users WHERE id = ?").get(req.user.id);
   const entryRow = db.prepare("SELECT tickets FROM jackpot_entries WHERE user_id = ? AND entry_date = ?").get(req.user.id, date);
+  const stats = getJackpotEntryStats(db, date);
   return res.json({
     jackpotPool: getJackpotPool(db),
     myTickets: user?.jackpot_tickets || 0,
     appliedTickets: entryRow?.tickets || 0,
+    ...stats,
   });
 });
 
@@ -486,8 +488,8 @@ gamesRouter.post("/slot/play", (req, res, next) => {
         ? {
             numbers,
             ...outcome,
-            jackpotBalanceBefore: user.balance,
-            jackpotBalanceAfter: user.balance * outcome.balanceMultiplier,
+            jackpotMultiplier: outcome.multiplier,
+            jackpotPayout: payout,
             luckTicket: payoutResult.luckTicket,
           }
         : { numbers, ...outcome, luckTicket: payoutResult.luckTicket };

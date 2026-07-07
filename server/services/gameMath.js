@@ -112,8 +112,7 @@ export function classifySlot(numbers) {
     return {
       outcome: "777",
       label: "777 잭팟",
-      multiplier: null,
-      balanceMultiplier: 777,
+      multiplier: 777,
     };
   }
   if (new Set(numbers).size === 1) {
@@ -129,10 +128,6 @@ export function classifySlot(numbers) {
 }
 
 export function calculateSlotPayout({ balance, bet, outcome }) {
-  if (outcome.outcome === "777") {
-    const targetBalance = balance * outcome.balanceMultiplier;
-    return Math.floor(targetBalance - balance + bet);
-  }
   return outcome.multiplier ? payoutFor(bet, outcome.multiplier) : 0;
 }
 

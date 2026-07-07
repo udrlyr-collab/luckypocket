@@ -60,12 +60,23 @@ export default function AdminPage() {
   const [activeUser, setActiveUser] = useState(null);
   const [newNickname, setNewNickname] = useState("");
   const [singleBalance, setSingleBalance] = useState("");
+  const [singleTickets, setSingleTickets] = useState("");
   const [bulkBalance, setBulkBalance] = useState("");
+  const [stocks, setStocks] = useState([]);
+  const [stockAdjust, setStockAdjust] = useState({
+    stockId: "",
+    mode: "percent",
+    direction: "up",
+    value: "",
+    reason: "",
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [marketOpen, setMarketOpen] = useState(null);
   const [seasonInfo, setSeasonInfo] = useState(null);
+  const [jackpotInfo, setJackpotInfo] = useState(null);
+  const [jackpotAmount, setJackpotAmount] = useState("");
   const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
   const [balanceConfirm, setBalanceConfirm] = useState(null);
   const [resetConfirmIds, setResetConfirmIds] = useState([]);
@@ -104,6 +115,22 @@ export default function AdminPage() {
     api("/seasons/current")
       .then(setSeasonInfo)
       .catch(() => {});
+    api("/admin/jackpot")
+      .then((data) => {
+        setJackpotInfo(data);
+        setJackpotAmount(String(data.jackpotPool || 0));
+      })
+      .catch((requestError) => setError(requestError.message));
+    api("/stocks")
+      .then((data) => {
+        const list = (data.stocks || []).filter((stock) => stock.status !== "delisted");
+        setStocks(list);
+        setStockAdjust((current) => ({
+          ...current,
+          stockId: current.stockId || String(list[0]?.id || ""),
+        }));
+      })
+      .catch(() => {});
   }, []);
 
   const currentPageIds = useMemo(
@@ -121,6 +148,15 @@ export default function AdminPage() {
       users: current.users.map((item) => byId.get(item.id) || item),
     }));
     setActiveUser((current) => (current ? byId.get(current.id) || current : null));
+  };
+
+  const selectActiveUser = (item) => {
+    setActiveUser(item || null);
+    setNewNickname(item?.nickname || "");
+    setSingleBalance(item ? String(item.balance ?? "") : "");
+    setSingleTickets(item ? String(item.jackpotTickets ?? 0) : "");
+    setMessage("");
+    setError("");
   };
 
   const toggleUser = (userId) => {
@@ -191,6 +227,58 @@ export default function AdminPage() {
       setBulkBalance("");
       setMessage(data.message);
       if (pending.ids.includes(user.id)) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyUserOverride = async () => {
+    if (!activeUser) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/users/${activeUser.id}/override`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          nickname: newNickname,
+          balance: Number(singleBalance),
+          luckTicketCount: Number(singleTickets),
+        }),
+      });
+      updateUsers([data.user]);
+      selectActiveUser(data.user);
+      setMessage(data.message);
+      if (activeUser.id === user.id) await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyStockAdjustment = async () => {
+    if (!stockAdjust.stockId || stockAdjust.value === "") return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/stocks/${stockAdjust.stockId}/manual-adjust`, {
+        method: "POST",
+        body: JSON.stringify({
+          mode: stockAdjust.mode,
+          direction: stockAdjust.direction,
+          value: Number(stockAdjust.value),
+          reason: stockAdjust.reason,
+        }),
+      });
+      setMessage(data.message);
+      const stockData = await api("/stocks");
+      const list = (stockData.stocks || []).filter((stock) => stock.status !== "delisted");
+      setStocks(list);
+      setStockAdjust((current) => ({ ...current, value: "", reason: "" }));
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -282,7 +370,43 @@ export default function AdminPage() {
     }
   };
 
+  const setJackpotPoolAmount = async () => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/jackpot", {
+        method: "POST",
+        body: JSON.stringify({ amount: Number(jackpotAmount) }),
+      });
+      setJackpotInfo(data);
+      setJackpotAmount(String(data.jackpotPool || 0));
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resetJackpotPoolAmount = async () => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/jackpot/reset", { method: "POST" });
+      setJackpotInfo(data);
+      setJackpotAmount("0");
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const selectedIdList = [...selectedIds];
+  const selectedStock = stocks.find((stock) => String(stock.id) === String(stockAdjust.stockId));
 
   return (
     <PageContainer>
@@ -377,11 +501,7 @@ export default function AdminPage() {
                 type="button"
                 className="min-w-0 text-left"
                 onClick={() => {
-                  setActiveUser(item);
-                  setNewNickname("");
-                  setSingleBalance("");
-                  setMessage("");
-                  setError("");
+                  selectActiveUser(item);
                 }}
               >
                 <strong className="block truncate">{item.nickname}</strong>
@@ -431,118 +551,167 @@ export default function AdminPage() {
         </div>
       </BaseCard>
 
-      {selectedIds.size > 0 && (
-        <BaseCard className="mt-6 border-2 border-secondary/30">
-          <SectionHeader title={`선택한 ${selectedIds.size.toLocaleString("ko-KR")}명 일괄 설정`} eyebrow="BULK ACTIONS" className="mb-2" />
-          <p className="text-xs font-bold text-base-content/50">
-            관리자 본인도 선택 대상에 포함할 수 있습니다.
-          </p>
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]">
-            <input
-              className="input input-bordered h-12 min-w-0 rounded-2xl"
-              type="number"
-              min="0"
-              step="1"
-              value={bulkBalance}
-              onChange={(event) => setBulkBalance(event.target.value)}
-              placeholder="모두에게 적용할 새 자산"
-            />
-            <button
-              type="button"
-              className="btn btn-warning h-12 whitespace-nowrap rounded-2xl"
-              disabled={busy || bulkBalance === ""}
-              onClick={() =>
-                setBalanceConfirm({
-                  ids: selectedIdList,
-                  balance: Number(bulkBalance),
-                  label: `선택한 ${selectedIds.size}명`,
-                })
-              }
-            >
-              자산 일괄 변경
-            </button>
-            <button
-              type="button"
-              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
-              disabled={busy}
-              onClick={() => openReset(selectedIdList)}
-            >
-              선택 항목 일괄 초기화
-            </button>
-          </div>
-        </BaseCard>
-      )}
+      <BaseCard className="mt-6 border-2 border-secondary/30">
+        <SectionHeader
+          title={`선택한 ${selectedIds.size.toLocaleString("ko-KR")}명 일괄 설정`}
+          eyebrow="BULK ACTIONS"
+          className="mb-2"
+        />
+        <p className="text-xs font-bold text-base-content/50">
+          관리자 본인도 선택 대상에 포함할 수 있습니다. 선택한 사용자가 없으면 실행 버튼은 비활성화됩니다.
+        </p>
+        <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+          <input
+            className="input input-bordered h-12 min-w-0 rounded-2xl"
+            type="number"
+            min="0"
+            step="1"
+            value={bulkBalance}
+            onChange={(event) => setBulkBalance(event.target.value)}
+            placeholder="모두에게 적용할 새 자산"
+          />
+          <button
+            type="button"
+            className="btn btn-warning h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy || selectedIds.size === 0 || bulkBalance === ""}
+            onClick={() =>
+              setBalanceConfirm({
+                ids: selectedIdList,
+                balance: Number(bulkBalance),
+                label: `선택한 ${selectedIds.size}명`,
+              })
+            }
+          >
+            자산 일괄 변경
+          </button>
+          <button
+            type="button"
+            className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy || selectedIds.size === 0}
+            onClick={() => openReset(selectedIdList)}
+          >
+            선택 항목 일괄 초기화
+          </button>
+        </div>
+      </BaseCard>
 
-      {activeUser && (
-        <BaseCard className="mt-6 border-2 border-primary/25">
-          <SectionHeader title="플레이어별 설정" eyebrow="SINGLE PLAYER" className="mb-2" />
-          <p className="text-sm font-bold">
-            <span className="text-primary">{activeUser.nickname}</span> (@
-            {activeUser.username}) · {formatMoney(activeUser.balance)}
-          </p>
+      <BaseCard className="mt-6 border-2 border-primary/25">
+        <SectionHeader title="개인 강제 설정" eyebrow="SINGLE PLAYER OVERRIDE" className="mb-2" />
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto] lg:items-end">
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 font-bold">유저 선택</span>
+            <select
+              className="select select-bordered h-12 min-w-0 rounded-2xl"
+              value={activeUser?.id || ""}
+              onChange={(event) => {
+                const selected = result.users.find((item) => String(item.id) === event.target.value);
+                selectActiveUser(selected || null);
+              }}
+            >
+              <option value="">수정할 유저를 선택하세요</option>
+              {result.users.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.nickname} (@{item.username})
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className="btn btn-warning h-12 rounded-2xl"
+            disabled={busy || !activeUser}
+            onClick={forceLogin}
+          >
+            이 계정으로 강제 로그인
+          </button>
+          <button
+            type="button"
+            className="btn btn-error h-12 rounded-2xl"
+            disabled={busy || !activeUser}
+            onClick={() => openReset(activeUser ? [activeUser.id] : [])}
+          >
+            초기화 항목 선택
+          </button>
+        </div>
 
-          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
-            <input
-              className="input input-bordered h-12 min-w-0 rounded-2xl"
-              value={newNickname}
-              maxLength="12"
-              onChange={(event) => setNewNickname(event.target.value)}
-              placeholder="새 닉네임 2~12자"
-            />
+        {activeUser ? (
+          <>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+                <span className="text-xs font-bold text-base-content/45">현재 자산</span>
+                <strong className="mt-1 block tabular-nums">{formatMoney(activeUser.balance)}</strong>
+              </div>
+              <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+                <span className="text-xs font-bold text-base-content/45">총 평가자산</span>
+                <strong className="mt-1 block tabular-nums">
+                  {formatMoney(activeUser.totalEvaluatedAsset || activeUser.balance)}
+                </strong>
+              </div>
+              <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+                <span className="text-xs font-bold text-base-content/45">행운권 보유량</span>
+                <strong className="mt-1 block tabular-nums">
+                  {(activeUser.jackpotTickets || 0).toLocaleString("ko-KR")}장
+                </strong>
+              </div>
+              <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+                <span className="text-xs font-bold text-base-content/45">획득 업적</span>
+                <strong className="mt-1 block tabular-nums">
+                  {(activeUser.achievementCount || 0).toLocaleString("ko-KR")}개
+                </strong>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">닉네임</span>
+                <input
+                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  value={newNickname}
+                  maxLength="12"
+                  onChange={(event) => setNewNickname(event.target.value)}
+                  placeholder="새 닉네임 2~12자"
+                />
+              </label>
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">자산</span>
+                <input
+                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={singleBalance}
+                  onChange={(event) => setSingleBalance(event.target.value)}
+                  placeholder="새 자산"
+                />
+              </label>
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">행운권 보유량</span>
+                <input
+                  className="input input-bordered h-12 min-w-0 rounded-2xl"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={singleTickets}
+                  onChange={(event) => setSingleTickets(event.target.value)}
+                  placeholder="행운권 장수"
+                />
+              </label>
+            </div>
             <button
               type="button"
-              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
-              disabled={busy || !newNickname.trim()}
-              onClick={() => setNicknameConfirmOpen(true)}
+              className="btn btn-primary mt-4 h-12 w-full rounded-2xl"
+              disabled={busy || !newNickname.trim() || singleBalance === "" || singleTickets === ""}
+              onClick={applyUserOverride}
             >
-              닉네임 강제 변경
+              개인 강제 설정 저장
             </button>
-          </div>
-          <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
-            <input
-              className="input input-bordered h-12 min-w-0 rounded-2xl"
-              type="number"
-              min="0"
-              step="1"
-              value={singleBalance}
-              onChange={(event) => setSingleBalance(event.target.value)}
-              placeholder="새 자산"
-            />
-            <button
-              type="button"
-              className="btn btn-error h-12 whitespace-nowrap rounded-2xl"
-              disabled={busy || singleBalance === ""}
-              onClick={() =>
-                setBalanceConfirm({
-                  ids: [activeUser.id],
-                  balance: Number(singleBalance),
-                  label: `${activeUser.nickname}님`,
-                })
-              }
-            >
-              자산 강제 변경
-            </button>
-          </div>
-          <div className="mt-4 grid gap-2 border-t border-base-300 pt-4 sm:grid-cols-2">
-            <button
-              type="button"
-              className="btn btn-warning h-12 rounded-2xl"
-              disabled={busy}
-              onClick={forceLogin}
-            >
-              이 계정으로 강제 로그인
-            </button>
-            <button
-              type="button"
-              className="btn btn-error h-12 rounded-2xl"
-              disabled={busy}
-              onClick={() => openReset([activeUser.id])}
-            >
-              초기화 항목 선택
-            </button>
-          </div>
-        </BaseCard>
-      )}
+          </>
+        ) : (
+          <p className="mt-4 rounded-2xl bg-base-200 p-5 text-center text-sm font-bold text-base-content/50">
+            위 목록 또는 선택창에서 유저를 고르면 닉네임, 자산, 행운권 보유량을 바로 설정할 수 있습니다.
+          </p>
+        )}
+      </BaseCard>
 
       <BaseCard className="mt-6 border-2 border-primary/20">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -579,6 +748,160 @@ export default function AdminPage() {
             onClick={() => toggleMarket(false)}
           >
             주식장 휴장
+          </button>
+        </div>
+      </BaseCard>
+
+      <BaseCard className="mt-6 border-2 border-info/25">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <SectionHeader title="주가 수동 조정" eyebrow="ADMIN STOCK CONTROL" className="mb-1" />
+            <p className="text-xs font-bold text-base-content/50">
+              선택한 종목의 현재가를 기준으로 퍼센트 또는 원 단위로 즉시 조정합니다.
+            </p>
+          </div>
+          <span className="badge badge-info badge-outline font-black">
+            현재가 {selectedStock ? formatMoney(selectedStock.current_price || selectedStock.currentPrice) : "-"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 font-bold">종목 선택</span>
+            <select
+              className="select select-bordered h-12 min-w-0 rounded-2xl"
+              value={stockAdjust.stockId}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, stockId: event.target.value }))
+              }
+            >
+              {stocks.map((stock) => (
+                <option key={stock.id} value={stock.id}>
+                  {stock.name} · {formatMoney(stock.current_price || stock.currentPrice)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 font-bold">사유</span>
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl"
+              value={stockAdjust.reason}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, reason: event.target.value }))
+              }
+              placeholder="사유 입력 (선택)"
+              maxLength={120}
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">조정 방식</span>
+            <select
+              className="select select-bordered h-12 rounded-2xl"
+              value={stockAdjust.mode}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, mode: event.target.value }))
+              }
+            >
+              <option value="percent">퍼센트(%)</option>
+              <option value="amount">금액(원)</option>
+            </select>
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">조정 방향</span>
+            <select
+              className="select select-bordered h-12 rounded-2xl"
+              value={stockAdjust.direction}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, direction: event.target.value }))
+              }
+            >
+              <option value="up">상승</option>
+              <option value="down">하락</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
+          <input
+            className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
+            type="number"
+            min="0"
+            step={stockAdjust.mode === "percent" ? "0.1" : "1"}
+            value={stockAdjust.value}
+            onChange={(event) =>
+              setStockAdjust((current) => ({ ...current, value: event.target.value }))
+            }
+            placeholder={stockAdjust.mode === "percent" ? "예: 5" : "예: 500"}
+          />
+          <button
+            type="button"
+            className="btn btn-primary h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy || !stockAdjust.stockId || stockAdjust.value === ""}
+            onClick={applyStockAdjustment}
+          >
+            주가 조정 적용
+          </button>
+        </div>
+      </BaseCard>
+
+      <BaseCard className="mt-6 border-2 border-warning/30">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <SectionHeader title="오늘의 잭팟 제어" eyebrow="DAILY JACKPOT" className="mb-1" />
+            <p className="text-xs font-bold text-base-content/50">
+              운영자가 오늘의 잭팟 누적 상금액을 직접 설정하거나 0원으로 초기화할 수 있습니다.
+            </p>
+          </div>
+          <span className="badge badge-warning badge-outline font-black">
+            현재 {formatMoney(jackpotInfo?.jackpotPool || 0)}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl bg-base-200/70 p-4">
+            <span className="text-xs font-bold text-base-content/45">전체 응모 수</span>
+            <strong className="mt-1 block font-black tabular-nums">
+              {(jackpotInfo?.totalAppliedTickets || 0).toLocaleString("ko-KR")}장
+            </strong>
+          </div>
+          <div className="rounded-2xl bg-base-200/70 p-4">
+            <span className="text-xs font-bold text-base-content/45">응모 인원</span>
+            <strong className="mt-1 block font-black tabular-nums">
+              {(jackpotInfo?.totalParticipants || 0).toLocaleString("ko-KR")}명
+            </strong>
+          </div>
+          <div className="rounded-2xl bg-base-200/70 p-4">
+            <span className="text-xs font-bold text-base-content/45">기준 날짜</span>
+            <strong className="mt-1 block font-black tabular-nums">
+              {jackpotInfo?.date || "-"}
+            </strong>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 lg:grid-cols-[1fr_auto_auto]">
+          <input
+            className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
+            type="number"
+            min="0"
+            step="1"
+            value={jackpotAmount}
+            onChange={(event) => setJackpotAmount(event.target.value)}
+            placeholder="설정할 잭팟 금액"
+          />
+          <button
+            type="button"
+            className="btn btn-warning h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy || jackpotAmount === ""}
+            onClick={setJackpotPoolAmount}
+          >
+            잭팟 금액 설정
+          </button>
+          <button
+            type="button"
+            className="btn btn-outline h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy}
+            onClick={resetJackpotPoolAmount}
+          >
+            잭팟 초기화
           </button>
         </div>
       </BaseCard>

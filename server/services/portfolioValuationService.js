@@ -29,7 +29,7 @@ export function calculateUserTotalEvaluatedAsset(db, userId) {
   }
 
   const positions = db.prepare(`
-    SELECT p.margin_amount, p.quantity, p.entry_price, s.current_price
+    SELECT p.side, p.margin_amount, p.quantity, p.entry_price, s.current_price
     FROM stock_positions p
     JOIN stocks s ON p.stock_id = s.id
     WHERE p.user_id = ?
@@ -39,7 +39,8 @@ export function calculateUserTotalEvaluatedAsset(db, userId) {
   `).all(userId, userId);
 
   for (const p of positions) {
-    const pnl = Math.floor(p.quantity * (p.current_price - p.entry_price));
+    const direction = p.side === "short" ? -1 : 1;
+    const pnl = Math.floor(p.quantity * (p.current_price - p.entry_price) * direction);
     unrealizedPnl += pnl;
     positionValue += Math.max(0, p.margin_amount + pnl);
   }

@@ -28,6 +28,23 @@ const rangeTabs = [
   { key: "month", label: "한달" },
 ];
 
+const fallbackGameMeta = {
+  title: "기타 기록",
+  icon: "🎲",
+  color: "bg-base-200",
+};
+
+function safeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function safeFormatDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return formatDate(value);
+}
+
 export default function ProfilePage() {
   const { user, logout, refreshUser } = useAuth();
   const [summary, setSummary] = useState(null);
@@ -108,7 +125,7 @@ export default function ProfilePage() {
       <div className="mb-6 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-black tracking-tight">{user.nickname}님의 행운주머니</h1>
-          <p className="mt-2 text-sm text-base-content/60">@{user.username} · 가입 {formatDate(user.createdAt)}</p>
+          <p className="mt-2 text-sm text-base-content/60">@{user.username} · 가입 {safeFormatDate(user.createdAt)}</p>
         </div>
         <button className="btn btn-outline min-h-12 rounded-2xl w-full md:w-auto" onClick={logout}>
           로그아웃
@@ -124,11 +141,11 @@ export default function ProfilePage() {
             <StatCard label="총 수익" value={<MoneyText value={summary.grossProfit} />} valueClassName="text-success" />
             <StatCard label="총 손실" value={<MoneyText value={summary.grossLoss} />} valueClassName="text-error" />
             <StatCard label="순수익" value={<ChangeText amount={summary.netGameProfit} />} />
-            <StatCard label="총 게임횟수" value={`${summary.totalGames.toLocaleString()}판`} />
-            <StatCard label="획득 업적" value={`${summary.achievementCount}개`} />
+            <StatCard label="총 게임횟수" value={`${safeNumber(summary.totalGames).toLocaleString("ko-KR")}판`} />
+            <StatCard label="획득 업적" value={`${safeNumber(summary.achievementCount).toLocaleString("ko-KR")}개`} />
             <StatCard label="총 획득 금액" value={<MoneyText value={summary.totalPayout} />} />
             <StatCard label="총 잃은 금액" value={<MoneyText value={summary.totalLostAmount} />} />
-            <StatCard label="누적 파산 횟수" value={`${summary.bankruptcyCount.toLocaleString("ko-KR")}회`} />
+            <StatCard label="누적 파산 횟수" value={`${safeNumber(summary.bankruptcyCount).toLocaleString("ko-KR")}회`} />
           </div>
         </section>
       )}
@@ -223,10 +240,10 @@ export default function ProfilePage() {
                   </span>
                   <div>
                     <strong className="block text-lg font-black tabular-nums">
-                      {row.rank.toLocaleString("ko-KR")}위
+                      {safeNumber(row.rank).toLocaleString("ko-KR")}위
                     </strong>
                     <span className="text-xs text-base-content/50">
-                      게임 {row.totalGames.toLocaleString("ko-KR")}판
+                      게임 {safeNumber(row.totalGames).toLocaleString("ko-KR")}판
                     </span>
                   </div>
                 </div>
@@ -307,7 +324,10 @@ export default function ProfilePage() {
         <SectionHeader title="게임별 통계" eyebrow="STATISTICS" />
         <div className="grid gap-4 lg:grid-cols-2">
           {gameStats.map((stat) => {
-            const meta = gameMeta[stat.gameType];
+            const meta = gameMeta[stat.gameType] || {
+              ...fallbackGameMeta,
+              title: stat.gameType || fallbackGameMeta.title,
+            };
             return (
               <BaseCard key={stat.gameType}>
                 <div className="mb-5 flex items-center gap-4">

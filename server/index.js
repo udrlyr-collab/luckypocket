@@ -21,7 +21,11 @@ import { serverStatsRouter } from "./routes/serverStats.js";
 import { mineRouter } from "./routes/mine.js";
 import { stocksRouter } from "./routes/stocks.js";
 import { seasonsRouter } from "./routes/seasons.js";
-import { initStockMarket, tickStockMarket } from "./services/stockService.js";
+import {
+  initStockMarket,
+  stockMarketDistributionSnapshot,
+  tickStockMarket,
+} from "./services/stockService.js";
 import { readClientAssetVersion } from "./services/clientVersionService.js";
 import { runJackpotDraw } from "./services/jackpotService.js";
 
@@ -50,6 +54,10 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "32kb" }));
+app.use("/api", (req, res, next) => {
+  res.charset = "utf-8";
+  next();
+});
 app.use(
   "/api/auth",
   rateLimit({
@@ -147,6 +155,7 @@ const server = app.listen(config.port, "127.0.0.1", () => {
   // Initialize stock market
   try {
     initStockMarket(db);
+    console.table(stockMarketDistributionSnapshot(db));
     setInterval(() => tickStockMarket(db), 10000);
     console.log("주식 시장 틱 타이머(10초)가 시작되었습니다.");
   } catch (err) {

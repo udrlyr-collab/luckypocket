@@ -47,16 +47,16 @@ test("slot classifier produces the documented 1000-outcome distribution", () => 
   assert.equal(nonJackpotRtp, 0.8563);
 });
 
-test("slot 777 makes the pre-game cash balance exactly 777 times larger", () => {
+test("slot 777 pays 777 times the bet amount", () => {
   const balance = 1_000_000;
   const bet = 10_000;
   const outcome = classifySlot([7, 7, 7]);
   const payout = calculateSlotPayout({ balance, bet, outcome });
 
-  assert.equal(outcome.balanceMultiplier, 777);
-  assert.equal(payout, 776_010_000);
-  assert.equal(balance - bet + payout, balance * 777);
-  assert.equal(payout - bet, balance * 776);
+  assert.equal(outcome.multiplier, 777);
+  assert.equal(payout, 7_770_000);
+  assert.equal(balance - bet + payout, 8_760_000);
+  assert.equal(payout - bet, 7_760_000);
 });
 
 test("4x4 bomb survival probability follows the combination formula", () => {

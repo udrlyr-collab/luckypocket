@@ -257,13 +257,8 @@ export function buildRtpDetail(database, { userId, gameType, bet, detail }) {
   };
 }
 
-export function addJackpotContribution(database, lossAmount) {
-  const loss = Math.max(0, Number(lossAmount) || 0);
-  if (loss <= 0) return 0;
-  const contribution = Math.min(
-    RTP_POLICY.jackpotPool.maxContributionPerGame,
-    Math.floor(loss * RTP_POLICY.jackpotPool.lossContributionRate),
-  );
+export function addJackpotContribution(database, amount) {
+  const contribution = Math.max(0, Math.floor(Number(amount) || 0));
   if (contribution <= 0) return 0;
   const current = systemConfigNumber(database, "jackpot_pool_amount", 0);
   setSystemConfigNumber(database, "jackpot_pool_amount", current + contribution);
@@ -273,5 +268,4 @@ export function addJackpotContribution(database, lossAmount) {
 export function getJackpotPool(database) {
   return systemConfigNumber(database, "jackpot_pool_amount", 0);
 }
-
 

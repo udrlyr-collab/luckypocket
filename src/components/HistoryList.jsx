@@ -1,6 +1,15 @@
 import { gameMeta } from "../data/games";
 import { formatDate, formatMoney, formatSignedMoney } from "../utils/format";
 
+function isBrokenText(text) {
+  return typeof text === "string" && (/\?{2,}/.test(text) || text.includes("�"));
+}
+
+function safeHistoryText(text, fallback = "이전 기록을 표시할 수 없어요.") {
+  if (!text || isBrokenText(text)) return fallback;
+  return text;
+}
+
 function eventMeta(log) {
   if (log.entryType === "transfer_out") {
     return {
@@ -80,7 +89,7 @@ function eventMeta(log) {
   if (log.entryType === "server_notification") {
     return {
       icon: "📣",
-      title: log.detail.message || log.detail.title || "서버 알림",
+      title: safeHistoryText(log.detail?.message || log.detail?.title, "서버 알림을 표시할 수 없어요."),
       color: "bg-secondary/20",
       badge: "badge-secondary",
       badgeLabel: "서버 알림",
@@ -184,6 +193,7 @@ export default function HistoryList({ logs, emptyText = "아직 게임 기록이
     <div className="min-w-0 space-y-3">
       {logs.map((log) => {
         const meta = eventMeta(log);
+        const title = safeHistoryText(meta.title);
         const isGame = log.entryType === "game";
         const isNonFinancial = ["nickname_change", "admin_nickname_change", "server_notification", "luck_ticket_use"].includes(log.entryType);
         return (
@@ -194,7 +204,7 @@ export default function HistoryList({ logs, emptyText = "아직 게임 기록이
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-2">
-                  <strong className="truncate text-sm">{meta.title}</strong>
+                  <strong className="truncate text-sm">{title}</strong>
                   <span className={`badge badge-sm ${meta.badge}`}>
                     {meta.badgeLabel || (isGame ? (log.result === "win" ? "성공" : "실패") : "보상")}
                   </span>

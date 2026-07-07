@@ -3,6 +3,7 @@ import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { awardAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
+import { assertCanTransferAfterBankruptcy } from "../services/bankruptcyService.js";
 import { findUserByNickname } from "../services/nicknameService.js";
 
 export const transferRouter = Router();
@@ -16,6 +17,7 @@ transferRouter.post("/", (req, res, next) => {
     }
     const transfer = db.transaction(() => {
       const sender = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+      assertCanTransferAfterBankruptcy(sender);
       const receiver = findUserByNickname(db, req.body.receiverNickname);
       if (!receiver) {
         const error = new Error("받는 사람을 찾을 수 없어요.");

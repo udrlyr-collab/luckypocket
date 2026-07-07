@@ -3,7 +3,7 @@ import { db, publicUser } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { serializeAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
-import { canPromptBankruptcy } from "../services/bankruptcyService.js";
+import { getBankruptcyStatus } from "../services/bankruptcyService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
 
 export const meRouter = Router();
@@ -12,13 +12,18 @@ meRouter.use(requireAuth);
 meRouter.get("/", (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
   if (req.user.isAdmin) user.isAdmin = true;
+  const activeSeason = db
+    .prepare("SELECT id FROM seasons WHERE status = 'active' ORDER BY season_number DESC LIMIT 1")
+    .get();
   const todayProfit = db
     .prepare(
       `SELECT TOTAL(profit) AS value
        FROM game_logs
-       WHERE user_id = ? AND date(created_at, '+9 hours') = date('now', '+9 hours')`,
+       WHERE user_id = ?
+         AND date(created_at, '+9 hours') = date('now', '+9 hours')
+         AND (? IS NULL OR season_id = ?)`,
     )
-    .get(user.id).value;
+    .get(user.id, activeSeason?.id ?? null, activeSeason?.id ?? null).value;
   const achievements = serializeAchievements(db, user.id);
   const revivalCount = db
     .prepare(
@@ -30,9 +35,11 @@ meRouter.get("/", (req, res) => {
     .get(user.balance).rank;
   const totalUsers = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
 
-  const { totalEvaluatedAsset } = calculateUserTotalEvaluatedAsset(db, user.id);
+  const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+  const { totalEvaluatedAsset } = valuation;
+  const bankruptcyStatus = getBankruptcyStatus(db, user, valuation);
 
-  if (totalEvaluatedAsset >= 500000 && user.bankruptcy_prompt_dismissed_at) {
+  if (!bankruptcyStatus.eligible && user.bankruptcy_prompt_dismissed_at) {
     db.prepare("UPDATE users SET bankruptcy_prompt_dismissed_at = NULL WHERE id = ?").run(user.id);
     user.bankruptcy_prompt_dismissed_at = null;
   }
@@ -46,8 +53,9 @@ meRouter.get("/", (req, res) => {
       revivalsRemaining: Math.max(0, 3 - revivalCount),
       currentRank,
       totalUsers,
-      bankruptcyEligible: totalEvaluatedAsset < 500000,
-      bankruptcyShouldPrompt: canPromptBankruptcy(db, user, totalEvaluatedAsset),
+      bankruptcyEligible: bankruptcyStatus.eligible,
+      bankruptcyShouldPrompt: bankruptcyStatus.shouldPrompt,
+      bankruptcyStatus,
     },
   });
 });

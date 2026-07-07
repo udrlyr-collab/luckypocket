@@ -105,13 +105,13 @@ export default function RankingPage() {
       <SectionHeader title="행운주머니 리더보드" eyebrow="LEADERBOARD" className="mb-4" />
 
       <section className="mb-6">
-        <div className="sticky top-[72px] z-20 bg-base-100/90 backdrop-blur-md py-2 mb-3">
-          <div className="tabs-boxed grid grid-cols-3 rounded-2xl p-1 bg-base-200/50">
+        <div className="sticky top-[72px] z-20 mb-3 py-2">
+          <div className="grid grid-cols-3 rounded-2xl border border-base-100/40 bg-base-100/25 p-1 shadow-sm backdrop-blur-md">
             {Object.entries(rankingTypes).map(([key, tab]) => (
               <button
                 type="button"
                 key={key}
-                className={`btn btn-sm h-10 min-h-10 rounded-xl border-none ${type === key ? "bg-base-100 text-primary shadow-sm font-black" : "bg-transparent text-base-content/60"}`}
+                className={`btn btn-sm h-10 min-h-10 rounded-xl border-none ${type === key ? "bg-primary/15 text-primary shadow-sm font-black" : "bg-transparent text-base-content/60 shadow-none"}`}
                 onClick={() => setType(key)}
               >
                 {tab.label}

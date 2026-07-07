@@ -2,7 +2,11 @@ import { Router } from "express";
 import { db, publicUser } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
-import { canPromptBankruptcy } from "../services/bankruptcyService.js";
+import {
+  BANKRUPTCY_POLICY,
+  assertCanApplyBankruptcy,
+  getBankruptcyStatus,
+} from "../services/bankruptcyService.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
 
 export const bankruptcyRouter = Router();
@@ -10,9 +14,9 @@ bankruptcyRouter.use(requireAuth);
 
 bankruptcyRouter.get("/status", (req, res) => {
   const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  const status = getBankruptcyStatus(db, user);
   return res.json({
-    eligible: user.balance < 500000,
-    shouldPrompt: canPromptBankruptcy(db, user),
+    ...status,
     bankruptcyCount: user.bankruptcy_count,
     lastBankruptcyAt: user.last_bankruptcy_at,
   });
@@ -22,12 +26,8 @@ bankruptcyRouter.post("/apply", (req, res, next) => {
   try {
     const apply = db.transaction(() => {
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (user.balance >= 500000) {
-        const error = new Error("현재 자산이 500,000원 미만일 때 신청할 수 있어요.");
-        error.status = 400;
-        throw error;
-      }
-      const balanceAfter = 1000000;
+      const bankruptcyStatus = assertCanApplyBankruptcy(db, user);
+      const balanceAfter = BANKRUPTCY_POLICY.resetBalance;
       const amount = balanceAfter - user.balance;
       db.prepare(
         `UPDATE users
@@ -49,6 +49,10 @@ bankruptcyRouter.post("/apply", (req, res, next) => {
         detail: {
           label: "파산신청 자산 재설정",
           bankruptcyCount: user.bankruptcy_count + 1,
+          totalEvaluatedAsset: bankruptcyStatus.totalEvaluatedAsset,
+          recentOutgoingTransferAmount:
+            bankruptcyStatus.recentOutgoingTransferAmount,
+          effectiveBankruptcyAsset: bankruptcyStatus.effectiveBankruptcyAsset,
         },
       });
       createServerNotification(db, {
@@ -87,9 +91,9 @@ bankruptcyRouter.post("/dismiss", (req, res, next) => {
        WHERE id = ?`,
     ).run(req.user.id);
     const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+    const status = getBankruptcyStatus(db, user);
     return res.json({
-      eligible: user.balance < 500000,
-      shouldPrompt: canPromptBankruptcy(db, user),
+      ...status,
     });
   } catch (error) {
     return next(error);

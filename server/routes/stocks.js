@@ -3,11 +3,13 @@ import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
 import {
+  ACTIVE_TRADABLE_STOCK_STATUSES,
   delistStock,
   recalculateOwnerEtfs,
   requiredCompanyAcquisitionBalance,
+  getStockMarketClock,
+  settleDueIpoSubscriptions,
   STOCK_MARKET_POLICY,
-  nextTickAt,
 } from "../services/stockService.js";
 import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
@@ -15,23 +17,29 @@ import {
   assertStockMarketOpen,
   isStockMarketOpen,
 } from "../services/marketStateService.js";
+import { addJackpotContribution } from "../services/economyRtpService.js";
 import { formatWon } from "../utils/formatWon.js";
 
-function assertCanTradeStock(user, stock) {
+function assertStockTradeAllowed(stock) {
   assertStockMarketOpen(db);
   if (stock.is_trading_suspended) {
     throw new Error("해당 종목은 현재 거래가 정지되었습니다.");
   }
+}
 
+function assertCanOpenNewStockTrade(user, stock) {
+  assertStockTradeAllowed(stock);
   const isOwnOwnerEtf = stock.is_etf === 1 && stock.etf_tracking_type === "owner_asset" && stock.owner_user_id === user.id;
   if (isOwnOwnerEtf) {
-    throw new Error("본인이 인수한 ETF는 직접 구매할 수 없어요.");
+    throw new Error("본인이 인수한 ETF는 직접 거래할 수 없어요.");
   }
 }
 
 export const stocksRouter = express.Router();
 
 stocksRouter.get("/", (req, res) => {
+  settleDueIpoSubscriptions(db);
+  const clock = getStockMarketClock();
   const stocksRaw = db.prepare(`
     SELECT * FROM stocks 
     WHERE status != 'delisted'
@@ -50,6 +58,12 @@ stocksRouter.get("/", (req, res) => {
       currentPrice: s.current_price,
       previousPrice: s.previous_price,
       offeringPrice: s.offering_price,
+      ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
+      ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
+      recoveryTickCount: Number(s.recovery_tick_count || 0),
+      recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
+      recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
+      recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
       priceChangeAmount: s.current_price - s.previous_price,
       priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
       offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
@@ -60,11 +74,25 @@ stocksRouter.get("/", (req, res) => {
   const stocks = stocksRaw.map(processStock);
   const recentDelistedStocks = recentDelisted.map(processStock);
 
+  const activeTradableStocks = stocks.filter(
+    (s) =>
+      ACTIVE_TRADABLE_STOCK_STATUSES.includes(s.status) &&
+      (s.delist_risk_status || "normal") !== "final_crash",
+  );
+  const ipoStocks = stocks.filter((s) => s.status === "ipo_subscription");
   const summary = {
     total: stocks.length,
+    activeTradableStockCount: activeTradableStocks.length,
+    targetActiveTradableStockCount:
+      STOCK_MARKET_POLICY.targetActiveTradableStockCount,
+    ipoCount: ipoStocks.length,
+    recentDelistedCount: recentDelistedStocks.length,
+    cautionCount: stocks.filter((s) => s.delist_risk_status === "caution").length,
+    delistReviewCount: stocks.filter((s) => s.delist_risk_status === "delist_review").length,
+    recoveryCount: stocks.filter((s) => s.delist_risk_status === "recovery").length,
     up: stocks.filter(s => s.priceChangeAmount > 0).length,
     down: stocks.filter(s => s.priceChangeAmount < 0).length,
-    ipo: stocks.filter(s => s.status === 'ipo_subscription' || s.status === 'newly_listed').length,
+    ipo: ipoStocks.length,
     delisted: db.prepare("SELECT COUNT(*) as c FROM stocks WHERE status = 'delisted'").get().c
   };
 
@@ -73,6 +101,7 @@ stocksRouter.get("/", (req, res) => {
     recentDelistedStocks,
     summary,
     marketOpen: isStockMarketOpen(db),
+    ...clock,
   });
 });
 
@@ -114,10 +143,8 @@ stocksRouter.get("/portfolio", (req, res) => {
 
 stocksRouter.get("/market-snapshot", (req, res) => {
   const userId = req.user.id;
-  
-  // 10초 틱을 기준으로 다음 틱까지 남은 시간 대략 계산
-  const now = Date.now();
-  const serverNextTickAt = nextTickAt;
+  settleDueIpoSubscriptions(db);
+  const clock = getStockMarketClock();
 
   // 폴링 시 실시간으로 ETF 가격 최신화
   recalculateOwnerEtfs(db);
@@ -156,6 +183,12 @@ stocksRouter.get("/market-snapshot", (req, res) => {
       currentPrice: s.current_price,
       previousPrice: s.previous_price,
       offeringPrice: s.offering_price,
+      ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
+      ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
+      recoveryTickCount: Number(s.recovery_tick_count || 0),
+      recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
+      recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
+      recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
       priceChangeAmount: s.current_price - s.previous_price,
       priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
       offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
@@ -163,11 +196,30 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     };
   };
 
+  const stocks = stocksRaw.map(processStock);
+  const activeTradableStocks = stocks.filter(
+    (s) =>
+      ACTIVE_TRADABLE_STOCK_STATUSES.includes(s.status) &&
+      (s.delist_risk_status || "normal") !== "final_crash",
+  );
+  const summary = {
+    total: stocks.length,
+    activeTradableStockCount: activeTradableStocks.length,
+    targetActiveTradableStockCount:
+      STOCK_MARKET_POLICY.targetActiveTradableStockCount,
+    ipoCount: stocks.filter((s) => s.status === "ipo_subscription").length,
+    recentDelistedCount: db
+      .prepare("SELECT COUNT(*) AS count FROM stocks WHERE status = 'delisted'")
+      .get().count,
+    up: stocks.filter((s) => s.priceChangeAmount > 0).length,
+    down: stocks.filter((s) => s.priceChangeAmount < 0).length,
+  };
+
   res.json({
-    serverTime: new Date(now).toISOString(),
-    nextTickAt: new Date(serverNextTickAt).toISOString(),
+    ...clock,
     marketOpen: isStockMarketOpen(db),
-    stocks: stocksRaw.map(processStock),
+    stocks,
+    summary,
     portfolio: { ...portfolio, holdings, positions }
   });
 });
@@ -176,6 +228,99 @@ function topLimit(value) {
   const limit = Number(value || 5);
   if (!Number.isSafeInteger(limit)) return 5;
   return Math.min(20, Math.max(1, limit));
+}
+
+function getCompanyAcquisitionInfo(user, stock) {
+  const acquisitionPrice = Math.max(0, Math.floor(Number(stock?.market_cap || 0)));
+  const requiredTotalAsset = requiredCompanyAcquisitionBalance(acquisitionPrice);
+  const valuation = user
+    ? calculateUserTotalEvaluatedAsset(db, user.id)
+    : { totalEvaluatedAsset: 0 };
+  const userTotalEvaluatedAsset = Math.floor(
+    Number(valuation.totalEvaluatedAsset || 0),
+  );
+  const userCashBalance = Math.floor(Number(user?.balance || 0));
+  const autoSellRow =
+    user && stock
+      ? db
+          .prepare(
+            `SELECT TOTAL(h.quantity * s.current_price) AS value
+             FROM stock_holdings h
+             JOIN stocks s ON s.id = h.stock_id
+             WHERE h.user_id = ?
+               AND h.stock_id = ?
+               AND h.quantity > 0`,
+          )
+          .get(user.id, stock.id)
+      : null;
+  const autoSellValue = Math.floor(Number(autoSellRow?.value || 0));
+  const autoCloseValue = user && stock
+    ? db
+        .prepare(
+          `SELECT p.side, p.margin_amount, p.quantity, p.entry_price, s.current_price
+           FROM stock_positions p
+           JOIN stocks s ON s.id = p.stock_id
+           WHERE p.user_id = ?
+             AND p.stock_id = ?
+             AND p.status = 'open'`,
+        )
+        .all(user.id, stock.id)
+        .reduce((sum, position) => {
+          const direction = position.side === "short" ? -1 : 1;
+          const pnl = Math.floor(
+            position.quantity *
+              (position.current_price - position.entry_price) *
+              direction,
+          );
+          return sum + Math.max(0, Math.floor(position.margin_amount + pnl));
+        }, 0)
+    : 0;
+  const estimatedCashAfterAutoClear =
+    userCashBalance + autoSellValue + autoCloseValue;
+  const existingEtf = user
+    ? db
+        .prepare(
+          "SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'",
+        )
+        .get(user.id)
+    : null;
+
+  let canAcquire = true;
+  let reason = "ok";
+  if (!stock || stock.status === "delisted") {
+    canAcquire = false;
+    reason = "not_tradable";
+  } else if (stock.is_bluechip === 1) {
+    canAcquire = false;
+    reason = "bluechip";
+  } else if (stock.is_etf === 1 || stock.status === "acquired") {
+    canAcquire = false;
+    reason = "already_acquired";
+  } else if (existingEtf) {
+    canAcquire = false;
+    reason = "already_owns_company";
+  } else if (userTotalEvaluatedAsset < requiredTotalAsset) {
+    canAcquire = false;
+    reason = "total_asset_required";
+  } else if (estimatedCashAfterAutoClear < acquisitionPrice) {
+    canAcquire = false;
+    reason = "cash_required";
+  }
+
+  return {
+    canAcquire,
+    reason,
+    acquisitionPrice,
+    requiredTotalAsset,
+    userTotalEvaluatedAsset,
+    userCashBalance,
+    autoSellValue,
+    autoCloseValue,
+    estimatedCashAfterAutoClear,
+    balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
+    cost: acquisitionPrice,
+    requiredBalance: requiredTotalAsset,
+  };
 }
 
 stocksRouter.get("/:stockId/top-holders", (req, res) => {
@@ -296,6 +441,8 @@ stocksRouter.get("/:stockId/top-positions", (req, res) => {
 });
 
 stocksRouter.get("/:id", (req, res) => {
+  settleDueIpoSubscriptions(db);
+  const clock = getStockMarketClock();
   const { id } = req.params;
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
   if (!stock) return res.status(404).json({ message: "종목을 찾을 수 없어요." });
@@ -305,6 +452,12 @@ stocksRouter.get("/:id", (req, res) => {
     currentPrice: s.current_price,
     previousPrice: s.previous_price,
     offeringPrice: s.offering_price,
+    ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
+    ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
+    recoveryTickCount: Number(s.recovery_tick_count || 0),
+    recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
+    recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
+    recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
     priceChangeAmount: s.current_price - s.previous_price,
     priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
     offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
@@ -321,6 +474,35 @@ stocksRouter.get("/:id", (req, res) => {
 
   const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, id);
   const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(req.user.id, id);
+  const trades = db
+    .prepare(
+      `SELECT *
+       FROM stock_trades
+       WHERE user_id = ?
+         AND stock_id = ?
+       ORDER BY created_at DESC
+       LIMIT 30`,
+    )
+    .all(req.user.id, id)
+    .map((trade) => {
+      const realizedPnl = Math.floor(Number(trade.realized_pnl || 0));
+      const costBasis = Math.max(1, Number(trade.amount || 0) - realizedPnl);
+      return {
+        id: trade.id,
+        tradeType: trade.trade_type,
+        amount: trade.amount,
+        quantity: trade.quantity,
+        price: trade.price,
+        leverage: trade.leverage,
+        realizedPnl,
+        profitRate: realizedPnl === 0 ? null : realizedPnl / costBasis,
+        balanceBefore: trade.balance_before,
+        balanceAfter: trade.balance_after,
+        createdAt: trade.created_at,
+      };
+    });
+  const currentUser = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  const acquisition = getCompanyAcquisitionInfo(currentUser, stock);
   let hostileTakeover = null;
   if (
     stock.status === "acquired" &&
@@ -346,12 +528,10 @@ stocksRouter.get("/:id", (req, res) => {
     history,
     holding,
     positions,
+    trades,
     marketOpen: isStockMarketOpen(db),
-    acquisition: {
-      cost: stock.market_cap,
-      requiredBalance: requiredCompanyAcquisitionBalance(stock.market_cap),
-      balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
-    },
+    ...clock,
+    acquisition,
     hostileTakeover,
   });
 });
@@ -369,7 +549,7 @@ stocksRouter.post("/buy", (req, res) => {
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
       
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      assertCanTradeStock(user, stock);
+      assertCanOpenNewStockTrade(user, stock);
 
       const amount = Math.floor(quantity * stock.current_price);
       if (amount <= 0) throw new Error("매수 금액이 너무 작습니다.");
@@ -416,6 +596,7 @@ stocksRouter.post("/buy-ipo", (req, res) => {
 
   let result;
   try {
+    settleDueIpoSubscriptions(db);
     result = db.transaction(() => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status !== 'ipo_subscription') throw new Error("현재 공모 청약 기간이 아닙니다.");
@@ -425,7 +606,7 @@ stocksRouter.post("/buy-ipo", (req, res) => {
       if (now >= endsAt) throw new Error("공모 청약 기간이 종료되었습니다.");
 
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      assertCanTradeStock(user, stock);
+      assertCanOpenNewStockTrade(user, stock);
       if (user.balance < amount) throw new Error("잔액이 부족해요.");
 
       const quantity = amount / stock.offering_price;
@@ -484,11 +665,17 @@ stocksRouter.post("/sell", (req, res) => {
         throw new Error("거래할 수 없는 종목입니다.");
       }
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      assertCanTradeStock(user, stock);
+      assertStockTradeAllowed(stock);
 
       const sellQuantity = holding.quantity * fraction;
-      const sellAmount = Math.floor(sellQuantity * stock.current_price);
-      const realizedPnl = Math.floor(sellQuantity * (stock.current_price - holding.average_price));
+      const grossSellAmount = Math.floor(sellQuantity * stock.current_price);
+      const grossRealizedPnl = Math.floor(sellQuantity * (stock.current_price - holding.average_price));
+      const jackpotContribution = grossRealizedPnl > 0 ? Math.floor(grossRealizedPnl * 0.01) : 0;
+      const sellAmount = Math.max(0, grossSellAmount - jackpotContribution);
+      const realizedPnl = grossRealizedPnl - jackpotContribution;
+      if (jackpotContribution > 0) {
+        addJackpotContribution(db, jackpotContribution);
+      }
 
       const newQuantity = holding.quantity - sellQuantity;
       db.prepare("UPDATE stock_holdings SET quantity = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, holding.id);
@@ -497,9 +684,21 @@ stocksRouter.post("/sell", (req, res) => {
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-        VALUES (?, 'stock_sell', ?, ?, ?, ?)
-      `).run(userId, sellAmount, user.balance, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+        VALUES (?, 'stock_sell', ?, ?, ?, ?, ?)
+      `).run(
+        userId,
+        sellAmount,
+        user.balance,
+        balanceAfter,
+        stockId,
+        JSON.stringify({
+          grossSellAmount,
+          grossRealizedPnl,
+          jackpotPoolContribution: jackpotContribution,
+          netRealizedPnl: realizedPnl,
+        }),
+      );
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
@@ -519,7 +718,7 @@ stocksRouter.post("/sell", (req, res) => {
         });
       }
 
-      return { balance: balanceAfter, amountSold: sellAmount, realizedPnl };
+      return { balance: balanceAfter, amountSold: sellAmount, realizedPnl, jackpotPoolContribution: jackpotContribution };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -545,7 +744,7 @@ stocksRouter.post("/open-position", (req, res) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
       
-      assertCanTradeStock(user, stock);
+      assertCanOpenNewStockTrade(user, stock);
       if (stock.is_bluechip === 1 && leverage > 10) throw new Error("우량주는 10배까지만 레버리지가 가능합니다.");
 
       const positionSize = margin * leverage;
@@ -569,8 +768,8 @@ stocksRouter.post("/open-position", (req, res) => {
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
-        VALUES (?, ?, 'open_position', ?, ?, ?, ?, ?, ?)
-      `).run(userId, stockId, margin, quantity, stock.current_price, leverage, user.balance, balanceAfter);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, stockId, `open_${side}`, margin, quantity, stock.current_price, leverage, user.balance, balanceAfter);
 
       return { balance: balanceAfter };
     })();
@@ -594,7 +793,7 @@ stocksRouter.post("/close-position", (req, res) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(position.stock_id);
       if (!stock) throw new Error("종목을 찾을 수 없어요.");
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      assertCanTradeStock(user, stock);
+      assertStockTradeAllowed(stock);
       const closePrice = (stock && stock.status !== 'delisted') ? stock.current_price : 0;
 
       let unrealizedPnl = 0;
@@ -608,42 +807,60 @@ stocksRouter.post("/close-position", (req, res) => {
         unrealizedPnl = (closePrice - position.entry_price) * position.quantity;
       }
 
-      const payout = Math.floor(position.margin_amount + unrealizedPnl);
-      const finalPayout = Math.max(0, payout); // Cannot lose more than margin if manually closed before liquidation processing
+      const grossRealizedPnl = Math.floor(unrealizedPnl);
+      const jackpotContribution = grossRealizedPnl > 0 ? Math.floor(grossRealizedPnl * 0.01) : 0;
+      if (jackpotContribution > 0) {
+        addJackpotContribution(db, jackpotContribution);
+      }
+      const payout = Math.floor(position.margin_amount + grossRealizedPnl);
+      const finalPayout = Math.max(0, payout - jackpotContribution); // Cannot lose more than margin if manually closed before liquidation processing
+      const realizedPnl = grossRealizedPnl - jackpotContribution;
 
       db.prepare(`
         UPDATE stock_positions 
         SET status = 'closed', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unrealized_pnl = 0, realized_pnl = ?
         WHERE id = ?
-      `).run(unrealizedPnl, position.id);
+      `).run(realizedPnl, position.id);
 
       const balanceAfter = user.balance + finalPayout;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-        VALUES (?, 'stock_position_close', ?, ?, ?, ?)
-      `).run(userId, finalPayout, user.balance, balanceAfter, stock.id);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+        VALUES (?, 'stock_position_close', ?, ?, ?, ?, ?)
+      `).run(
+        userId,
+        finalPayout,
+        user.balance,
+        balanceAfter,
+        stock.id,
+        JSON.stringify({
+          grossPayout: Math.max(0, payout),
+          grossRealizedPnl,
+          jackpotPoolContribution: jackpotContribution,
+          netRealizedPnl: realizedPnl,
+        }),
+      );
 
       db.prepare(`
         INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
-        VALUES (?, ?, 'close_position', ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, stock.id, finalPayout, position.quantity, closePrice, position.leverage, unrealizedPnl, user.balance, balanceAfter);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, stock.id, `close_${position.side || "long"}`, finalPayout, position.quantity, closePrice, position.leverage, realizedPnl, user.balance, balanceAfter);
 
-      if (position.leverage >= 10 && unrealizedPnl >= 1000000) {
+      if (position.leverage >= 10 && realizedPnl >= 1000000) {
         createServerNotification(db, {
           userId,
           nickname: user.nickname,
           type: "stock_big_profit",
           title: "레버리지 대박",
-          message: `${user.nickname}님이 ${position.leverage}배 레버리지로 ${formatWon(Math.floor(unrealizedPnl))}의 수익을 올렸어요!`,
-          amount: unrealizedPnl,
+          message: `${user.nickname}님이 ${position.leverage}배 레버리지로 ${formatWon(realizedPnl)}의 수익을 올렸어요!`,
+          amount: realizedPnl,
           gameType: "stock",
           gameName: "주식"
         });
       }
 
-      return { balance: balanceAfter, payout: finalPayout, realizedPnl: unrealizedPnl };
+      return { balance: balanceAfter, payout: finalPayout, realizedPnl, jackpotPoolContribution: jackpotContribution };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -662,13 +879,16 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
 
       if (!stock || stock.status === 'delisted') throw new Error("인수할 수 없는 종목입니다.");
-      assertCanTradeStock(user, stock);
+      assertStockTradeAllowed(stock);
       if (stock.is_bluechip === 1) throw new Error("우량주는 인수할 수 없습니다.");
       if (stock.is_etf || stock.status === 'acquired') throw new Error("이미 인수된 종목입니다.");
-      const requiredBalance = requiredCompanyAcquisitionBalance(stock.market_cap);
-      if (user.balance < requiredBalance) {
+      const acquisitionPrice = Math.floor(Number(stock.market_cap || 0));
+      const requiredTotalAsset = requiredCompanyAcquisitionBalance(acquisitionPrice);
+      const userTotalEvaluatedAsset =
+        calculateUserTotalEvaluatedAsset(db, userId).totalEvaluatedAsset;
+      if (userTotalEvaluatedAsset < requiredTotalAsset) {
         throw new Error(
-          `회사를 인수하려면 인수 금액의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredBalance)})를 보유해야 해요.`,
+          `회사를 인수하려면 총 평가자산이 인수 금액의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredTotalAsset)}) 이상이어야 해요.`,
         );
       }
 
@@ -714,7 +934,12 @@ stocksRouter.post("/:id/acquire", (req, res) => {
         db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(user.balance, userId);
       }
 
-      const cost = stock.market_cap;
+      const cost = acquisitionPrice;
+      if (user.balance < cost) {
+        throw new Error(
+          `인수 비용 ${formatWon(cost)}을 현금으로 보유해야 해요.`,
+        );
+      }
       const balanceAfter = user.balance - cost;
       
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
@@ -831,7 +1056,7 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
 
       const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(attackerId);
       const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
-      assertCanTradeStock(attacker, stock);
+      assertStockTradeAllowed(stock);
 
       if (!defender) throw new Error("기존 소유자를 찾을 수 없습니다.");
       const attackerHolding = db

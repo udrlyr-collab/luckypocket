@@ -1,6 +1,25 @@
 import { useMemo } from 'react';
 import { formatDate, formatSignedMoney } from '../utils/format';
 import { gameMeta } from '../data/games';
+
+const assetEventLabels = {
+  game_win: "게임 성공",
+  game_loss: "게임 실패",
+  achievement_reward: "업적 보상",
+  bonus_code: "행운코드",
+  transfer_in: "송금 받음",
+  transfer_out: "송금 보냄",
+  nickname_change_fee: "닉네임 변경",
+  bankruptcy_reset: "파산신청",
+  stock_buy: "주식 매수",
+  stock_sell: "주식 매도",
+  stock_ipo_subscribe: "공모주 청약",
+  stock_position_open: "포지션 진입",
+  stock_position_close: "포지션 청산",
+  daily_jackpot_reward: "오늘의 잭팟",
+  season_start_bonus: "시즌 시작",
+  season_end_settlement: "시즌 정산",
+};
 export default function RecentAssetEvents({ points, range }) {
   const recent = points
     .filter((point) => !["range_start", "current"].includes(point.eventType) && point.amount !== 0)

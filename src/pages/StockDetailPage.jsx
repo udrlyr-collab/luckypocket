@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
+import { useMarketClock } from "../hooks/useMarketClock";
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockTierBadge } from "../components/StockRiskStatus";
 import { PageContainer, SectionHeader, BaseCard, ConfirmModal } from "../components/ui";
@@ -15,9 +16,15 @@ export default function StockDetailPage() {
   const [data, setData] = useState(null);
   const [topHolders, setTopHolders] = useState([]);
   const [topPositions, setTopPositions] = useState([]);
-  const [nextTickAt, setNextTickAt] = useState(null);
-  const [timeRemaining, setTimeRemaining] = useState(10);
-  const [ipoTimeRemaining, setIpoTimeRemaining] = useState(0);
+  const lastIpoRefreshRef = useRef(0);
+  const {
+    serverNow,
+    nextTickRemainingSeconds,
+    remainingSecondsUntil,
+  } = useMarketClock({
+    serverTime: data?.serverTime,
+    nextTickAt: data?.nextTickAt,
+  });
   
   // Trade state
   const [amountInput, setAmountInput] = useState("");
@@ -42,7 +49,6 @@ export default function StockDetailPage() {
       setData(res);
       setTopHolders(holdersData.holders || []);
       setTopPositions(positionsData.positions || []);
-      setNextTickAt(new Date(res.nextTickAt || Date.now() + 10000).getTime());
     } catch (e) {
       setError(e.message);
     }
@@ -55,27 +61,16 @@ export default function StockDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    const timerInterval = setInterval(() => {
-      if (nextTickAt) {
-        const remaining = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
-        setTimeRemaining(remaining);
-      }
-    }, 100);
-    return () => clearInterval(timerInterval);
-  }, [nextTickAt]);
-
-  useEffect(() => {
-    if (data?.stock?.status === 'ipo_subscription' && data.stock.ipo_subscription_ends_at) {
-      const endsAt = new Date(data.stock.ipo_subscription_ends_at).getTime();
-      const updateTimer = () => {
-        const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
-        setIpoTimeRemaining(remaining);
-      };
-      updateTimer();
-      const interval = setInterval(updateTimer, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [data?.stock]);
+    if (data?.stock?.status !== "ipo_subscription") return;
+    const remaining = remainingSecondsUntil(
+      data.stock.ipoSubscriptionEndsAt || data.stock.ipo_subscription_ends_at,
+    );
+    if (remaining !== 0) return;
+    const now = Date.now();
+    if (now - lastIpoRefreshRef.current < 1500) return;
+    lastIpoRefreshRef.current = now;
+    fetchStock();
+  }, [serverNow, data?.stock?.status, data?.stock?.ipoSubscriptionEndsAt, data?.stock?.ipo_subscription_ends_at]);
 
   if (error) {
     return (
@@ -95,13 +90,34 @@ export default function StockDetailPage() {
     );
   }
 
-  const { stock, history, holding, positions, marketOpen } = data;
+  const { stock, history, holding, positions, trades = [], marketOpen } = data;
   const isDelisted = stock.status === 'delisted';
-  const isAcquired = stock.status === 'acquired' || Boolean(stock.is_etf);
-  const isOwner = stock.owner_user_id === user.id;
+  const isOwnerAssetEtf = Boolean(stock.is_etf) && stock.etf_tracking_type === "owner_asset";
+  const isAcquired = stock.status === 'acquired' || isOwnerAssetEtf;
+  const isOwner = Number(stock.owner_user_id) === Number(user.id);
+  const isOwnOwnerEtf = isOwnerAssetEtf && isOwner;
+  const ownerNickname = stock.owner_nickname_snapshot || "인수자";
+  const acquisitionInfo = data.acquisition || {};
+  const acquisitionCost = Number(acquisitionInfo.acquisitionPrice || acquisitionInfo.cost || stock.market_cap || 0);
+  const acquisitionRequiredTotalAsset = Number(acquisitionInfo.requiredTotalAsset || acquisitionInfo.requiredBalance || acquisitionCost);
+  const acquisitionUserTotalAsset = Number(acquisitionInfo.userTotalEvaluatedAsset || user.totalAsset || user.balance || 0);
+  const acquisitionUserCashBalance = Number(acquisitionInfo.userCashBalance || user.balance || 0);
+  const acquisitionEstimatedCash = Number(acquisitionInfo.estimatedCashAfterAutoClear || acquisitionUserCashBalance);
+  const canAcquireCompany = acquisitionInfo.canAcquire !== false;
+  const hostileCost = Number(data.hostileTakeover?.cost || 0);
+  const hostileRequiredBalance = Number(data.hostileTakeover?.requiredBalance || hostileCost);
   const isAdmin = user && (user.isAdmin || user.username === 'admin');
   const isTradingSuspended = stock.is_trading_suspended === 1;
   const isTradeBlocked = !marketOpen || isTradingSuspended;
+  const ipoTimeRemaining = stock.status === "ipo_subscription"
+    ? remainingSecondsUntil(stock.ipoSubscriptionEndsAt || stock.ipo_subscription_ends_at)
+    : null;
+  const ipoCountdownText =
+    ipoTimeRemaining === null
+      ? "상장 시간 확인 중"
+      : ipoTimeRemaining === 0
+        ? "상장 처리 중..."
+        : `상장까지 ${Math.floor(ipoTimeRemaining / 60) > 0 ? `${Math.floor(ipoTimeRemaining / 60)}분 ` : ""}${ipoTimeRemaining % 60}초`;
 
   const executeAdminAction = async (endpoint) => {
     if (!window.confirm("정말 실행하시겠습니까?")) return;
@@ -252,6 +268,9 @@ export default function StockDetailPage() {
   const blueChipDailyChangePercent = blueChipDailyChangeRate === null
     ? null
     : `${blueChipDailyChangeRate > 0 ? "+" : ""}${(blueChipDailyChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+  const offeringRate = Number(stock.offeringChangeRate || 0);
+  const isIpoLimitNear = stock.status === 'newly_listed' && offeringRate >= 2.7;
+  const isIpoOverheated = stock.status === 'newly_listed' && offeringRate >= 1.5;
 
   return (
     <PageContainer>
@@ -270,6 +289,8 @@ export default function StockDetailPage() {
             <StockTierBadge stock={stock} />
             {stock.status === 'ipo_subscription' && <span className="badge badge-warning font-bold">공모주</span>}
             {stock.status === 'newly_listed' && <span className="badge badge-warning font-bold">신규 상장</span>}
+            {isIpoLimitNear && <span className="badge badge-error font-bold">상한 근접</span>}
+            {!isIpoLimitNear && isIpoOverheated && <span className="badge badge-warning font-bold">공모주 과열</span>}
             {isAcquired && <span className="badge badge-primary font-bold">인수됨</span>}
             {stock.status === 'delist_warning' && <span className="badge badge-error font-bold animate-pulse">상장폐지 위험</span>}
             {isDelisted && <span className="badge badge-ghost font-bold">상장폐지</span>}
@@ -277,8 +298,8 @@ export default function StockDetailPage() {
             {!marketOpen && <span className="badge badge-error font-bold">휴장</span>}
           </div>
           <p className="text-sm font-bold text-base-content/60">
-            {isAcquired ? (
-              <span>이 종목은 {stock.owner_nickname_snapshot}님의 자산을 추종하는 ETF입니다.</span>
+            {isOwnerAssetEtf ? (
+              <span>이 종목은 {ownerNickname}님의 자산을 추종하는 ETF입니다.</span>
             ) : (
               <span>시가총액 {formatMoney(stock.market_cap)}</span>
             )}
@@ -286,7 +307,7 @@ export default function StockDetailPage() {
         </div>
         <div className="text-left md:text-right relative">
           <div className="absolute right-0 -top-6 text-xs font-bold text-base-content/50">
-            다음 갱신 <span className="text-primary">{timeRemaining}초</span>
+            다음 갱신 <span className="text-primary">{nextTickRemainingSeconds ?? "-"}초</span>
           </div>
           <div className={`text-4xl font-black tabular-nums ${isDelisted ? "text-base-content/30" : ""}`}>
             <AnimatedMoney value={stock.current_price} />
@@ -306,6 +327,21 @@ export default function StockDetailPage() {
       <BaseCard className="mb-6 p-4">
         <StockChart history={history} isDelisted={isDelisted} />
       </BaseCard>
+
+      {stock.status === 'newly_listed' && (isIpoOverheated || isIpoLimitNear) && (
+        <BaseCard className={`mb-6 border-2 ${isIpoLimitNear ? "border-error/30 bg-error/10" : "border-warning/30 bg-warning/10"}`}>
+          <p className="text-xs font-black uppercase tracking-widest text-base-content/50">
+            IPO STATUS
+          </p>
+          <h2 className={`mt-1 text-xl font-black ${isIpoLimitNear ? "text-error" : "text-warning"}`}>
+            {isIpoLimitNear ? "상한 근접" : "공모주 과열"}
+          </h2>
+          <p className="mt-2 text-sm font-bold leading-relaxed text-base-content/65">
+            공모가 대비 {(offeringRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}% 오른 상태예요.
+            추가 상승 확률이 낮아지고 하락 위험이 커져요.
+          </p>
+        </BaseCard>
+      )}
 
       {stock.is_bluechip === 1 && (
         <BaseCard className=" mb-6 border-2 border-info/20 bg-info/5">
@@ -435,7 +471,7 @@ export default function StockDetailPage() {
               </p>
               <div className="mb-4 text-center">
                 <span className="text-3xl font-black text-warning animate-pulse">
-                  상장까지 {Math.floor(ipoTimeRemaining / 60) > 0 ? `${Math.floor(ipoTimeRemaining / 60)}분 ` : ''}{ipoTimeRemaining % 60}초
+                  {ipoCountdownText}
                 </span>
               </div>
               
@@ -480,29 +516,33 @@ export default function StockDetailPage() {
               {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
             </div>
-          ) : isAcquired && isOwner ? (
+          ) : isOwnOwnerEtf ? (
             <div className="bg-warning/10 border-2 border-warning/20 p-6 rounded-2xl text-center">
               <h3 className="font-black text-warning text-lg mb-2">본인이 인수한 ETF는 거래할 수 없어요</h3>
               <p className="text-sm font-bold text-base-content/70">
                 이 ETF는 인수자의 자산을 따라 움직이기 때문에, 자산 순환을 막기 위한 제한이에요.
               </p>
             </div>
-          ) : isAcquired && !isOwner ? (
-            <div className="bg-error/10 border-2 border-error/20 p-6 rounded-2xl text-center">
-              <h3 className="font-black text-error text-lg mb-2">이 종목은 다른 사람이 인수했습니다</h3>
-              <p className="text-sm font-bold text-base-content/70">
-                더 이상 주식 시장에서 거래할 수 없습니다.
-              </p>
-              <button 
-                className="btn btn-error mt-4 w-full"
-                disabled={busy}
-                onClick={() => executeAction('/hostile-takeover', '적대적 M&A')}
-              >
-                적대적 M&A (상대 전체 재산의 20% 지불)
-              </button>
-            </div>
           ) : (
             <div>
+              {isOwnerAssetEtf && !isOwner && (
+                <div className="mb-4 rounded-2xl border border-primary/20 bg-primary/5 p-4">
+                  <h3 className="font-black text-primary">거래 가능한 인수 ETF예요</h3>
+                  <p className="mt-1 text-sm font-bold leading-relaxed text-base-content/65">
+                    {ownerNickname}님의 자산 변화를 추종합니다. 인수자가 아닌 유저는 현물과 레버리지 거래를 할 수 있어요.
+                  </p>
+                  {data.hostileTakeover && (
+                    <button
+                      className="btn btn-outline btn-error mt-3 min-h-11 w-full rounded-2xl"
+                      disabled={busy || user.balance < hostileRequiredBalance}
+                      onClick={() => executeAction('/hostile-takeover', '적대적 M&A')}
+                    >
+                      적대적 M&A · 비용 {formatMoney(hostileCost)} · 필요 보유액 {formatMoney(hostileRequiredBalance)}
+                    </button>
+                  )}
+                </div>
+              )}
+
               <div className="mb-4">
                 <label className="text-xs font-bold text-base-content/50 block mb-2">레버리지 선택</label>
                 <div className="join w-full">
@@ -697,19 +737,90 @@ export default function StockDetailPage() {
         />
       </div>
 
+      <BaseCard className="mt-6">
+        <SectionHeader title="내 매매 기록" eyebrow="MY STOCK TRADES" className="mb-4" />
+        {trades.length === 0 ? (
+          <p className="rounded-2xl bg-base-200/60 p-5 text-center text-sm font-bold text-base-content/45">
+            아직 이 종목의 매매 기록이 없어요.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="table table-sm">
+              <thead>
+                <tr className="text-xs">
+                  <th>시간</th>
+                  <th>구분</th>
+                  <th className="text-right">수량</th>
+                  <th className="text-right">당시 가격</th>
+                  <th className="text-right">거래 금액</th>
+                  <th className="text-right">수익</th>
+                  <th className="text-right">수익률</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map((trade) => {
+                  const realizedPnl = Number(trade.realizedPnl || 0);
+                  const hasPnl = realizedPnl !== 0;
+                  const profitRate = Number(trade.profitRate);
+                  return (
+                    <tr key={trade.id} className="text-xs font-bold">
+                      <td className="whitespace-nowrap text-base-content/50">
+                        {new Date(trade.createdAt).toLocaleString("ko-KR", {
+                          month: "numeric",
+                          day: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </td>
+                      <td className="whitespace-nowrap">
+                        <span className="badge badge-outline badge-sm font-black">
+                          {formatTradeType(trade.tradeType, trade.leverage)}
+                        </span>
+                      </td>
+                      <td className="text-right tabular-nums">
+                        {Number(trade.quantity || 0).toLocaleString("ko-KR", {
+                          maximumFractionDigits: 4,
+                        })}
+                      </td>
+                      <td className="text-right tabular-nums">{formatMoney(trade.price)}</td>
+                      <td className="text-right tabular-nums">{formatMoney(trade.amount)}</td>
+                      <td className={`text-right tabular-nums ${hasPnl ? (realizedPnl > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
+                        {hasPnl ? formatSignedMoney(realizedPnl) : "-"}
+                      </td>
+                      <td className={`text-right tabular-nums ${hasPnl ? (profitRate > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
+                        {hasPnl && Number.isFinite(profitRate)
+                          ? formatRate(profitRate)
+                          : "-"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </BaseCard>
+
       {/* ACQUISITION PANEL */}
       {!isAcquired && !isDelisted && stock.status !== 'ipo' && (
         <BaseCard className="mt-6 border-2 border-primary/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div>
             <h3 className="font-black text-lg mb-1 flex items-center gap-2">🏢 회사 인수 <span className="badge badge-primary badge-sm">ETF 전환</span></h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
-              시가총액 <strong>{formatMoney(stock.market_cap)}</strong> 이상을 지불하면 이 회사를 인수할 수 있어요.<br />
+              인수 비용은 <strong>{formatMoney(acquisitionCost)}</strong>이며, 인수하려면 총 평가자산이 <strong>{formatMoney(acquisitionRequiredTotalAsset)}</strong> 이상이어야 해요.<br />
+              현재 총 평가자산 <strong>{formatMoney(acquisitionUserTotalAsset)}</strong> · 인수 가능 현금 <strong>{formatMoney(acquisitionEstimatedCash)}</strong>
+              {acquisitionEstimatedCash < acquisitionCost && " · 인수 비용만큼의 현금도 필요해요."}<br />
               인수된 회사는 '인수자 자산 추종 ETF'가 되어 오너의 자산 변화를 따라갑니다.
+              {!canAcquireCompany && (
+                <span className="mt-2 block font-black text-error">
+                  {formatAcquisitionReason(acquisitionInfo.reason)}
+                </span>
+              )}
             </p>
           </div>
           <button 
             className="btn btn-primary rounded-2xl px-6 shrink-0" 
-            disabled={user.balance < stock.market_cap || busy}
+            disabled={!canAcquireCompany || busy}
             onClick={() => setShowAcquireConfirm(true)}
           >
             회사 인수하기
@@ -749,20 +860,26 @@ export default function StockDetailPage() {
       {/* MODALS */}
       {showAcquireConfirm && (
         <ConfirmModal 
+          isOpen={showAcquireConfirm}
           title="정말 회사를 인수할까요?" 
-          message={`비용으로 ${formatMoney(stock.market_cap)}이 차감되며, 이 종목은 1등 자산 추종 ETF로 변환됩니다.`} 
+          message={`비용으로 ${formatMoney(acquisitionCost)}이 차감되며, 인수 전 총 평가자산 ${formatMoney(acquisitionRequiredTotalAsset)} 이상과 현금 ${formatMoney(acquisitionCost)} 이상이 필요합니다. 이 종목은 인수자 자산 추종 ETF로 변환됩니다.`}
           onConfirm={handleAcquire} 
-          onClose={() => setShowAcquireConfirm(false)} 
+          onCancel={() => setShowAcquireConfirm(false)}
+          confirmText="회사 인수하기"
+          isBusy={busy}
         />
       )}
 
       {showDelistConfirm && (
         <ConfirmModal 
+          isOpen={showDelistConfirm}
           title="정말 이 회사를 상장폐지할까요?" 
           message="상장폐지되면 이 종목을 보유한 유저들의 주식 가치는 0원이 되며, 레버리지 포지션은 즉시 청산됩니다. 이 행동은 되돌릴 수 없습니다!" 
           isDanger 
           onConfirm={handleDelistByOwner} 
-          onClose={() => setShowDelistConfirm(false)} 
+          onCancel={() => setShowDelistConfirm(false)}
+          confirmText="상장폐지 실행"
+          isBusy={busy}
         />
       )}
     </PageContainer>
@@ -775,6 +892,39 @@ function formatRate(rate) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   })}%`;
+}
+
+function formatTradeType(type, leverage = 1) {
+  const labels = {
+    buy: "현물 매수",
+    sell: "현물 매도",
+    open_long: `롱 진입 ${leverage}x`,
+    open_short: `숏 진입 ${leverage}x`,
+    open_position: `포지션 진입 ${leverage}x`,
+    close_long: `롱 청산 ${leverage}x`,
+    close_short: `숏 청산 ${leverage}x`,
+    close_position: `포지션 청산 ${leverage}x`,
+    liquidation_long: `롱 강제청산 ${leverage}x`,
+    liquidation_short: `숏 강제청산 ${leverage}x`,
+    liquidation: `강제청산 ${leverage}x`,
+    stock_auto_sell_acquire: "인수 전 자동매도",
+    stock_auto_close_acquire: "인수 전 자동청산",
+    acquire: "회사 인수",
+    hostile_takeover: "적대적 M&A",
+  };
+  return labels[type] || type;
+}
+
+function formatAcquisitionReason(reason) {
+  const labels = {
+    bluechip: "우량주는 인수할 수 없어요.",
+    already_acquired: "이미 인수된 종목이에요.",
+    already_owns_company: "이미 인수한 회사가 있어요.",
+    total_asset_required: "총 평가자산이 인수 조건보다 부족해요.",
+    cash_required: "인수 비용으로 사용할 현금이 부족해요.",
+    not_tradable: "현재 인수할 수 없는 종목이에요.",
+  };
+  return labels[reason] || "현재 인수 조건을 만족하지 못했어요.";
 }
 
 function StockTopList({ title, emptyText, rows, type }) {

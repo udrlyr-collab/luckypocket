@@ -25,6 +25,28 @@ export function getJackpotPool(database) {
   return systemConfigNumber(database, "jackpot_pool_amount", 0);
 }
 
+export function setJackpotPool(database, amount) {
+  setSystemConfigNumber(database, "jackpot_pool_amount", amount);
+  return getJackpotPool(database);
+}
+
+export function getJackpotEntryStats(database, date = todayKst(database)) {
+  const row = database
+    .prepare(
+      `SELECT
+         COALESCE(SUM(tickets), 0) AS total_tickets,
+         COUNT(*) AS total_participants
+       FROM jackpot_entries
+       WHERE entry_date = ?`,
+    )
+    .get(date);
+  return {
+    date,
+    totalAppliedTickets: row?.total_tickets || 0,
+    totalParticipants: row?.total_participants || 0,
+  };
+}
+
 export function applyJackpotTickets(database, userId) {
   const apply = database.transaction(() => {
     const user = database.prepare("SELECT * FROM users WHERE id = ?").get(userId);
@@ -49,10 +71,12 @@ export function applyJackpotTickets(database, userId) {
     const totalApplied = database
       .prepare("SELECT tickets FROM jackpot_entries WHERE user_id = ? AND entry_date = ?")
       .get(userId, date).tickets;
+    const stats = getJackpotEntryStats(database, date);
 
     return {
       message: `${tickets}장의 행운권으로 오늘의 잭팟에 응모했어요!`,
-      totalApplied
+      totalApplied,
+      ...stats,
     };
   });
   return apply();

@@ -9,7 +9,6 @@ import {
   PageContainer, 
   SectionHeader, 
   BaseCard, 
-  StatCard, 
   MoneyText, 
   ChangeText 
 } from "../components/ui";
@@ -72,7 +71,10 @@ export default function HomePage() {
 
   const todayProfit = Number(user.todayProfit || 0);
   const isLowBalance = (user.totalAsset || user.balance) < 500000;
-  const latestNews = notifications[0];
+  const latestNewsItems = notifications.slice(0, 2);
+  const quickGameEntries = ["risk-button", "bomb-dodge", "slot"]
+    .map((key) => [key, gameMeta[key]])
+    .filter(([, game]) => Boolean(game));
 
   const applyJackpot = async () => {
     setJackpotBusy(true);
@@ -80,7 +82,13 @@ export default function HomePage() {
     try {
       const data = await api("/games/daily-jackpot/apply", { method: "POST" });
       setJackpotMessage(data.message);
-      setJackpotData((current) => current ? { ...current, myTickets: 0, appliedTickets: data.totalApplied } : current);
+      setJackpotData((current) => current ? {
+        ...current,
+        myTickets: 0,
+        appliedTickets: data.totalApplied,
+        totalAppliedTickets: data.totalAppliedTickets,
+        totalParticipants: data.totalParticipants,
+      } : current);
       await refreshUser();
     } catch (error) {
       setJackpotMessage(error.message);
@@ -95,147 +103,178 @@ export default function HomePage() {
         <h1 className="text-2xl sm:text-3xl font-black tracking-tight">오늘은 행운주머니가 얼마나 불어날까요?</h1>
       </div>
       
-      <section className="mb-8 grid gap-6 lg:grid-cols-[1.3fr_0.7fr]">
-        <div className="flex flex-col gap-6">
-          <BaseCard className="flex flex-col justify-between bg-gradient-to-br from-base-100 to-base-200">
-            <div className="flex items-center gap-4 mb-6">
-              <div className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-3xl shadow-inner">👛</div>
-              <div className="min-w-0 flex-1">
-                <p className="text-[11px] font-black tracking-widest text-primary/80 uppercase">행운주머니가 이만큼 자랐어요</p>
-                <h2 className="mt-1 text-xl font-bold truncate">{user.nickname}님의 주머니</h2>
-              </div>
+      <section className="mb-8 grid gap-6 lg:grid-cols-3">
+        <BaseCard className="order-1 flex min-h-[13rem] flex-col justify-center overflow-hidden rounded-3xl border border-base-300 bg-gradient-to-br from-base-100 via-base-100 to-primary/5 p-5 shadow-sm sm:p-6 lg:col-span-2 lg:col-start-1 lg:row-start-1">
+          <div className="flex items-start gap-4">
+            <div className="grid size-14 shrink-0 place-items-center rounded-3xl bg-primary/10 text-3xl shadow-inner">👛</div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black uppercase tracking-widest text-primary/80">
+                행운주머니가 자랐어요
+              </p>
+              <h2 className="mt-2 truncate text-2xl font-black">{user.nickname}님의 주머니</h2>
             </div>
-            
-            <div className="mb-6">
-              <span className="text-xs font-bold text-base-content/50">총 평가 자산</span>
-              <strong className="mt-1 block text-4xl sm:text-5xl font-black tracking-tight text-primary tabular-nums break-words" style={{wordBreak: "break-all"}}>
-                <MoneyText value={user.totalAsset || user.balance} />
-              </strong>
-              <div className="mt-2 text-sm">
-                오늘 손익 <ChangeText amount={todayProfit} />
-              </div>
-            </div>
+          </div>
 
-            {isLowBalance && (
-              <div className="relative z-10 flex items-center justify-between rounded-2xl bg-error/15 p-4 shadow-inner">
-                <div className="min-w-0 flex-1">
-                  <span className="block text-sm font-black text-error-content/90">자산이 50만원 미만으로 떨어졌어요.</span>
-                  <span className="mt-0.5 block truncate text-xs font-bold text-error-content/70">탄광에서 자원을 캐서 다시 모아볼까요?</span>
+          <div className="mt-5">
+            <span className="text-xs font-black text-base-content/50">총 평가자산</span>
+            <strong className="mt-1 block max-w-full text-4xl font-black leading-none tracking-tight text-primary tabular-nums sm:text-5xl">
+              <MoneyText value={user.totalAsset || user.balance} className="break-words" />
+            </strong>
+            <div className="mt-3 text-base font-black">
+              오늘 손익 <ChangeText amount={todayProfit} />
+            </div>
+          </div>
+
+          {isLowBalance && (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl bg-error/15 p-3 shadow-inner">
+              <span className="min-w-0 text-xs font-black text-error-content/90">
+                자산이 50만원 미만이에요.
+              </span>
+              <button onClick={() => navigate("/mine")} className="btn btn-xs btn-error min-h-9 shrink-0 rounded-xl px-3">
+                ⛏ 탄광
+              </button>
+            </div>
+          )}
+        </BaseCard>
+
+        <BaseCard className="order-2 flex min-h-[13rem] flex-col rounded-3xl border border-base-300 p-5 shadow-sm sm:p-6 lg:col-span-1 lg:col-start-3 lg:row-start-1">
+          <SectionHeader title="오늘의 행운 소식" eyebrow="LUCKY NEWS" className="mb-3" />
+
+          {latestNewsItems.length > 0 ? (
+            <div className="grid flex-1 gap-3">
+              {latestNewsItems.map((item) => (
+                <div key={item.id} className="min-w-0 border-l-4 border-primary/35 py-1 pl-4">
+                  <strong className="block truncate text-sm">{item.title}</strong>
+                  <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-base-content/60">
+                    {item.message}
+                  </p>
+                  {item.amount > 0 && (
+                    <span className={`mt-1 block text-xs font-black tabular-nums ${item.type === "jackpot" ? "text-warning" : "text-success"}`}>
+                      <MoneyText value={item.amount} />
+                    </span>
+                  )}
                 </div>
-                <button onClick={() => navigate("/mine")} className="btn btn-sm btn-error shrink-0 rounded-xl px-4 font-bold text-xs shadow-sm ml-4 min-h-10">
-                  ⛏ 탄광가기
-                </button>
-              </div>
-            )}
-          </BaseCard>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-1 items-center justify-center py-4">
+              <p className="text-center text-sm text-base-content/50">
+                아직 행운 소식이 없어요.
+              </p>
+            </div>
+          )}
 
-          <BaseCard className="home-welcome-card p-6 overflow-hidden relative">
-            <div className="relative z-10 max-w-md">
+          <button
+            type="button"
+            className="btn btn-outline mt-4 min-h-11 w-full rounded-2xl"
+            onClick={() => setShowNewsModal(true)}
+          >
+            행운소식 전체 보기
+          </button>
+        </BaseCard>
+
+          <BaseCard className="order-3 home-welcome-card relative flex min-h-[18rem] items-center overflow-hidden rounded-3xl border border-base-300 p-5 shadow-sm sm:p-6 lg:col-span-1 lg:col-start-1 lg:row-start-2">
+            <div className="relative z-10 max-w-sm">
               <span className="badge border-0 bg-base-100/70 font-black text-primary">TODAY&apos;S LUCK</span>
               <h2 className="mt-4 text-2xl font-black leading-tight">
                 숫자를 고르고,<br />
                 <span className="text-primary">행운을 톡톡</span> 키워보세요
               </h2>
               <p className="mt-3 text-sm leading-relaxed text-base-content/60">
-                다섯 가지 게임에서 오늘의 감각을 시험해 보세요.
+                오늘은 다트로 가볍게 시작해 보세요.
               </p>
               <Link to="/games/dart" className="btn btn-primary mt-5 h-12 min-h-12 whitespace-nowrap rounded-2xl px-6">
                 🎯 다트부터 시작하기
               </Link>
             </div>
-            <span className="home-welcome-emoji" aria-hidden="true">🍀</span>
           </BaseCard>
-        </div>
 
-        <div className="flex flex-col gap-6">
-          <BaseCard className="flex flex-col">
-            <SectionHeader title="오늘의 행운 소식" eyebrow="LUCKY NEWS" className="mb-4" />
-            
-            {latestNews ? (
-              <div className="mt-2 min-w-0 border-l-4 border-primary/40 pl-4 py-1 flex-1">
-                <strong className="block text-base">{latestNews.title}</strong>
-                <p className="mt-2 text-sm leading-relaxed text-base-content/60">{latestNews.message}</p>
-                {latestNews.amount > 0 && (
-                  <span className={`mt-2 block text-sm font-black tabular-nums ${latestNews.type === "jackpot" ? "text-warning" : "text-success"}`}>
-                    <MoneyText value={latestNews.amount} />
-                  </span>
-                )}
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center justify-center py-6">
-                <p className="text-sm text-base-content/50 text-center">아직 행운 소식이 없어요.<br/>첫 번째 큰 행운을 만들어보세요!</p>
-              </div>
+          <BaseCard className="order-4 flex min-h-[18rem] flex-col rounded-3xl border border-base-300 bg-gradient-to-br from-base-100 to-secondary/5 p-5 shadow-sm sm:p-6 lg:col-span-1 lg:col-start-2 lg:row-start-2">
+            <SectionHeader title="빠른 플레이" eyebrow="QUICK PLAY" className="mb-3" />
+            <p className="text-sm font-bold leading-relaxed text-base-content/60">
+              오늘 바로 즐길 수 있는 인기 게임으로 이동하세요.
+            </p>
+            <div className="mt-4 grid gap-2">
+              {quickGameEntries.map(([key, game]) => (
+                <Link
+                  key={key}
+                  to={game.path}
+                  className="flex items-center justify-between rounded-2xl border border-base-300 bg-base-100/80 px-4 py-3 text-sm font-black transition hover:border-primary/40"
+                >
+                  <span>{game.icon} {game.title}</span>
+                  <span className="text-primary">열기 →</span>
+                </Link>
+              ))}
+            </div>
+            {serverStats && (
+              <p className="mt-auto pt-4 text-xs font-bold leading-relaxed text-base-content/45">
+                지금까지 {serverStats.totalUsers.toLocaleString("ko-KR")}명이 주머니를 만들었고,
+                오늘 {serverStats.activeUsersToday.toLocaleString("ko-KR")}명이 플레이했어요.
+              </p>
             )}
-            
-            <button 
-              type="button" 
-              className="btn btn-outline min-h-12 rounded-2xl mt-6 w-full"
-              onClick={() => setShowNewsModal(true)}
-            >
-              행운소식 전체 보기
-            </button>
           </BaseCard>
 
-          {jackpotData && (
-            <BaseCard variant="highlight" className="bg-gradient-to-br from-indigo-50/50 to-purple-50/50 dark:from-indigo-950/20 dark:to-purple-950/20 border-indigo-200/50 dark:border-indigo-900/50">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <p className="text-[10px] font-black tracking-widest text-indigo-500 uppercase">DAILY JACKPOT</p>
-                  <h3 className="mt-1 text-lg font-black text-indigo-950 dark:text-indigo-100">오늘의 잭팟</h3>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] font-black text-indigo-400">추첨까지 남은 시간</span>
-                  <strong className="block text-sm font-black text-indigo-600 dark:text-indigo-300 tabular-nums">
-                    {timeUntilMidnight}
-                  </strong>
-                </div>
+        {jackpotData && (
+          <BaseCard variant="warning" className="order-5 flex min-h-[27rem] flex-col rounded-3xl border border-warning/30 bg-gradient-to-br from-warning/10 via-base-100 to-primary/10 p-5 shadow-sm sm:p-6 lg:col-span-1 lg:col-start-3 lg:row-start-2">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-[10px] font-black uppercase tracking-widest text-warning">DAILY JACKPOT</p>
+                <h3 className="mt-1 text-lg font-black text-base-content">오늘의 잭팟</h3>
               </div>
-              
-              <div className="rounded-2xl bg-white/60 dark:bg-black/20 p-4 border border-indigo-50 dark:border-indigo-900/30 mb-3">
-                <span className="text-xs font-bold text-indigo-900/60 dark:text-indigo-200/60">누적 상금 금액</span>
-                <strong className="mt-1 block text-2xl font-black text-warning tabular-nums">
-                  <MoneyText value={jackpotData.jackpotPool || 0} />
+              <div className="text-right">
+                <span className="text-[10px] font-black text-base-content/50">추첨까지 남은 시간</span>
+                <strong className="block text-sm font-black text-primary tabular-nums">
+                  {timeUntilMidnight}
                 </strong>
               </div>
+            </div>
 
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <div className="rounded-2xl bg-white/60 dark:bg-black/20 p-3">
-                  <span className="text-[11px] font-bold text-indigo-900/60 dark:text-indigo-200/60">보유 행운권</span>
-                  <strong className="mt-1 block text-sm font-black text-secondary tabular-nums">
-                    {(jackpotData.myTickets || 0).toLocaleString("ko-KR")}장
-                  </strong>
-                </div>
-                <div className="rounded-2xl bg-white/60 dark:bg-black/20 p-3">
-                  <span className="text-[11px] font-bold text-indigo-900/60 dark:text-indigo-200/60">오늘 응모</span>
-                  <strong className="mt-1 block text-sm font-black text-primary tabular-nums">
-                    {(jackpotData.appliedTickets || 0).toLocaleString("ko-KR")}장
-                  </strong>
-                </div>
+            <div className="mb-3 rounded-2xl border border-warning/20 bg-base-100 p-4 shadow-inner">
+              <span className="text-xs font-bold text-base-content/55">누적 상금 금액</span>
+              <strong className="mt-1 block text-2xl font-black text-warning tabular-nums">
+                <MoneyText value={jackpotData.jackpotPool || 0} />
+              </strong>
+            </div>
+
+            <div className="mb-4 grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-base-300/60 bg-base-100/80 p-3">
+                <span className="text-[11px] font-bold text-base-content/55">보유 행운권</span>
+                <strong className="mt-1 block text-sm font-black text-secondary tabular-nums">
+                  {(jackpotData.myTickets || 0).toLocaleString("ko-KR")}장
+                </strong>
               </div>
+              <div className="rounded-2xl border border-base-300/60 bg-base-100/80 p-3">
+                <span className="text-[11px] font-bold text-base-content/55">오늘 응모</span>
+                <strong className="mt-1 block text-sm font-black text-primary tabular-nums">
+                  {(jackpotData.appliedTickets || 0).toLocaleString("ko-KR")}장
+                </strong>
+              </div>
+              <div className="col-span-2 rounded-2xl border border-warning/20 bg-base-100/80 p-3">
+                <span className="text-[11px] font-bold text-base-content/55">전체 응모 수</span>
+                <strong className="mt-1 block text-sm font-black text-warning tabular-nums">
+                  {(jackpotData.totalAppliedTickets || 0).toLocaleString("ko-KR")}장
+                </strong>
+                <span className="mt-1 block text-[10px] font-bold text-base-content/45">
+                  {(jackpotData.totalParticipants || 0).toLocaleString("ko-KR")}명이 응모했어요.
+                </span>
+              </div>
+            </div>
 
+            <div className="mt-auto">
               <button
                 type="button"
-                className="btn btn-primary min-h-12 w-full rounded-2xl border-none bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:from-indigo-600 hover:to-purple-600 shadow-md shadow-indigo-500/20"
+                className="btn btn-primary min-h-12 w-full rounded-2xl shadow-sm"
                 disabled={jackpotBusy || jackpotData.myTickets <= 0}
                 onClick={applyJackpot}
               >
                 {jackpotBusy ? <span className="loading loading-spinner loading-sm" /> : "응모하기"}
               </button>
-              <p className="mt-3 text-[10px] font-bold text-indigo-900/50 dark:text-indigo-200/50 text-center">
-                {jackpotMessage || "행운권 1장당 0.1%씩 가중치가 올라갑니다."}
-              </p>
-            </BaseCard>
-          )}
-
-          {serverStats && (
-            <div className="text-center">
-              <p className="text-xs font-bold text-base-content/40 leading-relaxed">
-                지금까지 {serverStats.totalUsers.toLocaleString("ko-KR")}명이 주머니를 만들었고,<br />
-                오늘 {serverStats.activeUsersToday.toLocaleString("ko-KR")}명이 {serverStats.totalGames.toLocaleString("ko-KR")}판의 게임을 즐겼어요!
+              <p className="mt-3 min-h-4 text-center text-[10px] font-bold text-base-content/50">
+                {jackpotMessage || "자정에 오늘의 잭팟이 추첨돼요."}
               </p>
             </div>
-          )}
-        </div>
+          </BaseCard>
+        )}
       </section>
 
       <section className="mb-8">

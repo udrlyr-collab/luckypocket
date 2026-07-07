@@ -3,8 +3,9 @@ import { db, publicUser } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { findUserByNickname, validateNickname } from "../services/nicknameService.js";
-import { delistStock } from "../services/stockService.js";
+import { delistStock, manuallyAdjustStockPrice } from "../services/stockService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import { achievementCount } from "../services/achievementService.js";
 import { parseAdminResetTargets } from "../services/adminResetPolicy.js";
 import {
   parseAdminUserIds,
@@ -16,11 +17,31 @@ import {
   setStockMarketOpen,
 } from "../services/marketStateService.js";
 import { endCurrentSeason } from "../services/seasonService.js";
+import {
+  getJackpotEntryStats,
+  getJackpotPool,
+  setJackpotPool,
+} from "../services/jackpotService.js";
+import { formatWon } from "../utils/formatWon.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
+function hasAdminPrivilege(user) {
+  return user?.username === "admin" || user?.isAdmin === true;
+}
+
+function publicAdminUser(user) {
+  const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+  return {
+    ...publicUser(user),
+    jackpotTickets: Number(user.jackpot_tickets || 0),
+    totalEvaluatedAsset: Math.floor(Number(valuation.totalEvaluatedAsset || 0)),
+    achievementCount: achievementCount(db, user.id),
+  };
+}
+
 adminRouter.use((req, res, next) => {
-  if (req.user.username !== "admin" && !req.user.isAdmin) {
+  if (!hasAdminPrivilege(req.user)) {
     return res.status(403).json({ message: "관리자 권한이 필요해요." });
   }
   return next();
@@ -67,7 +88,7 @@ adminRouter.get("/users/search", (req, res) => {
   }
 
   return res.json({
-    users: users.map(publicUser),
+    users: users.map(publicAdminUser),
     total,
     page,
     pageSize,
@@ -89,7 +110,7 @@ adminRouter.post("/users/bulk/balance", (req, res) => {
     });
     return res.json({
       message: `${users.length}명의 자산을 변경했어요.`,
-      users: users.map(publicUser),
+      users: users.map(publicAdminUser),
     });
   } catch (error) {
     return res.status(400).json({ message: error.message });
@@ -108,7 +129,7 @@ adminRouter.post("/users/bulk/reset", (req, res) => {
     return res.json({
       message: `${users.length}명에게 선택한 ${resetTargets.length}개 초기화 항목을 적용했어요.`,
       resetTargets,
-      users: users.map(publicUser),
+      users: users.map(publicAdminUser),
     });
   } catch (error) {
     return res.status(400).json({ message: error.message });
@@ -139,6 +160,38 @@ adminRouter.post("/seasons/end-current", (req, res, next) => {
   }
 });
 
+adminRouter.get("/jackpot", (_req, res) => {
+  const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
+  return res.json({
+    jackpotPool: getJackpotPool(db),
+    ...getJackpotEntryStats(db, date),
+  });
+});
+
+adminRouter.post("/jackpot", (req, res) => {
+  const amount = Number(req.body?.amount);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    return res.status(400).json({ message: "잭팟 금액은 0원 이상의 정수로 입력해 주세요." });
+  }
+  const jackpotPool = setJackpotPool(db, amount);
+  const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
+  return res.json({
+    message: `오늘의 잭팟 금액을 ${formatWon(jackpotPool)}으로 설정했어요.`,
+    jackpotPool,
+    ...getJackpotEntryStats(db, date),
+  });
+});
+
+adminRouter.post("/jackpot/reset", (_req, res) => {
+  const jackpotPool = setJackpotPool(db, 0);
+  const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
+  return res.json({
+    message: "오늘의 잭팟 금액을 0원으로 초기화했어요.",
+    jackpotPool,
+    ...getJackpotEntryStats(db, date),
+  });
+});
+
 adminRouter.post("/users/:userId/nickname", (req, res, next) => {
   try {
     const validation = validateNickname(req.body.newNickname);
@@ -156,7 +209,7 @@ adminRouter.post("/users/:userId/nickname", (req, res, next) => {
 
     const forceChange = db.transaction(() => {
       const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (!admin || admin.username !== "admin") {
+      if (!admin || !hasAdminPrivilege(req.user)) {
         const error = new Error("관리자 권한이 필요해요.");
         error.status = 403;
         throw error;
@@ -205,7 +258,7 @@ adminRouter.post("/users/:userId/nickname", (req, res, next) => {
     try {
       return res.json({
         message: "대상 사용자의 닉네임을 변경했어요.",
-        user: publicUser(forceChange()),
+        user: publicAdminUser(forceChange()),
       });
     } catch (error) {
       if (error.code === "SQLITE_CONSTRAINT_UNIQUE") {
@@ -237,10 +290,171 @@ adminRouter.post("/users/:userId/balance", (req, res, next) => {
 
     return res.json({
       message: "대상 사용자의 자산을 변경했어요.",
-      user: publicUser(updated),
+      user: publicAdminUser(updated),
     });
   } catch (error) {
     return next(error);
+  }
+});
+
+adminRouter.patch("/users/:userId/override", (req, res, next) => {
+  try {
+    const targetId = Number(req.params.userId);
+    if (!Number.isSafeInteger(targetId) || targetId < 1) {
+      return res.status(400).json({ message: "대상 사용자를 확인해주세요." });
+    }
+
+    const hasBalance = Object.prototype.hasOwnProperty.call(req.body || {}, "balance");
+    const hasNickname = Object.prototype.hasOwnProperty.call(req.body || {}, "nickname");
+    const hasTickets = Object.prototype.hasOwnProperty.call(req.body || {}, "luckTicketCount");
+    if (!hasBalance && !hasNickname && !hasTickets) {
+      return res.status(400).json({ message: "변경할 항목을 입력해 주세요." });
+    }
+
+    const nextBalance = hasBalance ? Number(req.body.balance) : null;
+    const nextTickets = hasTickets ? Number(req.body.luckTicketCount) : null;
+    if (hasBalance && (!Number.isSafeInteger(nextBalance) || nextBalance < 0)) {
+      return res.status(400).json({ message: "올바른 정수 잔액을 입력해 주세요." });
+    }
+    if (hasTickets && (!Number.isSafeInteger(nextTickets) || nextTickets < 0)) {
+      return res.status(400).json({ message: "행운권 보유량은 0 이상의 정수로 입력해 주세요." });
+    }
+
+    let nicknameValidation = null;
+    if (hasNickname && String(req.body.nickname || "").trim()) {
+      nicknameValidation = validateNickname(req.body.nickname);
+      if (nicknameValidation.error) {
+        return res.status(400).json({
+          message: nicknameValidation.error === "사용할 수 없는 단어가 포함되어 있어요."
+            ? nicknameValidation.error
+            : `${nicknameValidation.error} 다른 닉네임을 입력해주세요.`,
+        });
+      }
+    }
+
+    const updated = db.transaction(() => {
+      const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+      if (!admin || !hasAdminPrivilege(req.user)) {
+        const error = new Error("관리자 권한이 필요해요.");
+        error.status = 403;
+        throw error;
+      }
+      const target = db.prepare("SELECT * FROM users WHERE id = ?").get(targetId);
+      if (!target) {
+        const error = new Error("대상 사용자를 찾을 수 없어요.");
+        error.status = 404;
+        throw error;
+      }
+
+      if (nicknameValidation) {
+        const existing = findUserByNickname(db, nicknameValidation.nickname);
+        if (existing && existing.id !== target.id) {
+          const error = new Error("이미 사용 중인 닉네임이에요.");
+          error.status = 409;
+          throw error;
+        }
+        if (nicknameValidation.nickname !== target.nickname) {
+          db.prepare(
+            `UPDATE users
+             SET nickname = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE id = ?`,
+          ).run(nicknameValidation.nickname, target.id);
+          const log = db.prepare(
+            `INSERT INTO admin_logs
+             (admin_user_id, target_user_id, action_type, before_value, after_value)
+             VALUES (?, ?, 'force_nickname_change', ?, ?)`,
+          ).run(admin.id, target.id, target.nickname, nicknameValidation.nickname);
+          recordAssetEvent({
+            userId: target.id,
+            eventType: "admin_nickname_change",
+            amount: 0,
+            balanceBefore: target.balance,
+            balanceAfter: target.balance,
+            sourceType: "admin_log",
+            sourceId: log.lastInsertRowid,
+            detail: {
+              oldNickname: target.nickname,
+              newNickname: nicknameValidation.nickname,
+              label: "관리자 닉네임 변경",
+            },
+          });
+        }
+      }
+
+      if (hasBalance && nextBalance !== target.balance) {
+        db.prepare(
+          `UPDATE users
+           SET balance = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE id = ?`,
+        ).run(nextBalance, target.id);
+        const log = db.prepare(
+          `INSERT INTO admin_logs
+           (admin_user_id, target_user_id, action_type, before_value, after_value)
+           VALUES (?, ?, 'force_balance_change', ?, ?)`,
+        ).run(admin.id, target.id, String(target.balance), String(nextBalance));
+        recordAssetEvent({
+          userId: target.id,
+          eventType: "admin_balance_adjustment",
+          amount: nextBalance - target.balance,
+          balanceBefore: target.balance,
+          balanceAfter: nextBalance,
+          sourceType: "admin_log",
+          sourceId: log.lastInsertRowid,
+          detail: { label: "관리자 자산 조절" },
+        });
+      }
+
+      if (hasTickets && nextTickets !== Number(target.jackpot_tickets || 0)) {
+        db.prepare(
+          `UPDATE users
+           SET jackpot_tickets = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+           WHERE id = ?`,
+        ).run(nextTickets, target.id);
+        db.prepare(
+          `INSERT INTO admin_logs
+           (admin_user_id, target_user_id, action_type, before_value, after_value)
+           VALUES (?, ?, 'force_jackpot_tickets_change', ?, ?)`,
+        ).run(
+          admin.id,
+          target.id,
+          String(target.jackpot_tickets || 0),
+          String(nextTickets),
+        );
+      }
+
+      return db.prepare("SELECT * FROM users WHERE id = ?").get(target.id);
+    })();
+
+    return res.json({
+      message: "개인 강제 설정을 저장했어요.",
+      user: publicAdminUser(updated),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/stocks/:stockId/manual-adjust", (req, res) => {
+  try {
+    const stockId = Number(req.params.stockId);
+    if (!Number.isSafeInteger(stockId) || stockId < 1) {
+      return res.status(400).json({ message: "조정할 종목을 확인해 주세요." });
+    }
+    const stock = manuallyAdjustStockPrice(db, {
+      adminUserId: req.user.id,
+      stockId,
+      mode: req.body?.mode,
+      direction: req.body?.direction,
+      value: req.body?.value,
+      reason: req.body?.reason,
+    });
+
+    return res.json({
+      message: `${stock.name} 주가를 ${formatWon(stock.current_price)}으로 조정했어요.`,
+      stock,
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
   }
 });
 
@@ -251,7 +465,7 @@ adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
 
     db.transaction(() => {
       const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (!admin || admin.username !== "admin") throw new Error("관리자 권한이 필요해요.");
+      if (!admin || !hasAdminPrivilege(req.user)) throw new Error("관리자 권한이 필요해요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("존재하지 않거나 상장폐지된 종목입니다.");
@@ -288,7 +502,7 @@ adminRouter.post("/stocks/:id/revert", (req, res, next) => {
 
     db.transaction(() => {
       const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (!admin || admin.username !== "admin") throw new Error("관리자 권한이 필요해요.");
+      if (!admin || !hasAdminPrivilege(req.user)) throw new Error("관리자 권한이 필요해요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status !== 'acquired' || !stock.is_etf) throw new Error("ETF 상태가 아닙니다.");
@@ -319,7 +533,7 @@ adminRouter.post("/stocks/:id/delist", (req, res, next) => {
 
     db.transaction(() => {
       const admin = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (!admin || admin.username !== "admin") throw new Error("관리자 권한이 필요해요.");
+      if (!admin || !hasAdminPrivilege(req.user)) throw new Error("관리자 권한이 필요해요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("이미 상장폐지된 종목입니다.");
@@ -363,7 +577,7 @@ adminRouter.post("/users/:id/reset", (req, res) => {
     return res.json({
       message: `선택한 ${resetTargets.length}개 항목을 초기화했습니다.`,
       resetTargets,
-      user: publicUser(updated),
+      user: publicAdminUser(updated),
     });
   } catch (error) {
     return res.status(400).json({ message: error.message });

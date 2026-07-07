@@ -6,6 +6,7 @@ import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/for
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockRiskBadges, StockTierBadge } from "../components/StockRiskStatus";
 import { PageContainer, SectionHeader, BaseCard } from "../components/ui";
+import { useMarketClock } from "../hooks/useMarketClock";
 
 export default function StockMarketPage() {
   const { user } = useAuth();
@@ -13,10 +14,17 @@ export default function StockMarketPage() {
   const [market, setMarket] = useState(null);
   const [portfolio, setPortfolio] = useState(null);
   const [news, setNews] = useState([]);
-  const [nextTickAt, setNextTickAt] = useState(null);
-  const [timeRemaining, setTimeRemaining] = useState(10);
   const [busy, setBusy] = useState(false);
+  const lastIpoRefreshRef = useRef(0);
   const loading = !market || !portfolio;
+  const {
+    serverNow,
+    nextTickRemainingSeconds,
+    remainingSecondsUntil,
+  } = useMarketClock({
+    serverTime: market?.serverTime,
+    nextTickAt: market?.nextTickAt,
+  });
 
   const handleAdminAction = async (endpoint) => {
     if (!window.confirm("정말 실행하시겠습니까?")) return;
@@ -39,11 +47,13 @@ export default function StockMarketPage() {
       setMarket(prev => ({
         ...prev,
         stocks: data.stocks,
-        summary: prev ? prev.summary : { listed: data.stocks.length },
+        summary: data.summary || (prev ? prev.summary : { listed: data.stocks.length }),
         marketOpen: data.marketOpen,
+        serverTime: data.serverTime,
+        nextTickAt: data.nextTickAt,
+        tickIntervalSeconds: data.tickIntervalSeconds,
       }));
       setPortfolio(data.portfolio);
-      setNextTickAt(new Date(data.nextTickAt).getTime());
     } catch (e) {
       console.error(e);
     }
@@ -86,14 +96,20 @@ export default function StockMarketPage() {
   }, []);
 
   useEffect(() => {
-    const timerInterval = setInterval(() => {
-      if (nextTickAt) {
-        const remaining = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
-        setTimeRemaining(remaining);
-      }
-    }, 100);
-    return () => clearInterval(timerInterval);
-  }, [nextTickAt]);
+    if (!market?.stocks?.length) return;
+    const hasExpiredIpo = market.stocks.some((stock) => {
+      if (stock.status !== "ipo_subscription") return false;
+      const remaining = remainingSecondsUntil(
+        stock.ipoSubscriptionEndsAt || stock.ipo_subscription_ends_at,
+      );
+      return remaining === 0;
+    });
+    if (!hasExpiredIpo) return;
+    const now = Date.now();
+    if (now - lastIpoRefreshRef.current < 1500) return;
+    lastIpoRefreshRef.current = now;
+    fetchMarket();
+  }, [serverNow, market?.stocks]);
 
   if (loading) {
     return (
@@ -114,14 +130,6 @@ export default function StockMarketPage() {
 
   return (
     <PageContainer>
-      <div className="mb-6 rounded-2xl bg-base-200 p-4 text-center">
-        <p className="text-sm font-bold text-base-content/70">
-          실제 투자가 아닌 행운주머니 내부 수치 게임입니다.<br />
-          현금 결제·출금이 없는 가상 주식 시장이에요.<br />
-          시가총액이 3틱 연속 60억원 미만이면 거래주의, 50억원 미만이면 상장폐지 심사에 들어갑니다.
-        </p>
-      </div>
-
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <SectionHeader title="주식 시장" eyebrow="LUCKY EXCHANGE" className="mb-0" />
@@ -139,7 +147,9 @@ export default function StockMarketPage() {
         </div>
         <div className="text-right">
           <p className="text-xs font-bold text-base-content/50">다음 갱신까지</p>
-          <p className="text-xl font-black text-primary">{timeRemaining}초</p>
+          <p className="text-xl font-black text-primary">
+            {nextTickRemainingSeconds ?? "-"}초
+          </p>
         </div>
       </header>
 
@@ -151,20 +161,23 @@ export default function StockMarketPage() {
 
       <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">전체 종목</span>
-          <strong className="block text-2xl mt-1 tabular-nums">{summary.total}</strong>
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장 종목</span>
+          <strong className="block text-2xl mt-1 tabular-nums">
+            {summary.activeTradableStockCount ?? summary.total}
+            <span className="ml-1 text-sm text-base-content/40">/ {summary.targetActiveTradableStockCount ?? 16}</span>
+          </strong>
         </BaseCard>
         <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
           <strong className="block text-2xl mt-1 tabular-nums text-success">{summary.up} <span className="text-base-content/30 text-lg">/</span> <span className="text-error">{summary.down}</span></strong>
         </BaseCard>
         <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주/신규 상장</span>
-          <strong className="block text-2xl mt-1 tabular-nums text-warning">{summary.ipo}</strong>
+          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주</span>
+          <strong className="block text-2xl mt-1 tabular-nums text-warning">{summary.ipoCount ?? summary.ipo}</strong>
         </BaseCard>
         <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">최근 상장폐지</span>
-          <strong className="block text-2xl mt-1 tabular-nums text-base-content/40">{recentDelistedStocks ? recentDelistedStocks.length : 0}</strong>
+          <strong className="block text-2xl mt-1 tabular-nums text-base-content/40">{summary.recentDelistedCount ?? (recentDelistedStocks ? recentDelistedStocks.length : 0)}</strong>
         </BaseCard>
       </div>
 
@@ -180,14 +193,26 @@ export default function StockMarketPage() {
             </div>
             <div className="grid gap-1">
               {stocks.map(stock => (
-                <StockRow key={stock.id} stock={stock} isAdmin={isAdmin} handleAdminAction={handleAdminAction} />
+                <StockRow
+                  key={stock.id}
+                  stock={stock}
+                  isAdmin={isAdmin}
+                  handleAdminAction={handleAdminAction}
+                  remainingSecondsUntil={remainingSecondsUntil}
+                />
               ))}
               {recentDelistedStocks && recentDelistedStocks.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-base-200">
                   <div className="text-xs font-bold text-base-content/50 mb-2 px-2">최근 상장폐지 (최근 5개)</div>
                   <div className="grid gap-1 opacity-60">
                     {recentDelistedStocks.map(stock => (
-                      <StockRow key={stock.id} stock={stock} isAdmin={isAdmin} handleAdminAction={handleAdminAction} />
+                      <StockRow
+                        key={stock.id}
+                        stock={stock}
+                        isAdmin={isAdmin}
+                        handleAdminAction={handleAdminAction}
+                        remainingSecondsUntil={remainingSecondsUntil}
+                      />
                     ))}
                   </div>
                 </div>
@@ -240,7 +265,9 @@ export default function StockMarketPage() {
               ) : (
                 <div className="grid gap-2">
                   {positions.map(p => {
-                    const danger = p.stock_current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
+                    const danger = p.side === "short"
+                      ? p.stock_current_price >= p.entry_price + (p.liquidation_price - p.entry_price) * 0.8
+                      : p.stock_current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
                     return (
                       <Link to={`/stocks/${p.stock_id}`} key={p.id} className={`block bg-base-200/50 p-3 rounded-2xl hover:bg-base-200 transition border ${danger ? "border-error/50" : "border-transparent"}`}>
                         <div className="flex justify-between items-center mb-1">
@@ -287,41 +314,36 @@ export default function StockMarketPage() {
   );
 }
 
-function StockRow({ stock, isAdmin, handleAdminAction }) {
+function StockRow({ stock, isAdmin, handleAdminAction, remainingSecondsUntil }) {
   const isDelisted = stock.status === 'delisted';
   const isUp = stock.priceChangeAmount > 0;
   const isDown = stock.priceChangeAmount < 0;
   const color = isUp ? "text-success" : isDown ? "text-error" : "text-base-content";
-  
-  const [ipoTimeRemaining, setIpoTimeRemaining] = useState(0);
 
-  useEffect(() => {
-    if (stock.status === 'ipo_subscription' && stock.ipo_subscription_ends_at) {
-      const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
-      const updateTimer = () => {
-        const remaining = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
-        setIpoTimeRemaining(remaining);
-      };
-      updateTimer();
-      const interval = setInterval(updateTimer, 1000);
-      return () => clearInterval(interval);
-    }
-  }, [stock.status, stock.ipo_subscription_ends_at]);
-
-  const ipoMins = Math.floor(ipoTimeRemaining / 60);
-  const ipoSecs = ipoTimeRemaining % 60;
+  const ipoTimeRemaining = stock.status === "ipo_subscription"
+    ? remainingSecondsUntil(stock.ipoSubscriptionEndsAt || stock.ipo_subscription_ends_at)
+    : null;
+  const ipoMins = Math.floor((ipoTimeRemaining || 0) / 60);
+  const ipoSecs = (ipoTimeRemaining || 0) % 60;
+  const offeringRate = Number(stock.offeringChangeRate || 0);
+  const isIpoLimitNear = stock.status === 'newly_listed' && offeringRate >= 2.7;
+  const isIpoOverheated = stock.status === 'newly_listed' && offeringRate >= 1.5;
   
   return (
     <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition border border-transparent hover:border-base-200/50">
       <div className="flex-[2] flex items-center min-w-0 mb-1 sm:mb-0">
         <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
         <div className="flex gap-1 shrink-0 flex-wrap">
-          {stock.status === 'ipo_subscription' && (
+          {stock.status === 'ipo_subscription' && ipoTimeRemaining !== null && (
              <span className="badge badge-warning badge-xs py-1 font-bold">
-               상장까지 {ipoMins > 0 ? `${ipoMins}분 ` : ''}{ipoSecs}초
+               {ipoTimeRemaining === 0
+                 ? "상장 처리 중..."
+                 : `상장까지 ${ipoMins > 0 ? `${ipoMins}분 ` : ""}${ipoSecs}초`}
              </span>
           )}
           {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
+          {isIpoLimitNear && <span className="badge badge-error badge-xs py-1 font-bold">상한 근접</span>}
+          {!isIpoLimitNear && isIpoOverheated && <span className="badge badge-warning badge-xs py-1 font-bold">공모주 과열</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
@@ -368,9 +390,10 @@ function StockRow({ stock, isAdmin, handleAdminAction }) {
 
 function Badge({ type, label }) {
   let colorClass = "bg-base-200 text-base-content";
-  if (type === "surge" || type === "ipo_surge") colorClass = "bg-success/20 text-success";
+  if (type === "surge" || type === "ipo_surge" || type === "ipo_strong_surge" || type === "ipo_mega_surge") colorClass = "bg-success/20 text-success";
   else if (type === "crash" || type === "ipo_crash") colorClass = "bg-error/20 text-error";
-  else if (type === "ipo_created") colorClass = "bg-warning/20 text-warning-content";
+  else if (type === "ipo_created" || type === "ipo_normal_open" || type === "ipo_overheated") colorClass = "bg-warning/20 text-warning-content";
+  else if (type === "ipo_limit_near") colorClass = "bg-error/20 text-error";
   else if (type === "acquired" || type === "etf_converted") colorClass = "bg-primary/20 text-primary";
   else if (type === "delisted" || type === "delist_warning") colorClass = "bg-error/20 text-error";
 

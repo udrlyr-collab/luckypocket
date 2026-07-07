@@ -4,6 +4,8 @@ import Database from "better-sqlite3";
 import { config } from "./config.js";
 import { calculateUserTotalEvaluatedAsset } from "./services/portfolioValuationService.js";
 import {
+  EOK,
+  JO,
   enforceStockMarketLimit,
   initializeStockDelistingLifecycle,
 } from "./services/stockService.js";
@@ -201,6 +203,18 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_transfer_receiver_created
     ON transfer_logs(receiver_user_id, created_at DESC);
 
+  CREATE TABLE IF NOT EXISTS abuse_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    action_type TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_abuse_logs_user_created
+    ON abuse_logs(user_id, created_at DESC);
+
   CREATE TABLE IF NOT EXISTS bonus_codes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     code TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -308,7 +322,7 @@ db.exec(`
     caution_tick_count INTEGER NOT NULL DEFAULT 0,
     recovery_started_at TEXT,
     recovery_tick_count INTEGER NOT NULL DEFAULT 0,
-    recovery_required_ticks INTEGER NOT NULL DEFAULT 60,
+    recovery_required_ticks INTEGER NOT NULL DEFAULT 6,
     delist_review_started_at TEXT,
     delist_review_tick_count INTEGER NOT NULL DEFAULT 0,
     delist_review_max_ticks INTEGER NOT NULL DEFAULT 180,
@@ -407,6 +421,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_stock_trades_user
     ON stock_trades(user_id, created_at DESC);
 
+  CREATE INDEX IF NOT EXISTS idx_stock_trades_stock_user_created
+    ON stock_trades(stock_id, user_id, created_at DESC);
+
   CREATE TABLE IF NOT EXISTS stock_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
@@ -498,6 +515,10 @@ if (!stockColumns.has("ipo_subscription_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN etf_last_tracked_owner_asset INTEGER");
 }
 
+addColumnIfMissing("stocks", "ipo_opening_event_done", "INTEGER NOT NULL DEFAULT 0 CHECK (ipo_opening_event_done IN (0, 1))");
+addColumnIfMissing("stocks", "ipo_opening_event_type", "TEXT");
+addColumnIfMissing("stocks", "ipo_opening_change_rate", "REAL");
+
 if (!stockColumns.has("is_bluechip")) {
   db.exec("ALTER TABLE stocks ADD COLUMN is_bluechip INTEGER NOT NULL DEFAULT 0");
 }
@@ -563,7 +584,7 @@ if (!stockColumns.has("recovery_tick_count")) {
   db.exec("ALTER TABLE stocks ADD COLUMN recovery_tick_count INTEGER NOT NULL DEFAULT 0");
 }
 if (!stockColumns.has("recovery_required_ticks")) {
-  db.exec("ALTER TABLE stocks ADD COLUMN recovery_required_ticks INTEGER NOT NULL DEFAULT 60");
+  db.exec("ALTER TABLE stocks ADD COLUMN recovery_required_ticks INTEGER NOT NULL DEFAULT 6");
 }
 if (!stockColumns.has("delist_review_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN delist_review_started_at TEXT");
@@ -584,6 +605,12 @@ if (!stockColumns.has("final_crash_reason")) {
 db.prepare(
   "INSERT OR IGNORE INTO system_config (key, value) VALUES ('market_open', 'true')",
 ).run();
+
+db.exec(`
+  UPDATE stocks
+  SET recovery_required_ticks = 6
+  WHERE recovery_required_ticks IS NULL OR recovery_required_ticks != 6
+`);
 
 const stockEventColumns = new Set(
   db.prepare("PRAGMA table_info(stock_events)").all().map((column) => column.name),
@@ -881,8 +908,9 @@ const initBlueChips = db.transaction(() => {
         db.prepare("UPDATE stocks SET name = ?, symbol = ? WHERE id = ?").run(`${old.name}${suffix}`, `${old.symbol}${suffix}`, old.id);
       }
       
-      const price = 50000;
-      const shares = 1000000000; // 1 billion shares * 50k = 50 trillion cap
+      const price = 1_000 + Math.floor(Math.random() * 19_001);
+      const targetCap = 500 * EOK + Math.floor(Math.random() * (1_000 * EOK));
+      const shares = Math.max(1000, Math.floor(targetCap / price));
       const cap = price * shares;
       const volatility = 0.002 + Math.random() * 0.002;
       db.prepare(`
@@ -893,6 +921,103 @@ const initBlueChips = db.transaction(() => {
   }
 });
 initBlueChips();
+
+const rebaseOversizedStockMarketCaps = db.transaction(() => {
+  const migrationKey = "stock_market_cap_rebase_v5";
+  if (db.prepare("SELECT 1 FROM system_config WHERE key = ?").get(migrationKey)) return;
+
+  const rows = db
+    .prepare(
+      `SELECT id, status, current_price, is_bluechip
+       FROM stocks
+       WHERE status != 'delisted'
+         AND status != 'final_crash'
+         AND COALESCE(delist_risk_status, 'normal') != 'final_crash'
+         AND COALESCE(is_etf, 0) = 0`,
+    )
+    .all();
+  const update = db.prepare(
+    `UPDATE stocks
+     SET current_price = ?,
+         previous_price = ?,
+         initial_price = ?,
+         offering_price = CASE WHEN status = 'ipo_subscription' THEN ? ELSE offering_price END,
+         total_shares = ?,
+         market_cap = ?,
+         blue_chip_day_open_price = CASE WHEN is_bluechip = 1 THEN ? ELSE blue_chip_day_open_price END,
+         blue_chip_day_started_at = CASE WHEN is_bluechip = 1 THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE blue_chip_day_started_at END,
+         blue_chip_daily_high_limit_price = CASE WHEN is_bluechip = 1 THEN ? ELSE blue_chip_daily_high_limit_price END,
+         blue_chip_daily_low_limit_price = CASE WHEN is_bluechip = 1 THEN ? ELSE blue_chip_daily_low_limit_price END,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  );
+  const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
+  const priceRange = (tierKey) => {
+    const ranges = {
+      ipo_micro: [100, 1_000],
+      ipo_small: [300, 2_000],
+      ipo_small_mid: [500, 5_000],
+      ipo_mid: [1_000, 10_000],
+      ipo_large_rare: [2_000, 20_000],
+      bluechip: [1_000, 20_000],
+      micro: [100, 1_500],
+      small: [300, 3_000],
+      small_mid: [500, 8_000],
+      mid: [1_000, 20_000],
+      large: [3_000, 50_000],
+      mega: [5_000, 100_000],
+    };
+    return ranges[tierKey] || [500, 5_000];
+  };
+  const pickTierAndCap = (stock) => {
+    if (stock.is_bluechip === 1) {
+      return {
+        key: "bluechip",
+        cap: randomBetween(500 * EOK, 1_500 * EOK),
+      };
+    }
+    if (stock.status === "ipo_subscription") {
+      const roll = Math.random();
+      if (roll < 0.48) return { key: "ipo_micro", cap: randomBetween(60 * EOK, 85 * EOK) };
+      if (roll < 0.80) return { key: "ipo_small", cap: randomBetween(85 * EOK, 160 * EOK) };
+      if (roll < 0.94) return { key: "ipo_small_mid", cap: randomBetween(160 * EOK, 350 * EOK) };
+      if (roll < 0.99) return { key: "ipo_mid", cap: randomBetween(350 * EOK, 900 * EOK) };
+      return { key: "ipo_large_rare", cap: randomBetween(900 * EOK, 3_000 * EOK) };
+    }
+    const roll = Math.random();
+    if (roll < 0.38) return { key: "micro", cap: randomBetween(62 * EOK, 95 * EOK) };
+    if (roll < 0.68) return { key: "small", cap: randomBetween(95 * EOK, 180 * EOK) };
+    if (roll < 0.86) return { key: "small_mid", cap: randomBetween(180 * EOK, 500 * EOK) };
+    if (roll < 0.95) return { key: "mid", cap: randomBetween(500 * EOK, 1_500 * EOK) };
+    if (roll < 0.99) return { key: "large", cap: randomBetween(1_500 * EOK, 5_000 * EOK) };
+    return { key: "mega", cap: randomBetween(5_000 * EOK, 2 * JO) };
+  };
+
+  for (const stock of rows) {
+    const tier = pickTierAndCap(stock);
+    const [minPrice, maxPrice] = priceRange(tier.key);
+    const currentPrice = randomBetween(minPrice, maxPrice);
+    const targetCap = tier.cap;
+    const totalShares = Math.max(1000, Math.floor(targetCap / currentPrice));
+    update.run(
+      currentPrice,
+      currentPrice,
+      currentPrice,
+      currentPrice,
+      totalShares,
+      currentPrice * totalShares,
+      currentPrice,
+      Math.floor(currentPrice * 1.15),
+      Math.max(1, Math.floor(currentPrice * 0.87)),
+      stock.id,
+    );
+  }
+
+  db.prepare("INSERT INTO system_config (key, value) VALUES (?, 'complete')").run(
+    migrationKey,
+  );
+});
+rebaseOversizedStockMarketCaps();
 enforceStockMarketLimit(db);
 initializeStockDelistingLifecycle(db);
 
@@ -945,5 +1070,6 @@ export function publicUser(user) {
     mineClickCount: user.mine_click_count || 0,
     mineTotalEarned: user.mine_total_earned || 0,
     lastMinedAt: user.last_mined_at || null,
+    jackpotTickets: user.jackpot_tickets || 0,
   };
 }

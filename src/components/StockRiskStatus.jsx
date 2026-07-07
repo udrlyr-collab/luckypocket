@@ -1,6 +1,6 @@
 function remainingRecoveryTime(stock) {
-  const required = Number(stock.recovery_required_ticks || 6);
-  const current = Number(stock.recovery_tick_count || 0);
+  const required = Number(stock.recoveryRequiredTicks || stock.recovery_required_ticks || 6);
+  const current = Number(stock.recoveryTickCount || stock.recovery_tick_count || 0);
   const seconds = Math.max(0, required - current) * 10;
   const minutes = Math.floor(seconds / 60);
   const restSeconds = seconds % 60;
@@ -10,12 +10,14 @@ function remainingRecoveryTime(stock) {
 
 export function getStockTier(marketCap) {
   const cap = Number(marketCap) || 0;
-  if (cap >= 100_000_000_000_000) return { label: "대표 대형주", className: "badge-primary text-primary-content" };
-  if (cap >= 20_000_000_000_000) return { label: "초대형주", className: "badge-secondary text-secondary-content" };
-  if (cap >= 2_000_000_000_000) return { label: "대형주", className: "badge-accent text-accent-content" };
-  if (cap >= 300_000_000_000) return { label: "중형주", className: "badge-info text-info-content" };
-  if (cap >= 50_000_000_000) return { label: "중소형주", className: "badge-ghost bg-base-300" };
-  return { label: "소형주", className: "badge-ghost" };
+  if (cap >= 10_000_000_000_000) return { label: "대표 대형주", className: "badge-primary text-primary-content" };
+  if (cap >= 2_000_000_000_000) return { label: "초대형주", className: "badge-secondary text-secondary-content" };
+  if (cap >= 500_000_000_000) return { label: "대형주", className: "badge-accent text-accent-content" };
+  if (cap >= 100_000_000_000) return { label: "중형주", className: "badge-info text-info-content" };
+  if (cap >= 30_000_000_000) return { label: "중소형주", className: "badge-ghost bg-base-300" };
+  if (cap >= 10_000_000_000) return { label: "소형주", className: "badge-ghost" };
+  if (cap >= 6_000_000_000) return { label: "초소형주", className: "badge-warning" };
+  return { label: "위험 소형주", className: "badge-error text-error-content" };
 }
 
 export function StockTierBadge({ stock, compact = false }) {
@@ -51,10 +53,11 @@ export function StockRiskBadges({ stock, compact = false }) {
     );
   }
   if (risk === "recovery") {
+    const current = Number(stock.recoveryTickCount || stock.recovery_tick_count || 0);
+    const required = Number(stock.recoveryRequiredTicks || stock.recovery_required_ticks || 6);
     return (
       <span className={`badge badge-success font-bold ${size}`}>
-        회생 중 {Number(stock.recovery_tick_count || 0)}/
-        {Number(stock.recovery_required_ticks || 6)}
+        회생 중 {current}/{required}
       </span>
     );
   }
@@ -105,12 +108,13 @@ export function StockRiskNotice({ stock }) {
     );
   }
   if (risk === "recovery") {
+    const current = Number(stock.recoveryTickCount || stock.recovery_tick_count || 0);
+    const required = Number(stock.recoveryRequiredTicks || stock.recovery_required_ticks || 6);
     return (
       <div className="alert alert-success mb-6 rounded-2xl">
         <span>
           <strong className="block">
-            회생 중 · {Number(stock.recovery_tick_count || 0)}/
-            {Number(stock.recovery_required_ticks || 6)}틱
+            회생 중 · {current}/{required}
           </strong>
           60억원 이상 유지가 필요해요. 남은 유지 시간:{" "}
           {remainingRecoveryTime(stock)}
