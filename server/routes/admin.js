@@ -436,6 +436,9 @@ adminRouter.patch("/users/:userId/override", (req, res, next) => {
 
 adminRouter.post("/stocks/:stockId/manual-adjust", (req, res) => {
   try {
+    if (req.user.username !== "admin") {
+      return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+    }
     const stockId = Number(req.params.stockId);
     if (!Number.isSafeInteger(stockId) || stockId < 1) {
       return res.status(400).json({ message: "조정할 종목을 확인해 주세요." });
@@ -448,6 +451,9 @@ adminRouter.post("/stocks/:stockId/manual-adjust", (req, res) => {
       value: req.body?.value,
       targetPrice: req.body?.targetPrice !== undefined ? Number(req.body.targetPrice) : undefined,
       reason: req.body?.reason,
+      newsTitle: req.body?.newsTitle,
+      newsContent: req.body?.newsContent,
+      publishNews: req.body?.publishNews !== undefined ? Boolean(req.body.publishNews) : true,
     });
 
     return res.json({
@@ -620,10 +626,16 @@ adminRouter.post("/stocks/:id/resume", (req, res) => {
 });
 
 adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
+  if (req.user.username !== "admin") {
+    return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+  }
   const stockId = Number(req.params.id);
   const targetPrice = Number(req.body?.targetPrice);
   const rampPercentPerTick = Number(req.body?.rampPercentPerTick);
   const reason = String(req.body?.reason || "").trim().slice(0, 120);
+  const newsTitle = req.body?.newsTitle;
+  const newsContent = req.body?.newsContent;
+  const publishNews = req.body?.publishNews !== undefined ? Boolean(req.body.publishNews) : true;
 
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
   if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
@@ -643,6 +655,13 @@ adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
   const dayOpenPrice = Math.max(1, Math.floor(Number(stock.current_price) || 1));
   const dailyHighLimitPrice = Math.floor(dayOpenPrice * 1.15);
   const dailyLowLimitPrice = Math.max(1, Math.floor(dayOpenPrice * 0.87));
+
+  // Determine auto messages
+  let finalTitle = String(newsTitle || "").trim();
+  let finalContent = String(newsContent || "").trim();
+
+  if (!finalTitle) finalTitle = "우량주 선정";
+  if (!finalContent) finalContent = `${stock.name}이(가) 우량주로 선정되었어요. 목표주가 ${targetPrice.toLocaleString("ko-KR")}원을 향해 상승 이벤트가 시작됩니다.`;
 
   db.transaction(() => {
     db.prepare(`
@@ -689,19 +708,36 @@ adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
         targetPrice,
         rampPercentPerTick,
         reason,
+        newsTitle,
+        newsContent,
+        publishNews,
+        oldPrice: stock.current_price,
+        newPrice: stock.current_price,
+        sentiment: "good",
       })
     );
 
-    const msg = `[우량주 선정] ${stock.name}이 우량주로 편입되었습니다! 목표주가 ${targetPrice.toLocaleString("ko-KR")}원까지 틱당 ${rampPercentPerTick}%씩 급등합니다.`;
-    db.prepare(`
-      INSERT INTO stock_events (stock_id, event_type, title, message)
-      VALUES (?, 'blue_chip_ramp_started', '우량주 선정 및 급등', ?)
-    `).run(stockId, msg);
+    const eventType = publishNews ? "admin_blue_chip_selected" : "admin_stock_manual_adjust";
 
     db.prepare(`
-      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
-      VALUES ('시스템', 'blue_chip_ramp_started', '우량주 선정', ?, 0, 'stock', ?)
-    `).run(msg, String(stockId));
+      INSERT INTO stock_events (
+        stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
+        title, message, price_before, price_after, change_amount, change_rate, 
+        target_price, percent_per_tick, created_by_user_id, metadata_json
+      )
+      VALUES (?, ?, ?, ?, 'good', ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+    `).run(
+      stockId, stock.name, stock.symbol, eventType,
+      finalTitle, finalContent, stock.current_price, stock.current_price,
+      targetPrice, rampPercentPerTick, req.user.id, JSON.stringify({ reason })
+    );
+
+    if (publishNews) {
+      db.prepare(`
+        INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+        VALUES ('시스템', 'admin_blue_chip_selected', '우량주 선정', ?, 0, 'stock', ?)
+      `).run(finalContent, String(stockId));
+    }
   })();
   
   return res.json({ message: "해당 종목을 우량주로 선정하고 목표주가 급등 이벤트를 시작했습니다." });
@@ -734,10 +770,16 @@ adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
 });
 
 adminRouter.post("/stocks/:id/target-price", (req, res) => {
+  if (req.user.username !== "admin") {
+    return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+  }
   const stockId = Number(req.params.id);
   const targetPrice = Number(req.body?.targetPrice);
   const percentPerTick = Number(req.body?.percentPerTick);
   const reason = String(req.body?.reason || "").trim().slice(0, 120);
+  const newsTitle = req.body?.newsTitle;
+  const newsContent = req.body?.newsContent;
+  const publishNews = req.body?.publishNews !== undefined ? Boolean(req.body.publishNews) : true;
 
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
   if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
@@ -759,6 +801,18 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
   }
 
   const direction = targetPrice > stock.current_price ? "up" : "down";
+
+  // Determine auto messages
+  let finalTitle = String(newsTitle || "").trim();
+  let finalContent = String(newsContent || "").trim();
+
+  if (direction === "up") {
+    if (!finalTitle) finalTitle = "목표주가 상향";
+    if (!finalContent) finalContent = `${stock.name}이(가) 목표주가 ${targetPrice.toLocaleString("ko-KR")}원을 향해 상승 이벤트를 시작했어요.`;
+  } else {
+    if (!finalTitle) finalTitle = "목표주가 하향";
+    if (!finalContent) finalContent = `${stock.name}이(가) 목표주가 ${targetPrice.toLocaleString("ko-KR")}원을 향해 하락 이벤트를 시작했어요.`;
+  }
 
   db.transaction(() => {
     db.prepare(`
@@ -789,21 +843,37 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
         direction,
         percentPerTick,
         reason,
+        newsTitle,
+        newsContent,
+        publishNews,
+        oldPrice: stock.current_price,
+        newPrice: stock.current_price,
+        sentiment: direction === "up" ? "good" : "bad",
       })
     );
 
-    const directionText = direction === "up" ? "상승" : "하락";
-    const msg = `[목표주가 설정] ${stock.name} 종목에 목표주가 ${targetPrice.toLocaleString("ko-KR")}원 (${directionText} 목표, 틱당 ${percentPerTick}%) 이벤트가 시작되었습니다.`;
-    
-    db.prepare(`
-      INSERT INTO stock_events (stock_id, event_type, title, message)
-      VALUES (?, 'admin_stock_target_price_started', '목표주가 시작', ?)
-    `).run(stockId, msg);
+    const eventType = publishNews ? "admin_price_target_started" : "admin_stock_manual_adjust";
+    const sentiment = direction === "up" ? "good" : "bad";
 
     db.prepare(`
-      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
-      VALUES ('시스템', 'admin_stock_target_price_started', '목표주가 설정', ?, 0, 'stock', ?)
-    `).run(msg, String(stockId));
+      INSERT INTO stock_events (
+        stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
+        title, message, price_before, price_after, change_amount, change_rate, 
+        target_price, percent_per_tick, created_by_user_id, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+    `).run(
+      stockId, stock.name, stock.symbol, eventType, sentiment,
+      finalTitle, finalContent, stock.current_price, stock.current_price,
+      targetPrice, percentPerTick, req.user.id, JSON.stringify({ reason })
+    );
+
+    if (publishNews) {
+      db.prepare(`
+        INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+        VALUES ('시스템', 'admin_price_target_started', '목표주가 설정', ?, 0, 'stock', ?)
+      `).run(finalContent, String(stockId));
+    }
   })();
 
   return res.json({ message: "목표주가 이벤트를 시작했습니다." });

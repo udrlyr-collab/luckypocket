@@ -335,7 +335,7 @@ export default function StockMarketPage() {
             <ul className="divide-y divide-base-300">
               {news.map(n => (
                 <li key={n.id} className="p-4 flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <Badge type={n.event_type} label={n.title} />
+                  <Badge type={n.event_type} label={n.title} sentiment={n.sentiment} />
                   <span className="text-sm text-base-content/80 flex-1">{n.message}</span>
                   <span className="text-[10px] text-base-content/40 whitespace-nowrap">
                     {new Date(n.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
@@ -514,14 +514,43 @@ function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remain
   );
 }
 
-function Badge({ type, label }) {
+function Badge({ type, label, sentiment }) {
   let colorClass = "bg-base-200 text-base-content";
-  if (type === "surge" || type === "ipo_surge" || type === "ipo_strong_surge" || type === "ipo_mega_surge") colorClass = "bg-success/20 text-success";
-  else if (type === "crash" || type === "ipo_crash") colorClass = "bg-error/20 text-error";
-  else if (type === "ipo_created" || type === "ipo_normal_open" || type === "ipo_overheated") colorClass = "bg-warning/20 text-warning-content";
-  else if (type === "ipo_limit_near") colorClass = "bg-error/20 text-error";
-  else if (type === "acquired" || type === "etf_converted") colorClass = "bg-primary/20 text-primary";
-  else if (type === "delisted" || type === "delist_warning") colorClass = "bg-error/20 text-error";
+  let displayLabel = label;
 
-  return <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 text-center ${colorClass}`}>{label}</span>;
+  if (type === "surge" || type === "ipo_surge" || type === "ipo_strong_surge" || type === "ipo_mega_surge") {
+    colorClass = "bg-success/20 text-success";
+  } else if (type === "crash" || type === "ipo_crash") {
+    colorClass = "bg-error/20 text-error";
+  } else if (type === "ipo_created" || type === "ipo_normal_open" || type === "ipo_overheated") {
+    colorClass = "bg-warning/20 text-warning-content";
+  } else if (type === "ipo_limit_near") {
+    colorClass = "bg-error/20 text-error";
+  } else if (type === "acquired" || type === "etf_converted") {
+    colorClass = "bg-primary/20 text-primary";
+  } else if (type === "delisted" || type === "delist_warning") {
+    colorClass = "bg-error/20 text-error";
+  } else if (type === "admin_good_news") {
+    colorClass = "bg-success/20 text-success";
+    displayLabel = `[호재] ${label}`;
+  } else if (type === "admin_bad_news") {
+    colorClass = "bg-error/20 text-error";
+    displayLabel = `[악재] ${label}`;
+  } else if (type === "admin_blue_chip_selected") {
+    colorClass = "bg-primary/20 text-primary";
+    displayLabel = `[호재] [우량주 선정]`;
+  } else if (type === "admin_price_target_started") {
+    if (sentiment === "bad") {
+      colorClass = "bg-error/20 text-error";
+      displayLabel = `[악재] [목표주가 하향]`;
+    } else {
+      colorClass = "bg-success/20 text-success";
+      displayLabel = `[호재] [목표주가 상향]`;
+    }
+  } else if (type === "admin_stock_manual_adjust") {
+    colorClass = "bg-base-300 text-base-content";
+    displayLabel = `[조정] ${label}`;
+  }
+
+  return <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 text-center ${colorClass}`}>{displayLabel}</span>;
 }

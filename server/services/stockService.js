@@ -1342,7 +1342,7 @@ export function settleDueIpoSubscriptions(database, now = Date.now()) {
 
 export function manuallyAdjustStockPrice(
   database,
-  { adminUserId, stockId, mode, direction, value, targetPrice, reason = "" },
+  { adminUserId, stockId, mode, direction, value, targetPrice, reason = "", newsTitle, newsContent, publishNews = true },
 ) {
   const normalizedMode = String(mode || "").trim();
   const normalizedDirection = String(direction || "").trim();
@@ -1408,7 +1408,7 @@ export function manuallyAdjustStockPrice(
       newPrice,
       stock.status,
       "admin_stock_adjustment",
-      message,
+      null, // Pass null to skip default duplicate stock_events insert
       "admin_manual",
     );
 
@@ -1433,11 +1433,56 @@ export function manuallyAdjustStockPrice(
           value: numericValue,
           targetPrice,
           reason: cleanReason,
+          newsTitle,
+          newsContent,
+          publishNews,
         }),
       );
 
+    const isUp = newPrice > oldPrice;
+    const changeRate = oldPrice > 0 ? (newPrice - oldPrice) / oldPrice : 0;
+    const changeRateText = `${isUp ? "+" : ""}${(changeRate * 100).toFixed(1)}%`;
+
+    let finalTitle = String(newsTitle || "").trim();
+    let finalContent = String(newsContent || "").trim();
+
+    if (isUp) {
+      if (!finalTitle) finalTitle = "호재 발생";
+      if (!finalContent) finalContent = `${stock.name}이(가) 관리자 이벤트로 ${changeRateText} 상승했어요.`;
+    } else {
+      if (!finalTitle) finalTitle = "악재 발생";
+      if (!finalContent) finalContent = `${stock.name}이(g) 관리자 이벤트로 ${changeRateText} 하락했어요.`;
+    }
+
+    const eventType = publishNews
+      ? (isUp ? "admin_good_news" : "admin_bad_news")
+      : "admin_stock_manual_adjust";
+
+    const sentiment = isUp ? "good" : "bad";
+
+    database.prepare(`
+      INSERT INTO stock_events (
+        stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
+        title, message, price_before, price_after, change_amount, change_rate, 
+        created_by_user_id, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      stock.id, stock.name, stock.symbol, eventType, sentiment,
+      finalTitle, finalContent, oldPrice, newPrice, changeAmount, changeRate,
+      adminUserId, JSON.stringify({ reason: cleanReason })
+    );
+
+    // Only publish to server notifications if publishNews is true and change rate is >= 10% or <= -10%
+    if (publishNews && Math.abs(changeRate) >= 0.1) {
+      database.prepare(`
+        INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+        VALUES ('시스템', ?, ?, ?, 0, 'stock', ?)
+      `).run(eventType, finalTitle, finalContent, String(stock.id));
+    }
+
     return database.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
-  })();
+  });
 }
 
 export function delistStock(db, stock, { reason = "market_crash" } = {}) {

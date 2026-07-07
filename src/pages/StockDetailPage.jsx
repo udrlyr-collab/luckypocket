@@ -42,6 +42,9 @@ export default function StockDetailPage() {
   const [blueChipTargetPrice, setBlueChipTargetPrice] = useState("");
   const [blueChipRampPercent, setBlueChipRampPercent] = useState("30");
   const [blueChipReason, setBlueChipReason] = useState("우량주 편입 이벤트");
+  const [blueChipNewsTitle, setBlueChipNewsTitle] = useState("");
+  const [blueChipNewsContent, setBlueChipNewsContent] = useState("");
+  const [blueChipPublishNews, setBlueChipPublishNews] = useState(true);
 
   const fetchStock = async () => {
     try {
@@ -94,7 +97,7 @@ export default function StockDetailPage() {
     );
   }
 
-  const { stock, history, holding, positions, trades = [], marketOpen } = data;
+  const { stock, history, holding, positions, trades = [], events = [], marketOpen } = data;
   const isDelisted = stock.status === 'delisted';
   const isOwnerAssetEtf = Boolean(stock.is_etf) && stock.etf_tracking_type === "owner_asset";
   const isAcquired = stock.status === 'acquired' || isOwnerAssetEtf;
@@ -150,10 +153,16 @@ export default function StockDetailPage() {
           targetPrice: Number(blueChipTargetPrice),
           rampPercentPerTick: Number(blueChipRampPercent),
           reason: blueChipReason,
+          newsTitle: blueChipNewsTitle,
+          newsContent: blueChipNewsContent,
+          publishNews: blueChipPublishNews,
         })
       });
       setMessage(res.message);
       setBlueChipModalOpen(false);
+      setBlueChipNewsTitle("");
+      setBlueChipNewsContent("");
+      setBlueChipPublishNews(true);
       await fetchStock();
       await refreshUser();
     } catch (e) {
@@ -873,6 +882,71 @@ export default function StockDetailPage() {
         )}
       </BaseCard>
 
+      <BaseCard className="mt-6">
+        <SectionHeader title="관련 공지/뉴스" eyebrow="RELATED NOTICES & NEWS" className="mb-4" />
+        {events.length === 0 ? (
+          <p className="rounded-2xl bg-base-200/60 p-5 text-center text-sm font-bold text-base-content/45">
+            이 종목에 등록된 시장 공지 또는 뉴스가 없어요.
+          </p>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-base-300 bg-base-100">
+            <ul className="divide-y divide-base-300">
+              {events.map((ev) => {
+                let badgeColor = "bg-base-200 text-base-content";
+                let badgeText = "공지";
+                if (ev.event_type === "admin_good_news") {
+                  badgeColor = "bg-success/20 text-success";
+                  badgeText = "호재";
+                } else if (ev.event_type === "admin_bad_news") {
+                  badgeColor = "bg-error/20 text-error";
+                  badgeText = "악재";
+                } else if (ev.event_type === "admin_blue_chip_selected") {
+                  badgeColor = "bg-primary/20 text-primary";
+                  badgeText = "우량주 선정";
+                } else if (ev.event_type === "admin_price_target_started") {
+                  if (ev.sentiment === "bad") {
+                    badgeColor = "bg-error/20 text-error";
+                    badgeText = "목표주가 하향";
+                  } else {
+                    badgeColor = "bg-success/20 text-success";
+                    badgeText = "목표주가 상향";
+                  }
+                } else if (ev.event_type === "admin_stock_manual_adjust") {
+                  badgeColor = "bg-base-300 text-base-content";
+                  badgeText = "조정";
+                }
+
+                const hasChangeRate = ev.change_rate !== null && ev.change_rate !== undefined && ev.change_rate !== 0;
+                const changeRateVal = Number(ev.change_rate || 0) * 100;
+                const changeRateText = `${changeRateVal > 0 ? "+" : ""}${changeRateVal.toFixed(1)}%`;
+
+                return (
+                  <li key={ev.id} className="p-4 flex flex-col gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`text-[10px] font-black px-2 py-1 rounded-lg shrink-0 ${badgeColor}`}>
+                        {badgeText}
+                      </span>
+                      <h4 className="font-black text-sm text-base-content flex-1">{ev.title}</h4>
+                      {hasChangeRate && (
+                        <span className={`badge badge-sm font-black ${changeRateVal > 0 ? "badge-success text-success-content" : "badge-error text-error-content"}`}>
+                          {changeRateText}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-base-content/75 leading-relaxed font-bold break-all whitespace-pre-line">
+                      {ev.message}
+                    </p>
+                    <span className="text-[9px] text-base-content/40 font-bold self-end">
+                      {new Date(ev.created_at).toLocaleString("ko-KR")}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        )}
+      </BaseCard>
+
       {/* ACQUISITION PANEL */}
       {!isAcquired && !isDelisted && stock.status !== 'ipo' && (
         <BaseCard className="mt-6 border-2 border-primary/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
@@ -1006,6 +1080,43 @@ export default function StockDetailPage() {
                   maxLength={120}
                 />
               </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">공지 제목 (선택)</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  value={blueChipNewsTitle}
+                  onChange={(event) => setBlueChipNewsTitle(event.target.value)}
+                  placeholder="예: 우량주 지정 및 특별 혜택"
+                  maxLength={100}
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">공지 내용 (선택)</span>
+                <textarea
+                  className="textarea textarea-bordered w-full h-12 min-h-[48px] py-2 rounded-2xl"
+                  value={blueChipNewsContent}
+                  onChange={(event) => setBlueChipNewsContent(event.target.value)}
+                  placeholder={(() => {
+                    const moneyText = blueChipTargetPrice ? Number(blueChipTargetPrice).toLocaleString("ko-KR") : "0";
+                    return `예: ${stock.name}이(가) 우량주로 선정되었어요. 목표주가 ${moneyText}원을 향해 상승 이벤트가 시작됩니다.`;
+                  })()}
+                />
+              </label>
+
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-primary rounded-lg"
+                  checked={blueChipPublishNews}
+                  onChange={(event) => setBlueChipPublishNews(event.target.checked)}
+                  id="blueChipPublishNewsDetail"
+                />
+                <label htmlFor="blueChipPublishNewsDetail" className="text-xs font-bold text-base-content/70 cursor-pointer">
+                  시장 공지 발행 및 행운소식 등록
+                </label>
+              </div>
             </div>
 
             <div className="modal-action mt-6 gap-2">

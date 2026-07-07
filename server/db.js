@@ -640,6 +640,14 @@ if (!stockEventColumns.has("price_before")) {
   db.exec("ALTER TABLE stock_events ADD COLUMN change_rate REAL");
   db.exec("ALTER TABLE stock_events ADD COLUMN basis TEXT");
 }
+if (!stockEventColumns.has("sentiment")) {
+  db.exec("ALTER TABLE stock_events ADD COLUMN sentiment TEXT");
+  db.exec("ALTER TABLE stock_events ADD COLUMN target_price INTEGER");
+  db.exec("ALTER TABLE stock_events ADD COLUMN percent_per_tick REAL");
+  db.exec("ALTER TABLE stock_events ADD COLUMN created_by_user_id INTEGER");
+  db.exec("ALTER TABLE stock_events ADD COLUMN stock_name_snapshot TEXT");
+  db.exec("ALTER TABLE stock_events ADD COLUMN symbol_snapshot TEXT");
+}
 
 const bonusCodeColumns = new Set(
   db.prepare("PRAGMA table_info(bonus_codes)").all().map((column) => column.name),

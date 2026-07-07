@@ -557,12 +557,19 @@ stocksRouter.get("/:id", (req, res) => {
     }
   }
 
+  const events = db.prepare(`
+    SELECT * FROM stock_events 
+    WHERE stock_id = ? 
+    ORDER BY created_at DESC LIMIT 20
+  `).all(id);
+
   res.json({
     stock: stockWithCalculations,
     history,
     holding,
     positions,
     trades,
+    events,
     marketOpen: isStockMarketOpen(db),
     ...clock,
     acquisition,

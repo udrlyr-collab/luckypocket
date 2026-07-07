@@ -70,18 +70,27 @@ export default function AdminPage() {
     value: "",
     targetPrice: "",
     reason: "",
+    newsTitle: "",
+    newsContent: "",
+    publishNews: true,
   });
   const [stockTarget, setStockTarget] = useState({
     stockId: "",
     targetPrice: "",
     percentPerTick: "",
     reason: "",
+    newsTitle: "",
+    newsContent: "",
+    publishNews: true,
   });
   const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
   const [blueChipStockId, setBlueChipStockId] = useState("");
   const [blueChipTargetPrice, setBlueChipTargetPrice] = useState("");
   const [blueChipRampPercent, setBlueChipRampPercent] = useState("30");
   const [blueChipReason, setBlueChipReason] = useState("우량주 편입 이벤트");
+  const [blueChipNewsTitle, setBlueChipNewsTitle] = useState("");
+  const [blueChipNewsContent, setBlueChipNewsContent] = useState("");
+  const [blueChipPublishNews, setBlueChipPublishNews] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -294,13 +303,16 @@ export default function AdminPage() {
           value: isSetPrice ? undefined : Number(stockAdjust.value),
           targetPrice: isSetPrice ? Number(stockAdjust.targetPrice) : undefined,
           reason: stockAdjust.reason,
+          newsTitle: stockAdjust.newsTitle,
+          newsContent: stockAdjust.newsContent,
+          publishNews: stockAdjust.publishNews,
         }),
       });
       setMessage(data.message);
       const stockData = await api("/stocks");
       const list = (stockData.stocks || []).filter((stock) => stock.status !== "delisted");
       setStocks(list);
-      setStockAdjust((current) => ({ ...current, value: "", targetPrice: "", reason: "" }));
+      setStockAdjust((current) => ({ ...current, value: "", targetPrice: "", reason: "", newsTitle: "", newsContent: "", publishNews: true }));
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -320,6 +332,9 @@ export default function AdminPage() {
           targetPrice: Number(stockTarget.targetPrice),
           percentPerTick: Number(stockTarget.percentPerTick),
           reason: stockTarget.reason,
+          newsTitle: stockTarget.newsTitle,
+          newsContent: stockTarget.newsContent,
+          publishNews: stockTarget.publishNews,
         }),
       });
       setMessage(data.message);
@@ -328,6 +343,9 @@ export default function AdminPage() {
         targetPrice: "",
         percentPerTick: "",
         reason: "",
+        newsTitle: "",
+        newsContent: "",
+        publishNews: true,
       }));
     } catch (requestError) {
       setError(requestError.message);
@@ -348,6 +366,9 @@ export default function AdminPage() {
           targetPrice: Number(blueChipTargetPrice),
           rampPercentPerTick: Number(blueChipRampPercent),
           reason: blueChipReason,
+          newsTitle: blueChipNewsTitle,
+          newsContent: blueChipNewsContent,
+          publishNews: blueChipPublishNews,
         }),
       });
       setMessage(data.message);
@@ -355,6 +376,9 @@ export default function AdminPage() {
       const stockData = await api("/stocks");
       const list = (stockData.stocks || []).filter((stock) => stock.status !== "delisted");
       setStocks(list);
+      setBlueChipNewsTitle("");
+      setBlueChipNewsContent("");
+      setBlueChipPublishNews(true);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -914,6 +938,53 @@ export default function AdminPage() {
               </select>
             </label>
           )}
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">공지 제목 (선택)</span>
+            <input
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
+              value={stockAdjust.newsTitle}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, newsTitle: event.target.value }))
+              }
+              placeholder="예: 신규 사업 기대감"
+              maxLength={100}
+            />
+          </label>
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">공지 내용 (선택)</span>
+            <textarea
+              className="textarea textarea-bordered w-full h-12 min-w-0 rounded-2xl py-2 min-h-[48px]"
+              value={stockAdjust.newsContent}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, newsContent: event.target.value }))
+              }
+              placeholder={(() => {
+                const selectedStockAdjustObj = stocks.find(s => String(s.id) === String(stockAdjust.stockId));
+                const currentPriceAdjust = selectedStockAdjustObj ? (selectedStockAdjustObj.current_price || selectedStockAdjustObj.currentPrice) : 0;
+                const adjustIsUp = stockAdjust.mode === "set_price" 
+                  ? (Number(stockAdjust.targetPrice || 0) > currentPriceAdjust) 
+                  : (stockAdjust.direction === "up");
+                return adjustIsUp 
+                  ? "예: 신규 사업 기대감으로 주가가 상승했어요." 
+                  : "예: 실적 부진 우려로 주가가 하락했어요.";
+              })()}
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            className="checkbox checkbox-primary rounded-lg"
+            checked={stockAdjust.publishNews}
+            onChange={(event) =>
+              setStockAdjust((current) => ({ ...current, publishNews: event.target.checked }))
+            }
+            id="adjustPublishNews"
+          />
+          <label htmlFor="adjustPublishNews" className="text-xs font-bold text-base-content/70 cursor-pointer">
+            시장 공지 발행 및 행운소식 등록
+          </label>
         </div>
 
         <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
@@ -1025,6 +1096,51 @@ export default function AdminPage() {
               }
               placeholder="예: 20"
             />
+          </label>
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">공지 제목 (선택)</span>
+            <input
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
+              value={stockTarget.newsTitle}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, newsTitle: event.target.value }))
+              }
+              placeholder="예: 신규 사업 기대감"
+              maxLength={100}
+            />
+          </label>
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">공지 내용 (선택)</span>
+            <textarea
+              className="textarea textarea-bordered w-full h-12 min-w-0 rounded-2xl py-2 min-h-[48px]"
+              value={stockTarget.newsContent}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, newsContent: event.target.value }))
+              }
+              placeholder={(() => {
+                const targetStockObj = stocks.find(s => String(s.id) === String(stockTarget.stockId));
+                const currentPrice = targetStockObj ? (targetStockObj.current_price || targetStockObj.currentPrice) : 0;
+                const isTargetUp = Number(stockTarget.targetPrice || 0) > currentPrice;
+                return isTargetUp 
+                  ? "예: 신규 사업 기대감으로 상승 이벤트가 시작되었어요." 
+                  : "예: 실적 부진 우려로 하락 이벤트가 시작되었어요.";
+              })()}
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex items-center gap-2">
+          <input
+            type="checkbox"
+            className="checkbox checkbox-primary rounded-lg"
+            checked={stockTarget.publishNews}
+            onChange={(event) =>
+              setStockTarget((current) => ({ ...current, publishNews: event.target.checked }))
+            }
+            id="targetPublishNews"
+          />
+          <label htmlFor="targetPublishNews" className="text-xs font-bold text-base-content/70 cursor-pointer">
+            시장 공지 발행 및 행운소식 등록
           </label>
         </div>
 
@@ -1231,6 +1347,45 @@ export default function AdminPage() {
                   maxLength={120}
                 />
               </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">공지 제목 (선택)</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  value={blueChipNewsTitle}
+                  onChange={(event) => setBlueChipNewsTitle(event.target.value)}
+                  placeholder="예: 우량주 지정 및 특별 혜택"
+                  maxLength={100}
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">공지 내용 (선택)</span>
+                <textarea
+                  className="textarea textarea-bordered w-full h-12 min-h-[48px] py-2 rounded-2xl"
+                  value={blueChipNewsContent}
+                  onChange={(event) => setBlueChipNewsContent(event.target.value)}
+                  placeholder={(() => {
+                    const targetStockObj = stocks.find(s => String(s.id) === String(blueChipStockId));
+                    const name = targetStockObj ? targetStockObj.name : "";
+                    const moneyText = blueChipTargetPrice ? Number(blueChipTargetPrice).toLocaleString("ko-KR") : "0";
+                    return `예: ${name}이(가) 우량주로 선정되었어요. 목표주가 ${moneyText}원을 향해 상승 이벤트가 시작됩니다.`;
+                  })()}
+                />
+              </label>
+
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="checkbox"
+                  className="checkbox checkbox-primary rounded-lg"
+                  checked={blueChipPublishNews}
+                  onChange={(event) => setBlueChipPublishNews(event.target.checked)}
+                  id="blueChipPublishNews"
+                />
+                <label htmlFor="blueChipPublishNews" className="text-xs font-bold text-base-content/70 cursor-pointer">
+                  시장 공지 발행 및 행운소식 등록
+                </label>
+              </div>
             </div>
 
             <div className="modal-action mt-6 gap-2">
