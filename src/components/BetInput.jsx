@@ -108,6 +108,6 @@ export default function BetInput({ balance, value, onChange, disabled = false, e
       <p id="bet-validation" className="mt-1 min-h-4 text-xs font-bold text-error">
         {validation}
       </p>
-    </div>
+    </BaseCard>
   );
 }
