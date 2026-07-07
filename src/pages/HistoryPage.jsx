@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import HistoryList from "../components/HistoryList";
 import { gameMeta } from "../data/games";
+import { PageContainer, SectionHeader, BaseCard, LoadingCard, EmptyState } from "../components/ui";
 
 export default function HistoryPage() {
   const [filter, setFilter] = useState("");
@@ -42,16 +43,23 @@ export default function HistoryPage() {
   }, [filter]);
 
   return (
-    <div className="page-content">
-      <p className="eyebrow">My game log</p>
-      <h1 className="text-3xl font-black">최근 활동 기록</h1>
-      <p className="mt-2 text-sm text-base-content/55">서버에 저장된 게임과 주요 자산 이벤트를 표시해요.</p>
-      <div className="my-6 flex gap-2 overflow-x-auto pb-2">
-        <button className={`btn btn-sm rounded-xl ${!filter ? "btn-primary" : "bg-base-100"}`} onClick={() => setFilter("")}>전체</button>
+    <PageContainer>
+      <SectionHeader title="최근 활동 기록" eyebrow="HISTORY" className="mb-4" />
+      <p className="text-sm text-base-content/60 mb-6">
+        서버에 저장된 게임과 주요 자산 이벤트를 표시해요.
+      </p>
+
+      <div className="mb-6 flex flex-wrap gap-2">
+        <button 
+          className={`btn btn-sm h-10 min-h-10 px-4 rounded-xl border-none font-bold transition ${!filter ? "btn-primary" : "bg-base-200 text-base-content/60 hover:bg-base-300"}`} 
+          onClick={() => setFilter("")}
+        >
+          전체
+        </button>
         {Object.entries(gameMeta).map(([key, game]) => (
           <button
             key={key}
-            className={`btn btn-sm shrink-0 rounded-xl ${filter === key ? "btn-primary" : "bg-base-100"}`}
+            className={`btn btn-sm h-10 min-h-10 px-4 rounded-xl border-none font-bold transition ${filter === key ? "btn-primary" : "bg-base-200 text-base-content/60 hover:bg-base-300"}`}
             onClick={() => setFilter(key)}
           >
             {game.icon} {game.title}
@@ -80,14 +88,27 @@ export default function HistoryPage() {
         ].map(([key, label]) => (
           <button
             key={key}
-            className={`btn btn-sm shrink-0 rounded-xl ${filter === key ? "btn-primary" : "bg-base-100"}`}
+            className={`btn btn-sm h-10 min-h-10 px-4 rounded-xl border-none font-bold transition ${filter === key ? "btn-primary" : "bg-base-200 text-base-content/60 hover:bg-base-300"}`}
             onClick={() => setFilter(key)}
           >
             {label}
           </button>
         ))}
       </div>
-      {loading ? <div className="loading-block" /> : <HistoryList logs={logs} />}
-    </div>
+
+      <BaseCard className="p-0 sm:p-0 overflow-hidden">
+        {loading ? (
+          <div className="flex flex-col gap-2 p-4">
+            <div className="animate-pulse h-16 bg-base-200 rounded-2xl w-full" />
+            <div className="animate-pulse h-16 bg-base-200 rounded-2xl w-full" />
+            <div className="animate-pulse h-16 bg-base-200 rounded-2xl w-full" />
+          </div>
+        ) : logs.length > 0 ? (
+          <HistoryList logs={logs} />
+        ) : (
+          <EmptyState message="해당하는 기록이 없어요." icon="📝" />
+        )}
+      </BaseCard>
+    </PageContainer>
   );
 }

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { BaseCard } from "../components/ui";
 import { formatMoney } from "../utils/format";
 
 const ADD_AMOUNTS = [10000, 100000, 1000000, 5000000];
@@ -42,7 +43,7 @@ export default function BetInput({ balance, value, onChange, disabled = false, e
   };
 
   return (
-    <div className="soft-card bet-amount-card min-w-0">
+    <BaseCard className=" bet-amount-card min-w-0">
       <div className="mb-4 flex items-start justify-between gap-3">
         <label htmlFor="bet-amount" className="text-base font-black">
           배팅할 금액

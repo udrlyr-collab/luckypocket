@@ -67,6 +67,7 @@ export function finishInstantGame({
   const profit = payout - bet;
   let actualPayout = payout;
   let actualProfit = profit;
+  let finalDetail = { ...detail };
   if (profit > 0) {
     const tax = Math.floor(profit * 0.01);
     if (tax > 0) {

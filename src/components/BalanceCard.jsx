@@ -1,4 +1,5 @@
 import { formatMoney, formatSignedMoney } from "../utils/format";
+import { BaseCard } from "../components/ui";
 import AnimatedMoney from "./AnimatedMoney";
 
 export default function BalanceCard({ user, compact = false }) {
@@ -21,7 +22,7 @@ export default function BalanceCard({ user, compact = false }) {
   }
 
   return (
-    <section className="soft-card overflow-hidden bg-gradient-to-br from-pink-100 via-base-100 to-sky-100">
+    <BaseCard className=" overflow-hidden bg-gradient-to-br from-pink-100 via-base-100 to-sky-100">
       <div className="relative z-10">
         <p className="mb-1 text-sm font-bold text-base-content/55">현재 자산</p>
         <p className="money-hero">
@@ -41,6 +42,6 @@ export default function BalanceCard({ user, compact = false }) {
         </div>
       </div>
       <div className="pointer-events-none absolute -right-6 -top-8 text-8xl opacity-10">🍀</div>
-    </section>
+    </BaseCard>
   );
 }

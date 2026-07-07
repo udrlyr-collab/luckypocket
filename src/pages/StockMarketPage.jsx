@@ -1,10 +1,12 @@
 import { useEffect, useState, useRef } from "react";
+import { BaseCard } from "../components/ui";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockRiskBadges, StockTierBadge } from "../components/StockRiskStatus";
+import { PageContainer, SectionHeader, BaseCard } from "../components/ui";
 
 export default function StockMarketPage() {
   const { user } = useAuth();
@@ -112,7 +114,7 @@ export default function StockMarketPage() {
   const totalMargin = positions.reduce((sum, p) => sum + p.margin_amount, 0);
 
   return (
-    <div className="page-content">
+    <PageContainer>
       <div className="mb-6 rounded-2xl bg-base-200 p-4 text-center">
         <p className="text-sm font-bold text-base-content/70">
           실제 투자가 아닌 행운주머니 내부 수치 게임입니다.<br />
@@ -123,9 +125,8 @@ export default function StockMarketPage() {
 
       <header className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="eyebrow">Lucky Exchange</p>
-          <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-black">주식 시장</h1>
+          <SectionHeader title="주식 시장" eyebrow="LUCKY EXCHANGE" className="mb-0" />
+          <div className="flex items-center gap-4 mt-2">
             {isAdmin && (
               <div className="flex gap-2">
                 {market.marketOpen ? (
@@ -150,27 +151,27 @@ export default function StockMarketPage() {
       )}
 
       <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">전체 종목</span>
           <strong className="block text-2xl mt-1 tabular-nums">{summary.total}</strong>
-        </div>
-        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+        </BaseCard>
+        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
           <strong className="block text-2xl mt-1 tabular-nums text-success">{summary.up} <span className="text-base-content/30 text-lg">/</span> <span className="text-error">{summary.down}</span></strong>
-        </div>
-        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+        </BaseCard>
+        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주/신규 상장</span>
           <strong className="block text-2xl mt-1 tabular-nums text-warning">{summary.ipo}</strong>
-        </div>
-        <div className="soft-card bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+        </BaseCard>
+        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
           <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">최근 상장폐지</span>
           <strong className="block text-2xl mt-1 tabular-nums text-base-content/40">{recentDelistedStocks ? recentDelistedStocks.length : 0}</strong>
-        </div>
+        </BaseCard>
       </div>
 
       <div className="mb-8 grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <h2 className="section-title text-xl mb-4">시장 종목</h2>
+          <SectionHeader title="시장 종목" eyebrow="STOCKS" className="mb-4" />
           <div className="bg-base-100 rounded-2xl p-2 sm:p-4 shadow-sm border border-base-200">
             <div className="hidden sm:flex text-xs font-bold text-base-content/50 px-4 pb-2 border-b border-base-200 mb-2">
               <div className="flex-[2]">종목명</div>
@@ -197,8 +198,8 @@ export default function StockMarketPage() {
         </div>
         
         <div>
-          <h2 className="section-title text-xl mb-4">내 포트폴리오</h2>
-          <div className="soft-card mb-4 p-4 border-2 border-primary/20">
+          <SectionHeader title="내 포트폴리오" eyebrow="PORTFOLIO" className="mb-4" />
+          <BaseCard className="mb-4 p-4 border-2 border-primary/20">
             <h3 className="text-xs font-bold text-base-content/50 mb-2">총 평가 자산</h3>
             <div className="text-2xl font-black">
               <AnimatedMoney value={portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized)} />
@@ -206,7 +207,7 @@ export default function StockMarketPage() {
             <div className={`text-sm font-bold mt-1 ${portfolio.unrealizedPnl >= 0 ? "text-success" : "text-error"}`}>
               {portfolio.unrealizedPnl >= 0 ? "+" : ""}<AnimatedMoney value={portfolio.unrealizedPnl} />
             </div>
-          </div>
+          </BaseCard>
 
           <div className="space-y-4">
             <div>
@@ -264,8 +265,8 @@ export default function StockMarketPage() {
       </div>
 
       <section>
-        <h2 className="section-title text-xl mb-4">최근 시장 뉴스</h2>
-        <div className="soft-card p-0 overflow-hidden">
+        <SectionHeader title="최근 시장 뉴스" eyebrow="NEWS" className="mb-4" />
+        <BaseCard className="p-0 overflow-hidden">
           {news.length === 0 ? (
             <div className="p-6 text-center text-sm text-base-content/50">최근 소식이 없어요.</div>
           ) : (
@@ -281,9 +282,9 @@ export default function StockMarketPage() {
               ))}
             </ul>
           )}
-        </div>
+        </BaseCard>
       </section>
-    </div>
+    </PageContainer>
   );
 }
 

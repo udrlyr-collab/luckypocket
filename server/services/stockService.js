@@ -615,22 +615,31 @@ function processNormalTick(
     }
   } else if (stock.status === "newly_listed") {
     const newlyListedUntil = new Date(stock.newly_listed_until).getTime();
-    if (now >= newlyListedUntil) {
-      newStatus = "listed";
-    }
+    const maxIpoPrice = stock.initial_price * 5; // 최대 5배 (400% 상승)
 
-    const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
-    if (event === "ipoSurge") {
-      newPrice = Math.floor(newPrice * (1 + 0.40 + Math.random() * 2.10)); // +40% ~ +250%
-      eventType = "ipo_surge";
-      eventMsg = `${stock.name}이(가) 신규 상장 프리미엄으로 급등 중이에요!`;
-    } else if (event === "ipoCrash") {
-      newPrice = Math.floor(newPrice * (1 - 0.30 - Math.random() * 0.40)); // -30% ~ -70%
-      eventType = "ipo_crash";
-      eventMsg = `${stock.name}이(가) 신규 상장 직후 급락했어요.`;
+    if (now >= newlyListedUntil || stock.current_price >= maxIpoPrice) {
+      newStatus = "listed";
+      db.prepare("UPDATE stocks SET newly_listed_until = NULL WHERE id = ?").run(stock.id);
+      
+      const change = (Math.random() - 0.5) * 0.10; // -5% ~ +5%
+      newPrice = Math.floor(stock.current_price * (1 + change));
     } else {
-      const change = Math.random() * 0.50 - 0.10; // -10% ~ +40%
-      newPrice = Math.floor(newPrice * (1 + change));
+      const event = getRandomEvent(IPO_EVENT_PROBABILITIES);
+      if (event === "ipoSurge") {
+        newPrice = Math.floor(newPrice * (1 + 0.40 + Math.random() * 2.10)); // +40% ~ +250%
+        if (newPrice > maxIpoPrice) {
+          newPrice = maxIpoPrice + Math.floor(Math.random() * (stock.initial_price * 0.2));
+        }
+        eventType = "ipo_surge";
+        eventMsg = `${stock.name}이(가) 신규 상장 프리미엄으로 급등 중이에요!`;
+      } else if (event === "ipoCrash") {
+        newPrice = Math.floor(newPrice * (1 - 0.30 - Math.random() * 0.40)); // -30% ~ -70%
+        eventType = "ipo_crash";
+        eventMsg = `${stock.name}이(가) 신규 상장 직후 급락했어요.`;
+      } else {
+        const change = Math.random() * 0.50 - 0.10; // -10% ~ +40%
+        newPrice = Math.floor(newPrice * (1 + change));
+      }
     }
   } else {
     // Normal listed stock

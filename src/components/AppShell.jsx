@@ -141,9 +141,7 @@ export default function AppShell() {
         </div>
       </header>
       <main className="app-main">
-        <PageContainer>
-          <Outlet />
-        </PageContainer>
+        <Outlet />
       </main>
       <nav
         className={`fixed inset-x-0 bottom-0 z-40 grid border-t border-base-300 bg-base-100 p-2 md:hidden ${

@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import { formatMoney } from "../utils/format";
+import { PageContainer, SectionHeader, BaseCard } from "../components/ui";
 
 const adminResetOptions = [
   {
@@ -284,16 +285,13 @@ export default function AdminPage() {
   const selectedIdList = [...selectedIds];
 
   return (
-    <div className="page-content">
-      <header className="mb-6">
-        <p className="eyebrow">Admin control center</p>
-        <h1 className="text-3xl font-black">관리자 제어</h1>
-        <p className="mt-2 text-sm font-bold text-base-content/55">
-          전체 플레이어를 검색·선택하고 단일 또는 일괄 작업을 실행합니다.
-        </p>
-      </header>
+    <PageContainer>
+      <SectionHeader title="관리자 제어" eyebrow="ADMIN CONTROL CENTER" className="mb-6" />
+      <p className="mt-2 text-sm font-bold text-base-content/55 mb-6">
+        전체 플레이어를 검색·선택하고 단일 또는 일괄 작업을 실행합니다.
+      </p>
 
-      <section className="soft-card border-2 border-primary/20">
+      <BaseCard className="border-2 border-primary/20">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h2 className="section-title text-xl">전체 플레이어</h2>
@@ -431,15 +429,12 @@ export default function AdminPage() {
             다음
           </button>
         </div>
-      </section>
+      </BaseCard>
 
       {selectedIds.size > 0 && (
-        <section className="soft-card mt-6 border-2 border-secondary/30">
-          <p className="eyebrow">Bulk actions</p>
-          <h2 className="section-title text-xl">
-            선택한 {selectedIds.size.toLocaleString("ko-KR")}명 일괄 설정
-          </h2>
-          <p className="mt-2 text-xs font-bold text-base-content/50">
+        <BaseCard className="mt-6 border-2 border-secondary/30">
+          <SectionHeader title={`선택한 ${selectedIds.size.toLocaleString("ko-KR")}명 일괄 설정`} eyebrow="BULK ACTIONS" className="mb-2" />
+          <p className="text-xs font-bold text-base-content/50">
             관리자 본인도 선택 대상에 포함할 수 있습니다.
           </p>
           <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto_auto]">
@@ -475,14 +470,13 @@ export default function AdminPage() {
               선택 항목 일괄 초기화
             </button>
           </div>
-        </section>
+        </BaseCard>
       )}
 
       {activeUser && (
-        <section className="soft-card mt-6 border-2 border-primary/25">
-          <p className="eyebrow">Single player</p>
-          <h2 className="section-title text-xl">플레이어별 설정</h2>
-          <p className="mt-2 text-sm font-bold">
+        <BaseCard className="mt-6 border-2 border-primary/25">
+          <SectionHeader title="플레이어별 설정" eyebrow="SINGLE PLAYER" className="mb-2" />
+          <p className="text-sm font-bold">
             <span className="text-primary">{activeUser.nickname}</span> (@
             {activeUser.username}) · {formatMoney(activeUser.balance)}
           </p>
@@ -547,15 +541,12 @@ export default function AdminPage() {
               초기화 항목 선택
             </button>
           </div>
-        </section>
+        </BaseCard>
       )}
 
-      <section className="soft-card mt-6 border-2 border-primary/20">
+      <BaseCard className="mt-6 border-2 border-primary/20">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="eyebrow">Stock market</p>
-            <h2 className="section-title text-xl">주식장 제어</h2>
-          </div>
+          <SectionHeader title="주식장 제어" eyebrow="STOCK MARKET" className="mb-0" />
           <span
             className={`badge font-black ${
               marketOpen === false
@@ -590,14 +581,13 @@ export default function AdminPage() {
             주식장 휴장
           </button>
         </div>
-      </section>
+      </BaseCard>
 
-      <section className="soft-card mt-6 border-2 border-warning/30">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      <BaseCard className="mt-6 border-2 border-warning/30">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
           <div>
-            <p className="eyebrow">Season</p>
-            <h2 className="section-title text-xl">시즌 제어</h2>
-            <p className="mt-1 text-xs font-bold text-base-content/50">
+            <SectionHeader title="시즌 제어" eyebrow="SEASON" className="mb-1" />
+            <p className="text-xs font-bold text-base-content/50">
               시즌 종료 시 주식과 포지션을 정산하고 다음 시즌 시작 자산을 지급합니다.
             </p>
           </div>
@@ -634,7 +624,7 @@ export default function AdminPage() {
             시즌 종료는 username이 admin인 계정만 실행할 수 있습니다.
           </p>
         )}
-      </section>
+      </BaseCard>
 
       <p
         className={`mt-3 min-h-6 text-sm font-bold ${
@@ -695,7 +685,7 @@ export default function AdminPage() {
           onClose={() => setSeasonConfirmOpen(false)}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
 

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { BaseCard } from "../components/ui";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
-import { formatMoney, formatCompactMoney } from "../utils/format";
+import { formatCompactMoney } from "../utils/format";
+import { PageContainer, SectionHeader, BaseCard, MoneyText, EmptyState, LoadingCard } from "../components/ui";
 
 const rankingTypes = {
   currentBalance: {
@@ -100,27 +102,17 @@ export default function RankingPage() {
     period === "week" ? "이번 주" : period === "month" ? "이번 달" : date === today ? "오늘" : date;
 
   return (
-    <div className="page-content pt-2 pb-16">
-      <section className="mb-4">
-        <p className="eyebrow">LEADERBOARD</p>
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-          <div>
-            <h1 className="text-2xl font-black sm:text-3xl">행운주머니 리더보드</h1>
-            <p className="text-sm text-base-content/60">
-              순위를 한눈에 확인해보세요.
-            </p>
-          </div>
-        </div>
-      </section>
+    <PageContainer>
+      <SectionHeader title="행운주머니 리더보드" eyebrow="LEADERBOARD" className="mb-4" />
 
-      <section className="mb-4">
+      <section className="mb-6">
         <div className="sticky top-[72px] z-20 bg-base-100/90 backdrop-blur-md py-2 mb-3">
           <div className="tabs-boxed grid grid-cols-3 rounded-2xl p-1 bg-base-200/50">
             {Object.entries(rankingTypes).map(([key, tab]) => (
               <button
                 type="button"
                 key={key}
-                className={`btn btn-sm h-9 rounded-xl border-none ${type === key ? "bg-base-100 text-primary shadow-sm font-black" : "bg-transparent text-base-content/60"}`}
+                className={`btn btn-sm h-10 min-h-10 rounded-xl border-none ${type === key ? "bg-base-100 text-primary shadow-sm font-black" : "bg-transparent text-base-content/60"}`}
                 onClick={() => setType(key)}
               >
                 {tab.label}
@@ -150,14 +142,14 @@ export default function RankingPage() {
           </select>
           {selectedSeason === "current" ? (
             <>
-              <span className="badge badge-primary badge-outline font-bold">{periodLabel} 기준</span>
+              <span className="badge badge-primary badge-outline font-bold h-7">{periodLabel} 기준</span>
               <span className="text-sm text-base-content/60 tabular-nums">{date}</span>
               <button className="btn btn-xs btn-ghost rounded-lg" onClick={() => setIsDateFilterOpen(v => !v)}>
                 날짜 변경 {isDateFilterOpen ? "▲" : "▼"}
               </button>
             </>
           ) : (
-            <span className="badge badge-secondary badge-outline font-bold">
+            <span className="badge badge-secondary badge-outline font-bold h-7">
               종료 시즌 최종 순위
             </span>
           )}
@@ -167,7 +159,7 @@ export default function RankingPage() {
           <div className="mt-3 flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-base-200/40">
             <input
               type="date"
-              className="input input-sm input-bordered w-36 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+              className="input input-sm input-bordered h-10 min-h-10 rounded-xl w-36 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
               value={date}
               max={today}
               onChange={(event) => selectDate(event.target.value, "day")}
@@ -183,19 +175,22 @@ export default function RankingPage() {
       </section>
 
       {error ? (
-        <div className="alert alert-error mt-5 rounded-2xl">
+        <div className="alert alert-error mt-5 rounded-3xl min-h-12">
           <span>{error}</span>
         </div>
       ) : loading ? (
-        <div className="loading-block mt-5" />
+        <div className="flex flex-col gap-4 mt-5">
+          <LoadingCard />
+          <LoadingCard />
+        </div>
       ) : (
-        <div className="ranking-transition">
-          <div className="mb-3">
-            <h2 className="text-lg font-black">{selected.title}</h2>
-            <p className="text-xs text-base-content/60">{selected.description}</p>
+        <div className="ranking-transition pb-20">
+          <div className="mb-4">
+            <h2 className="text-xl font-black">{selected.title}</h2>
+            <p className="text-sm text-base-content/60 mt-1">{selected.description}</p>
           </div>
           {podium.length > 0 && (
-            <section className="podium-grid" aria-label="상위 3명">
+            <section className="podium-grid mb-6" aria-label="상위 3명">
               {podium.map((ranking, index) => (
                 <PodiumCard
                   key={ranking.userId}
@@ -211,35 +206,37 @@ export default function RankingPage() {
           )}
 
           {remaining.length > 0 && (
-            <section className="ranking-list-card">
-              {remaining.map((ranking) => (
-                <RankingRow
-                  key={ranking.userId}
-                  ranking={ranking}
-                  type={type}
-                  mine={ranking.userId === user.id}
-                  innerRef={ranking.userId === user.id ? myRankRef : null}
-                  highlight={ranking.userId === user.id && highlightMyRank}
-                />
-              ))}
-            </section>
+            <BaseCard className="p-0 sm:p-0 overflow-hidden">
+              <div className="divide-y divide-base-200">
+                {remaining.map((ranking) => (
+                  <RankingRow
+                    key={ranking.userId}
+                    ranking={ranking}
+                    type={type}
+                    mine={ranking.userId === user.id}
+                    innerRef={ranking.userId === user.id ? myRankRef : null}
+                    highlight={ranking.userId === user.id && highlightMyRank}
+                  />
+                ))}
+              </div>
+            </BaseCard>
           )}
 
           {data.rankings.length === 0 && (
-            <div className="empty-state mt-5">아직 순위에 표시할 주머니가 없어요.</div>
+            <EmptyState message="아직 순위에 표시할 주머니가 없어요." className="mt-8" />
           )}
         </div>
       )}
 
       {data.myRank && (
         <button
-          className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 btn btn-primary rounded-full shadow-lg font-bold"
+          className="fixed bottom-20 md:bottom-6 right-4 md:right-6 z-40 btn btn-primary min-h-12 rounded-full shadow-lg px-6 font-bold"
           onClick={scrollToMyRank}
         >
           내 순위 보기
         </button>
       )}
-    </div>
+    </PageContainer>
   );
 }
 
@@ -247,7 +244,7 @@ function DateButton({ active, onClick, children }) {
   return (
     <button
       type="button"
-      className={`btn btn-sm rounded-lg border-0 ${active ? "btn-primary" : "bg-base-100 text-base-content/70"}`}
+      className={`btn h-10 min-h-10 px-4 rounded-xl border-0 font-bold ${active ? "btn-primary" : "bg-base-100 text-base-content/70 hover:bg-base-200"}`}
       onClick={onClick}
     >
       {children}
@@ -258,7 +255,7 @@ function DateButton({ active, onClick, children }) {
 function primaryValue(ranking, type) {
   if (type === "achievements") return `${ranking.achievementCount.toLocaleString("ko-KR")}개 달성`;
   if (type === "games") return `${ranking.totalGames.toLocaleString("ko-KR")}판`;
-  return formatCompactMoney(ranking.balance);
+  return <MoneyText value={ranking.balance} compact />;
 }
 
 function secondaryStats(ranking, type) {
@@ -288,17 +285,17 @@ function PodiumCard({ ranking, type, place, mine, innerRef, highlight }) {
   return (
     <article 
       ref={innerRef}
-      className={`podium-card place-${place} ${mine ? "is-mine" : ""} ${highlight ? "animate-rank-pulse" : ""}`}
+      className={`podium-card place-${place} rounded-3xl border shadow-sm p-5 ${mine ? "border-primary bg-primary/5" : "border-base-200 bg-base-100"} ${highlight ? "animate-rank-pulse ring-2 ring-primary" : ""}`}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="text-3xl" aria-label={`${place}위`}>{medals[place - 1]}</span>
-        {mine && <span className="badge badge-primary badge-sm font-black">나</span>}
+        <span className="text-3xl drop-shadow-sm" aria-label={`${place}위`}>{medals[place - 1]}</span>
+        {mine && <span className="badge badge-primary badge-sm font-black border-0">나</span>}
       </div>
-      <span className="mt-4 block truncate text-sm font-black text-base-content/60">{ranking.nickname}</span>
-      <strong className="podium-primary-value">{primaryValue(ranking, type)}</strong>
+      <span className="mt-4 block truncate text-base font-black text-base-content/70">{ranking.nickname}</span>
+      <strong className="block mt-1 text-2xl font-black text-primary tabular-nums">{primaryValue(ranking, type)}</strong>
       <div className="mt-4 flex flex-wrap gap-2">
         {secondaryStats(ranking, type).map(([label, value]) => (
-          <span className="podium-mini-stat" key={label}>
+          <span className="rounded-xl bg-base-200/50 px-2 py-1 text-[11px] font-bold text-base-content/60" key={label}>
             {label} <strong>{value}</strong>
           </span>
         ))}
@@ -311,21 +308,21 @@ function RankingRow({ ranking, type, mine, innerRef, highlight }) {
   return (
     <article 
       ref={innerRef}
-      className={`ranking-row ${mine ? "is-mine" : ""} ${highlight ? "animate-rank-pulse" : ""}`}
+      className={`flex items-center gap-4 p-4 sm:p-5 transition-colors ${mine ? "bg-primary/5" : "hover:bg-base-200/30"} ${highlight ? "animate-rank-pulse bg-primary/10" : ""}`}
     >
-      <span className="ranking-number">{ranking.rank}</span>
+      <span className="w-8 text-center text-lg font-black text-base-content/40">{ranking.rank}</span>
       <div className="min-w-0 flex-1">
-        <strong className="block truncate font-black">
+        <strong className="block truncate font-black text-base">
           {ranking.nickname}
-          {mine && <span className="badge badge-primary badge-xs ml-2">나</span>}
+          {mine && <span className="badge badge-primary badge-xs ml-2 border-0">나</span>}
         </strong>
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] font-bold text-base-content/45">
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs font-bold text-base-content/50">
           {secondaryStats(ranking, type).map(([label, value]) => (
             <span key={label}>{label} {value}</span>
           ))}
         </div>
       </div>
-      <strong className="ranking-primary-value">{primaryValue(ranking, type)}</strong>
+      <strong className="text-right text-lg font-black tabular-nums">{primaryValue(ranking, type)}</strong>
     </article>
   );
 }

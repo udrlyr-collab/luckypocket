@@ -32,6 +32,11 @@ meRouter.get("/", (req, res) => {
 
   const { totalEvaluatedAsset } = calculateUserTotalEvaluatedAsset(db, user.id);
 
+  if (totalEvaluatedAsset >= 500000 && user.bankruptcy_prompt_dismissed_at) {
+    db.prepare("UPDATE users SET bankruptcy_prompt_dismissed_at = NULL WHERE id = ?").run(user.id);
+    user.bankruptcy_prompt_dismissed_at = null;
+  }
+
   return res.json({
     user: {
       ...publicUser(user),

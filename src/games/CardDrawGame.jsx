@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
+import { BaseCard } from "../components/ui";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 import { cardBets } from "../data/games";
@@ -80,7 +81,7 @@ export default function CardDrawGame() {
       <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-5">
           <BetInput balance={user.balance} value={bet} onChange={setBet} />
-          <section className="soft-card border-2 border-secondary/20">
+          <BaseCard className=" border-2 border-secondary/20">
             <label className="flex cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
@@ -98,8 +99,8 @@ export default function CardDrawGame() {
                 </span>
               </span>
             </label>
-          </section>
-          <section className="soft-card">
+          </BaseCard>
+          <BaseCard>
             <h2 className="mb-3 font-black">어떤 숫자를 기다릴까요?</h2>
             <div className="grid grid-cols-2 gap-2">
               {cardBets.map((item) => (
@@ -128,9 +129,9 @@ export default function CardDrawGame() {
                 ))}
               </div>
             )}
-          </section>
+          </BaseCard>
         </div>
-        <section className="soft-card">
+        <BaseCard>
           <div className="grid grid-cols-5 gap-2 sm:gap-3">
             {Array.from({ length: 10 }, (_, index) => index + 1).map((number) => (
               <div
@@ -156,7 +157,7 @@ export default function CardDrawGame() {
             {busy ? <span className="loading loading-dots" /> : "행운 카드 뽑기"}
           </button>
           <ErrorAlert message={error} />
-        </section>
+        </BaseCard>
       </div>
       <ResultModal
         result={result}

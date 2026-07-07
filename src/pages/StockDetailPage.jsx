@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { BaseCard } from "../components/ui";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -6,6 +7,7 @@ import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/for
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockTierBadge } from "../components/StockRiskStatus";
+import { PageContainer, SectionHeader, BaseCard, ConfirmModal } from "../components/ui";
 
 export default function StockDetailPage() {
   const { id } = useParams();
@@ -253,7 +255,7 @@ export default function StockDetailPage() {
     : `${blueChipDailyChangeRate > 0 ? "+" : ""}${(blueChipDailyChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
   return (
-    <div className="page-content">
+    <PageContainer>
       <button className="btn btn-sm btn-ghost mb-4 pl-0" onClick={() => navigate("/stocks")}>
         ← 시장으로 돌아가기
       </button>
@@ -302,12 +304,12 @@ export default function StockDetailPage() {
       </header>
 
       {/* CHART */}
-      <section className="soft-card mb-6 p-4">
+      <BaseCard className="mb-6 p-4">
         <StockChart history={history} isDelisted={isDelisted} />
-      </section>
+      </BaseCard>
 
       {stock.is_bluechip === 1 && (
-        <section className="soft-card mb-6 border-2 border-info/20 bg-info/5">
+        <BaseCard className=" mb-6 border-2 border-info/20 bg-info/5">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
               <p className="text-xs font-black tracking-widest text-info mb-1">BLUE CHIP LIMIT</p>
@@ -338,12 +340,12 @@ export default function StockDetailPage() {
               <p className="font-black tabular-nums text-info">±0.0016%</p>
             </div>
           </div>
-        </section>
+        </BaseCard>
       )}
 
       {/* ADMIN CONTROL PANEL */}
       {isAdmin && (
-        <section className="soft-card mb-6 border-2 border-error/50 bg-error/5">
+        <BaseCard className=" mb-6 border-2 border-error/50 bg-error/5">
           <h2 className="section-title text-xl text-error mb-4">어드민 제어판</h2>
           <div className="flex flex-wrap gap-2">
             {!isTradingSuspended ? (
@@ -409,12 +411,12 @@ export default function StockDetailPage() {
               </button>
             )}
           </div>
-        </section>
+        </BaseCard>
       )}
 
       {/* TRADE FORMS */}
       <div className="grid gap-6 md:grid-cols-2">
-        <section className="soft-card">
+        <BaseCard className="">
           <h2 className="section-title text-xl mb-4">거래하기</h2>
           {isDelisted ? (
             <div className="bg-base-200/50 p-6 rounded-2xl text-center">
@@ -590,9 +592,9 @@ export default function StockDetailPage() {
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
             </div>
           )}
-        </section>
+        </BaseCard>
 
-        <section className="soft-card">
+        <BaseCard className="">
           <h2 className="section-title text-xl mb-4">내 보유 현황</h2>
           
           <div className="mb-6">
@@ -678,7 +680,7 @@ export default function StockDetailPage() {
               </div>
             )}
           </div>
-        </section>
+        </BaseCard>
       </div>
 
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
@@ -698,7 +700,7 @@ export default function StockDetailPage() {
 
       {/* ACQUISITION PANEL */}
       {!isAcquired && !isDelisted && stock.status !== 'ipo' && (
-        <section className="mt-6 soft-card border-2 border-primary/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <BaseCard className="mt-6 border-2 border-primary/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div>
             <h3 className="font-black text-lg mb-1 flex items-center gap-2">🏢 회사 인수 <span className="badge badge-primary badge-sm">ETF 전환</span></h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
@@ -713,12 +715,12 @@ export default function StockDetailPage() {
           >
             회사 인수하기
           </button>
-        </section>
+        </BaseCard>
       )}
 
       {/* OWNER PANEL */}
       {isOwner && isAcquired && (
-        <section className="mt-6 soft-card border-2 border-warning/30 flex flex-col sm:flex-row gap-4 items-center justify-between">
+        <BaseCard className="mt-6 border-2 border-warning/30 flex flex-col sm:flex-row gap-4 items-center justify-between">
           <div>
             <h3 className="font-black text-lg mb-1 text-warning">👑 오너 권한</h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
@@ -742,7 +744,7 @@ export default function StockDetailPage() {
               상장폐지 실행
             </button>
           </div>
-        </section>
+        </BaseCard>
       )}
 
       {/* MODALS */}
@@ -778,7 +780,7 @@ function formatRate(rate) {
 
 function StockTopList({ title, emptyText, rows, type }) {
   return (
-    <section className="soft-card min-w-0">
+    <BaseCard className=" min-w-0">
       <div className="mb-4 flex items-center justify-between gap-2">
         <div>
           <p className="eyebrow">Stock ranking</p>
@@ -856,7 +858,7 @@ function StockTopList({ title, emptyText, rows, type }) {
           )}
         </div>
       )}
-    </section>
+    </BaseCard>
   );
 }
 

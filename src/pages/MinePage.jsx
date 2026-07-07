@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney } from "../utils/format";
 import AnimatedMoney from "../components/AnimatedMoney";
+import { PageContainer, SectionHeader, BaseCard, MoneyText } from "../components/ui";
 
 export default function MinePage() {
   const { user, refreshUser } = useAuth();
@@ -95,96 +96,114 @@ export default function MinePage() {
   if (!status) return null;
 
   return (
-    <div className="page-content pb-16">
-      <div className="mb-6 flex items-center justify-between">
+    <PageContainer>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div>
-          <p className="eyebrow">COAL MINE</p>
-          <h1 className="text-3xl font-black">탄광</h1>
-          <p className="mt-2 text-sm text-base-content/60">
-            곡괭이를 들고 자원을 캐서 자산을 키워보세요.<br />
+          <SectionHeader title="탄광" eyebrow="COAL MINE" className="mb-2" />
+          <p className="text-sm text-base-content/60 leading-relaxed">
+            곡괭이를 들고 자원을 캐서 자산을 키워보세요.<br className="hidden sm:block" />
             가끔 금이나 다이아몬드가 나오면 더 큰 보상을 받을 수 있어요.
           </p>
         </div>
-        <Link to="/home" className="btn btn-sm btn-ghost">나가기</Link>
+        <Link to="/home" className="btn btn-outline rounded-2xl min-h-12 w-full sm:w-auto font-bold px-6">나가기</Link>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px] mb-8">
         {/* Mining Area */}
-        <div className="soft-card flex flex-col items-center justify-center p-8 min-h-[400px] relative overflow-hidden bg-gradient-to-b from-base-200 to-base-300">
-          <div className="mb-8 w-full max-w-md bg-base-100 rounded-2xl p-4 shadow-sm text-center">
-            <span className="text-xs font-black text-base-content/50 block mb-1">현재 자산</span>
+        <BaseCard className="flex flex-col items-center justify-center p-8 min-h-[450px] relative overflow-hidden bg-gradient-to-b from-base-200 to-base-300 border-base-300">
+          <div className="mb-auto w-full max-w-md bg-base-100 rounded-3xl p-5 shadow-sm border border-base-200 text-center">
+            <span className="text-sm font-bold text-base-content/50 block mb-2">현재 자산</span>
             <div className="flex items-center justify-center gap-2">
-              <strong className="text-2xl font-black text-primary"><AnimatedMoney value={status.balance} /></strong>
+              <strong className="text-3xl font-black text-primary tabular-nums tracking-tight">
+                <AnimatedMoney value={status.balance} />
+              </strong>
             </div>
           </div>
 
           <button 
-            className="relative select-none outline-none group"
+            className="relative select-none outline-none group my-8"
             onClick={handleMine}
             disabled={!status.canMine}
             style={{ WebkitTapHighlightColor: 'transparent' }}
           >
             <div 
               ref={rockRef}
-              className={`text-9xl transition-transform duration-75 ${status.canMine ? 'cursor-pointer hover:scale-105 active:scale-95' : 'opacity-50 grayscale'}`}
+              className={`text-9xl transition-transform duration-75 drop-shadow-lg ${status.canMine ? 'cursor-pointer hover:scale-105 active:scale-95' : 'opacity-50 grayscale'}`}
+              style={{ fontSize: "160px" }}
             >
               🪨
             </div>
             
             {status.canMine && (
-              <div className={`absolute top-0 right-0 text-7xl origin-bottom-right transition-transform duration-100 ${mining ? 'rotate-[-60deg]' : 'rotate-12 group-hover:rotate-0'}`}>
+              <div 
+                className={`absolute -top-4 -right-12 text-7xl drop-shadow-md origin-bottom-right transition-transform duration-100 ${mining ? 'rotate-[-60deg]' : 'rotate-12 group-hover:rotate-0'}`}
+                style={{ fontSize: "100px" }}
+              >
                 ⛏️
               </div>
             )}
           </button>
+          
+          <div className="mt-auto pt-8">
+            {!status.canMine && (
+              <span className="badge badge-error badge-outline font-bold p-4">오늘은 더 이상 캘 수 없어요!</span>
+            )}
+          </div>
 
           {/* Floating Texts */}
           {floatingTexts.map(t => (
             <div 
               key={t.id} 
-              className={`fixed pointer-events-none z-50 text-xl font-black animate-float-up ${t.type === 'diamond' ? 'text-info' : t.type === 'gold' ? 'text-warning' : t.type === 'error' ? 'text-error' : 'text-primary'}`}
+              className={`fixed pointer-events-none z-50 text-2xl font-black animate-float-up drop-shadow-sm tracking-tight ${t.type === 'diamond' ? 'text-info' : t.type === 'gold' ? 'text-warning' : t.type === 'error' ? 'text-error' : 'text-primary'}`}
               style={{ left: t.x - 20, top: t.y - 20 }}
             >
               {t.text}
             </div>
           ))}
-        </div>
+        </BaseCard>
 
         {/* Stats & History */}
-        <div className="flex flex-col gap-4">
-          <div className="soft-card p-5">
-            <h3 className="font-black text-sm mb-4">나의 채굴 현황</h3>
+        <div className="flex flex-col gap-5">
+          <BaseCard>
+            <h3 className="font-black text-base mb-4 flex items-center gap-2">
+              <span className="text-xl">📊</span> 현황
+            </h3>
             <div className="grid grid-cols-2 gap-3">
-              <div className="bg-base-200 rounded-xl p-3">
-                <span className="block text-[10px] font-bold text-base-content/50">총 캔 자원</span>
-                <strong className="text-sm font-black tabular-nums">{formatMoney(status.totalMineEarned)}</strong>
+              <div className="bg-base-200/60 rounded-2xl p-4 border border-base-200">
+                <span className="block text-xs font-bold text-base-content/50 mb-1">총 캔 자원</span>
+                <strong className="text-base font-black tabular-nums text-primary"><MoneyText value={status.totalMineEarned} compact /></strong>
               </div>
-              <div className="bg-base-200 rounded-xl p-3">
-                <span className="block text-[10px] font-bold text-base-content/50">곡괭이질 횟수</span>
-                <strong className="text-sm font-black tabular-nums">{status.totalMineClicks.toLocaleString()}회</strong>
+              <div className="bg-base-200/60 rounded-2xl p-4 border border-base-200">
+                <span className="block text-xs font-bold text-base-content/50 mb-1">곡괭이질</span>
+                <strong className="text-base font-black tabular-nums text-base-content/80">{status.totalMineClicks.toLocaleString()}회</strong>
               </div>
             </div>
-          </div>
+          </BaseCard>
 
-          <div className="soft-card p-5 flex-1 overflow-hidden flex flex-col">
-            <h3 className="font-black text-sm mb-4">최근 발견한 광물</h3>
+          <BaseCard className="flex-1 overflow-hidden flex flex-col min-h-[250px]">
+            <h3 className="font-black text-base mb-4 flex items-center gap-2">
+              <span className="text-xl">✨</span> 최근 발견
+            </h3>
             <div className="flex-1 overflow-y-auto pr-2 space-y-2">
               {status.recentFinds.map((find, i) => (
-                <div key={i} className="flex justify-between items-center text-xs py-1">
-                  <span className="flex items-center gap-1.5">
-                    {find.resultType === 'diamond' ? '💎' : find.resultType === 'gold' ? '🟡' : find.resultType === 'iron' ? '⚪' : find.resultType === 'coal' ? '⚫' : '🪨'}
-                    <span className="font-bold opacity-80">{find.label}</span>
+                <div key={i} className="flex justify-between items-center bg-base-200/40 rounded-xl p-3 border border-base-200">
+                  <span className="flex items-center gap-2">
+                    <span className="text-lg">{find.resultType === 'diamond' ? '💎' : find.resultType === 'gold' ? '🟡' : find.resultType === 'iron' ? '⚪' : find.resultType === 'coal' ? '⚫' : '🪨'}</span>
+                    <span className="font-bold text-sm text-base-content/80">{find.label}</span>
                   </span>
                   <span className="font-black tabular-nums text-primary">+{formatMoney(find.reward)}</span>
                 </div>
               ))}
               {status.recentFinds.length === 0 && (
-                <div className="text-center py-6 text-xs text-base-content/40">아직 발견한 광물이 없어요.</div>
+                <div className="flex flex-col items-center justify-center h-full py-8 text-center gap-2">
+                  <span className="text-4xl opacity-20">🪨</span>
+                  <span className="text-sm font-bold text-base-content/40">아직 발견한 광물이 없어요.</span>
+                </div>
               )}
             </div>
-          </div>
+          </BaseCard>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

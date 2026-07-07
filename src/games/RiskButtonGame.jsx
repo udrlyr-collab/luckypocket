@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell, Stat } from "../components/GameShell";
+import { BaseCard } from "../components/ui";
 import PayoutPreviewModal from "../components/PayoutPreviewModal";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
@@ -92,7 +93,7 @@ export default function RiskButtonGame() {
             </div>
           )}
         </div>
-        <section className={`soft-card text-center ${stagePop ? "glow-success bounce-soft" : ""} ${failureImpact ? "board-impact flash-error" : ""}`}>
+        <BaseCard className={` text-center ${stagePop ? "glow-success bounce-soft" : ""} ${failureImpact ? "board-impact flash-error" : ""}`}>
           {stagePop && (
             <div className="coin-particles" aria-hidden="true">
               <span>●</span><span>●</span><span>●</span>
@@ -165,7 +166,7 @@ export default function RiskButtonGame() {
             </>
           )}
           <ErrorAlert message={error} />
-        </section>
+        </BaseCard>
       </div>
       <ResultModal result={result} onClose={() => setResult(null)}>
         {result?.detail?.failedAt && (

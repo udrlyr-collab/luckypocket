@@ -1,5 +1,6 @@
 import { Component } from "react";
 import { setToken } from "../api/client";
+import { BaseCard } from "./ui";
 
 export default class AppErrorBoundary extends Component {
   constructor(props) {
@@ -20,7 +21,7 @@ export default class AppErrorBoundary extends Component {
 
     return (
       <main className="grid min-h-screen place-items-center bg-base-200 px-4">
-        <section className="soft-card w-full max-w-md text-center">
+        <BaseCard className="w-full max-w-md text-center">
           <div className="text-5xl">🧯</div>
           <h1 className="mt-4 text-2xl font-black">화면을 불러오지 못했어요</h1>
           <p className="mt-2 text-sm text-base-content/60">
@@ -45,7 +46,7 @@ export default class AppErrorBoundary extends Component {
               로그인 화면
             </button>
           </div>
-        </section>
+        </BaseCard>
       </main>
     );
   }

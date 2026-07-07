@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell, Stat } from "../components/GameShell";
+import { BaseCard } from "../components/ui";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 import { formatMoney, formatPercent, formatSignedMoney } from "../utils/format";
@@ -145,7 +146,7 @@ export default function BombDodgeGame() {
       <div className="grid min-w-0 gap-5 lg:grid-cols-[0.8fr_1.2fr]">
         <div className="min-w-0 space-y-5">
           <BetInput balance={user.balance} value={bet} onChange={setBet} disabled={Boolean(game)} />
-          <section className="soft-card">
+          <BaseCard>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="font-black">폭탄 개수</h2>
               <strong className="text-error">{bombCount}개</strong>
@@ -164,10 +165,10 @@ export default function BombDodgeGame() {
               <span>안정형 · 1개</span>
               <span>고위험 · 8개</span>
             </div>
-          </section>
+          </BaseCard>
         </div>
 
-        <section className={`soft-card min-w-0 ${impact ? "board-impact flash-error" : ""}`}>
+        <BaseCard className={` min-w-0 ${impact ? "board-impact flash-error" : ""}`}>
           <div className="grid grid-cols-4 gap-2 sm:gap-3">
             {Array.from({ length: 16 }, (_, index) => index + 1).map((number) => {
               const opened = openedNumbers.includes(number);
@@ -231,7 +232,7 @@ export default function BombDodgeGame() {
             </div>
           )}
           <ErrorAlert message={error} />
-        </section>
+        </BaseCard>
       </div>
 
       <ResultModal result={result} onClose={() => setResult(null)}>

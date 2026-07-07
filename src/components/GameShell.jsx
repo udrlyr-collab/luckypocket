@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { formatMoney, formatPercent } from "../utils/format";
+import { PageContainer, SectionHeader } from "./ui";
 
 export function GameShell({ icon, title, description, stats, betAmount = 0, children }) {
   const multiplierValue =
@@ -9,20 +10,19 @@ export function GameShell({ icon, title, description, stats, betAmount = 0, chil
     `+${((stats?.chance * stats?.multiplier - 1) * 100).toFixed(2)}%`;
 
   return (
-    <div className="page-content">
-      <Link to="/" className="btn btn-ghost btn-sm mb-3 -ml-2 rounded-xl">
-        ← 홈으로
+    <PageContainer>
+      <Link to="/" className="btn btn-outline min-h-10 h-10 mb-6 rounded-xl font-bold px-4">
+        ← 홈으로 돌아가기
       </Link>
-      <header className="mb-6 flex items-start gap-4">
-        <div className="grid size-14 shrink-0 place-items-center rounded-2xl bg-base-100 text-3xl shadow-sm">
+      <div className="flex items-start gap-4 mb-6">
+        <div className="grid size-16 shrink-0 place-items-center rounded-3xl bg-base-100 border border-base-200 text-4xl shadow-sm">
           {icon}
         </div>
         <div>
-          <p className="eyebrow">행운주머니 숫자 게임</p>
-          <h1 className="text-2xl font-black sm:text-3xl">{title}</h1>
-          <p className="mt-1 text-sm text-base-content/60">{description}</p>
+          <SectionHeader title={title} eyebrow="MINI GAME" className="mb-2" />
+          <p className="text-sm text-base-content/60 leading-relaxed">{description}</p>
         </div>
-      </header>
+      </div>
       {stats && (
         <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Stat label="성공 확률" value={formatPercent(stats.chance)} />
@@ -35,7 +35,7 @@ export function GameShell({ icon, title, description, stats, betAmount = 0, chil
         </div>
       )}
       {children}
-    </div>
+    </PageContainer>
   );
 }
 

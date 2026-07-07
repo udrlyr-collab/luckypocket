@@ -1,4 +1,5 @@
 import AnimatedMoney from "./AnimatedMoney";
+import { BaseCard } from "../components/ui";
 import { formatMoney, formatSignedMoney } from "../utils/format";
 
 export default function BalanceSummaryCard({ user }) {

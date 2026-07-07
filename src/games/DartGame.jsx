@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
+import { BaseCard } from "../components/ui";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 import { dartBets } from "../data/games";
@@ -103,7 +104,7 @@ export default function DartGame() {
       <div className="grid min-w-0 gap-6 lg:grid-cols-[0.82fr_1.18fr]">
         <div className="space-y-5">
           <BetInput balance={user.balance} value={bet} onChange={setBet} eventCap={spec.event} disabled={busy} />
-          <section className="soft-card border-2 border-secondary/20">
+          <BaseCard className=" border-2 border-secondary/20">
             <label className="flex cursor-pointer items-start gap-3">
               <input
                 type="checkbox"
@@ -121,8 +122,8 @@ export default function DartGame() {
                 </span>
               </span>
             </label>
-          </section>
-          <section className="soft-card">
+          </BaseCard>
+          <BaseCard>
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <p className="eyebrow">Choose a target</p>
@@ -190,10 +191,10 @@ export default function DartGame() {
               <InfoLine label="성공 조건" value={successCondition} />
               <InfoLine label="예상 지급액" value={formatMoney(Number(bet || 0) * spec.multiplier)} accent />
             </div>
-          </section>
+          </BaseCard>
         </div>
 
-        <section className={`soft-card dart-board-card ${phase === "impact" ? (visualResult?.won ? "dart-board-hit" : "dart-board-miss") : ""}`}>
+        <BaseCard className={` dart-board-card ${phase === "impact" ? (visualResult?.won ? "dart-board-hit" : "dart-board-miss") : ""}`}>
           <div className="mb-3 flex items-center justify-between gap-3 text-left">
             <div>
               <p className="eyebrow">Lucky dart board</p>
@@ -241,7 +242,7 @@ export default function DartGame() {
             ) : "🎯 다트 던지기"}
           </button>
           <ErrorAlert message={error} />
-        </section>
+        </BaseCard>
       </div>
 
       <ResultModal

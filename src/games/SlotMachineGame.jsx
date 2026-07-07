@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
+import { BaseCard } from "../components/ui";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 
@@ -80,7 +81,7 @@ export default function SlotMachineGame() {
     >
       <div className="grid min-w-0 gap-5 lg:grid-cols-[0.8fr_1.2fr]">
         <div className="min-w-0 space-y-5">
-          <section className="soft-card">
+          <BaseCard>
             <h2 className="mb-1 font-black">보상표 · 777 자산 연동</h2>
             <p className="mb-3 text-xs font-bold leading-relaxed text-base-content/55">
               777 당첨 시 게임 시작 전 현금 자산이 777배가 돼요. 업적 보상은 별도로 지급돼요.
@@ -94,11 +95,11 @@ export default function SlotMachineGame() {
                 </div>
               ))}
             </div>
-          </section>
+          </BaseCard>
           <BetInput balance={user.balance} value={bet} onChange={setBet} />
         </div>
 
-        <section className={`soft-card min-w-0 bg-gradient-to-b from-violet-100 to-base-100 text-center ${
+        <BaseCard className={`min-w-0 bg-gradient-to-b from-violet-100 to-base-100 text-center ${
           visualResult?.detail?.outcome === "777" ? "glow-warning jackpot-shake" : ""
         }`}>
           <div className="slot-window">
@@ -146,7 +147,7 @@ export default function SlotMachineGame() {
             </div>
           )}
           <ErrorAlert message={error} />
-        </section>
+        </BaseCard>
       </div>
 
       <ResultModal
