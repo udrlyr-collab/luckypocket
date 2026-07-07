@@ -835,8 +835,7 @@ function StockTopList({ title, emptyText, rows, type }) {
                     <p className="mt-1 text-xs font-bold text-base-content/50">
                       <span className={row.side === "short" ? "text-error" : "text-success"}>
                         {row.side === "short" ? "숏" : "롱"} {row.leverage}x
-                      </span>{" "}
-                         · 증거금 {formatMoney(row.marginAmount)}
+                      </span>
                     </p>
                   </div>
                   <strong className="shrink-0 tabular-nums text-primary">
@@ -861,24 +860,6 @@ function StockTopList({ title, emptyText, rows, type }) {
   );
 }
 
-function ConfirmModal({ title, message, onConfirm, onClose, isDanger }) {
-  useEnterConfirm(true, onConfirm);
-  return (
-    <div className="modal modal-open" role="dialog">
-      <div className="modal-box rounded-[2rem] text-center">
-        <h2 className={`text-2xl font-black mb-3 ${isDanger ? "text-error" : ""}`}>{title}</h2>
-        <p className="text-sm mb-6 text-base-content/70">{message}</p>
-        <div className="grid grid-cols-2 gap-2">
-          <button type="button" className="btn btn-outline rounded-2xl" onClick={onClose}>취소</button>
-          <button type="button" className={`btn rounded-2xl ${isDanger ? "btn-error" : "btn-primary"}`} onClick={onConfirm}>
-            확인 (Enter)
-          </button>
-        </div>
-      </div>
-      <button className="modal-backdrop" onClick={onClose} />
-    </div>
-  );
-}
 
 function StockChart({ history, isDelisted }) {
   const points = useMemo(() => {
