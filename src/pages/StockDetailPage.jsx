@@ -7,6 +7,7 @@ import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import { useMarketClock } from "../hooks/useMarketClock";
 import AnimatedMoney from "../components/AnimatedMoney";
 import { StockTierBadge } from "../components/StockRiskStatus";
+import AdminStockControlPanel from "../components/AdminStockControlPanel";
 import { PageContainer, SectionHeader, BaseCard, ConfirmModal } from "../components/ui";
 
 export default function StockDetailPage() {
@@ -38,13 +39,7 @@ export default function StockDetailPage() {
   const [showLeverageWarning, setShowLeverageWarning] = useState(false);
   const [showAcquireConfirm, setShowAcquireConfirm] = useState(false);
   const [showDelistConfirm, setShowDelistConfirm] = useState(false);
-  const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
-  const [blueChipTargetPrice, setBlueChipTargetPrice] = useState("");
-  const [blueChipRampPercent, setBlueChipRampPercent] = useState("30");
-  const [blueChipReason, setBlueChipReason] = useState("우량주 편입 이벤트");
-  const [blueChipNewsTitle, setBlueChipNewsTitle] = useState("");
-  const [blueChipNewsContent, setBlueChipNewsContent] = useState("");
-  const [blueChipPublishNews, setBlueChipPublishNews] = useState(true);
+
 
   const fetchStock = async () => {
     try {
@@ -143,34 +138,7 @@ export default function StockDetailPage() {
     }
   };
 
-  const submitBlueChip = async () => {
-    if (blueChipTargetPrice === "" || blueChipRampPercent === "") return;
-    setBusy(true);
-    try {
-      const res = await api(`/admin/stocks/${stock.id}/blue-chip`, {
-        method: "POST",
-        body: JSON.stringify({
-          targetPrice: Number(blueChipTargetPrice),
-          rampPercentPerTick: Number(blueChipRampPercent),
-          reason: blueChipReason,
-          newsTitle: blueChipNewsTitle,
-          newsContent: blueChipNewsContent,
-          publishNews: blueChipPublishNews,
-        })
-      });
-      setMessage(res.message);
-      setBlueChipModalOpen(false);
-      setBlueChipNewsTitle("");
-      setBlueChipNewsContent("");
-      setBlueChipPublishNews(true);
-      await fetchStock();
-      await refreshUser();
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
+
 
   const handleBuy = async () => {
     if (leverage > 1) {
@@ -494,29 +462,7 @@ export default function StockDetailPage() {
                 일반 주식으로 되돌리기
               </button>
             )}
-            {!isDelisted && stock.is_bluechip !== 1 && stock.status !== 'delist_review' && stock.status !== 'delist_warning' && stock.status !== 'final_crash' && (
-              <button 
-                className="btn btn-info btn-sm" 
-                disabled={busy} 
-                onClick={() => {
-                  setBlueChipTargetPrice("");
-                  setBlueChipRampPercent("30");
-                  setBlueChipReason("우량주 편입 이벤트");
-                  setBlueChipModalOpen(true);
-                }}
-              >
-                우량주 선정
-              </button>
-            )}
-            {!isDelisted && stock.is_bluechip === 1 && (
-              <button 
-                className="btn btn-warning btn-sm" 
-                disabled={busy} 
-                onClick={() => executeAdminAction("/blue-chip", 'DELETE')}
-              >
-                우량주 취소
-              </button>
-            )}
+
             {!isDelisted && (
               <button 
                 className="btn btn-error btn-sm btn-outline" 
@@ -528,6 +474,20 @@ export default function StockDetailPage() {
             )}
           </div>
         </BaseCard>
+      )}
+
+      {/* ADMIN STOCK CONTROL PANEL */}
+      {isAdmin && !isDelisted && (
+        <div className="mb-6">
+          <AdminStockControlPanel
+            stock={stock}
+            compact
+            onActionComplete={async () => {
+              await fetchStock();
+              await refreshUser();
+            }}
+          />
+        </div>
       )}
 
       {/* TRADE FORMS */}
@@ -1029,116 +989,7 @@ export default function StockDetailPage() {
         />
       )}
 
-      {blueChipModalOpen && (
-        <div className="modal modal-open">
-          <div className="modal-box rounded-3xl border border-base-300 shadow-xl max-w-md bg-base-100 text-base-content">
-            <h3 className="font-black text-lg mb-4 text-base-content">⭐ 우량주 선정 및 급등 시작</h3>
-            <div className="text-sm mb-3 text-base-content/70">
-              종목명: <strong className="font-black text-base-content">{stock.name}</strong>
-            </div>
 
-            <div className="grid gap-3">
-              <div className="rounded-2xl bg-base-200/50 p-3 text-sm">
-                <span className="text-xs font-bold text-base-content/50">현재가</span>
-                <strong className="block text-primary text-base font-black">
-                  {formatMoney(stock.current_price || stock.currentPrice)}
-                </strong>
-              </div>
-
-              <label className="form-control">
-                <span className="label-text mb-1 font-bold">목표주가</span>
-                <input
-                  className="input input-bordered w-full h-12 rounded-2xl"
-                  type="number"
-                  min="1"
-                  value={blueChipTargetPrice}
-                  onChange={(event) => setBlueChipTargetPrice(event.target.value)}
-                  placeholder="예: 30000"
-                />
-              </label>
-
-              <label className="form-control">
-                <span className="label-text mb-1 font-bold">tick당 상승률 (%)</span>
-                <input
-                  className="input input-bordered w-full h-12 rounded-2xl"
-                  type="number"
-                  min="1"
-                  max="100"
-                  value={blueChipRampPercent}
-                  onChange={(event) => setBlueChipRampPercent(event.target.value)}
-                  placeholder="예: 30"
-                />
-              </label>
-
-              <label className="form-control">
-                <span className="label-text mb-1 font-bold">사유</span>
-                <input
-                  className="input input-bordered w-full h-12 rounded-2xl"
-                  value={blueChipReason}
-                  onChange={(event) => setBlueChipReason(event.target.value)}
-                  placeholder="예: 우량주 편입 이벤트"
-                  maxLength={120}
-                />
-              </label>
-
-              <label className="form-control">
-                <span className="label-text mb-1 font-bold">공지 제목 (선택)</span>
-                <input
-                  className="input input-bordered w-full h-12 rounded-2xl"
-                  value={blueChipNewsTitle}
-                  onChange={(event) => setBlueChipNewsTitle(event.target.value)}
-                  placeholder="예: 우량주 지정 및 특별 혜택"
-                  maxLength={100}
-                />
-              </label>
-
-              <label className="form-control">
-                <span className="label-text mb-1 font-bold">공지 내용 (선택)</span>
-                <textarea
-                  className="textarea textarea-bordered w-full h-12 min-h-[48px] py-2 rounded-2xl"
-                  value={blueChipNewsContent}
-                  onChange={(event) => setBlueChipNewsContent(event.target.value)}
-                  placeholder={(() => {
-                    const moneyText = blueChipTargetPrice ? Number(blueChipTargetPrice).toLocaleString("ko-KR") : "0";
-                    return `예: ${stock.name}이(가) 우량주로 선정되었어요. 목표주가 ${moneyText}원을 향해 상승 이벤트가 시작됩니다.`;
-                  })()}
-                />
-              </label>
-
-              <div className="flex items-center gap-2 mt-1">
-                <input
-                  type="checkbox"
-                  className="checkbox checkbox-primary rounded-lg"
-                  checked={blueChipPublishNews}
-                  onChange={(event) => setBlueChipPublishNews(event.target.checked)}
-                  id="blueChipPublishNewsDetail"
-                />
-                <label htmlFor="blueChipPublishNewsDetail" className="text-xs font-bold text-base-content/70 cursor-pointer">
-                  시장 공지 발행 및 행운소식 등록
-                </label>
-              </div>
-            </div>
-
-            <div className="modal-action mt-6 gap-2">
-              <button
-                type="button"
-                className="btn btn-outline rounded-2xl flex-1 h-12"
-                onClick={() => setBlueChipModalOpen(false)}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary rounded-2xl flex-1 h-12"
-                disabled={busy || blueChipTargetPrice === "" || blueChipRampPercent === ""}
-                onClick={submitBlueChip}
-              >
-                선택 및 급등 시작
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </PageContainer>
   );
 }
