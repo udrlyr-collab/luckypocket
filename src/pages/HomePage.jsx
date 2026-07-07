@@ -37,8 +37,6 @@ export default function HomePage() {
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
   }, []);
-  const [showNewsModal, setShowNewsModal] = useState(false);
-
   useEffect(() => {
     Promise.all([api("/logs"), api("/rankings"), api("/games/daily-jackpot")])
       .then(([logData, rankData, jackpotDataResult]) => {
