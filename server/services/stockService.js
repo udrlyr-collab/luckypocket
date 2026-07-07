@@ -1561,7 +1561,7 @@ export function createIpoStock(db) {
 
   const insert = db.prepare(`
     INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, ipo_subscription_started_at, ipo_subscription_ends_at, offering_price)
-    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+5 minutes'), ?)
+    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '+5 minutes'), ?)
   `);
   
   const stockId = insert.run(symbol, name, currentPrice, currentPrice, currentPrice, totalShares, marketCap, volatility, currentPrice).lastInsertRowid;
