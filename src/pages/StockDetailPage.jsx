@@ -360,7 +360,7 @@ export default function StockDetailPage() {
               {stock.description}
             </p>
           )}
-          {(stock.blueChipRampActive || stock.adminPriceTargetActive) && (
+          {isAdmin && (stock.blueChipRampActive || stock.adminPriceTargetActive) && (
             <div className="mt-3 p-4 rounded-3xl bg-base-200/60 border border-base-300 max-w-xl text-sm text-base-content">
               <div className="font-bold flex items-center justify-between mb-2">
                 <span>🎯 목표주가 이벤트 진행 중</span>

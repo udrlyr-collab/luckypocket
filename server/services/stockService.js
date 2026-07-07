@@ -740,25 +740,38 @@ function maybeRecordBlueChipDailyNews(db, stock) {
 export function applyBlueChipRampTick(db, stock) {
   if (!stock.blue_chip_ramp_active) return false;
 
-  const currentPrice = stock.current_price;
-  const targetPrice = stock.blue_chip_target_price;
-  const percent = stock.blue_chip_ramp_percent_per_tick;
+  const currentPrice = Number(stock.current_price);
+  const targetPrice = Number(stock.blue_chip_target_price);
+  const percentPerTick = Number(stock.blue_chip_ramp_percent_per_tick);
 
-  if (!targetPrice || currentPrice >= targetPrice) {
+  if (!targetPrice || !percentPerTick || percentPerTick <= 0) {
     db.prepare(`
       UPDATE stocks
       SET blue_chip_ramp_active = 0,
           blue_chip_ramp_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE id = ?
     `).run(stock.id);
+    stock.blue_chip_ramp_active = 0;
     return false;
   }
 
-  const nextPriceByPercent = Math.floor(currentPrice * (1 + percent / 100));
+  if (currentPrice >= targetPrice) {
+    db.prepare(`
+      UPDATE stocks
+      SET blue_chip_ramp_active = 0,
+          blue_chip_ramp_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(stock.id);
+    stock.blue_chip_ramp_active = 0;
+    return false;
+  }
+
+  const nextPriceByPercent = Math.floor(currentPrice * (1 + percentPerTick / 100));
   const nextPrice = Math.min(nextPriceByPercent, targetPrice);
   const finalPrice = Math.max(1, nextPrice);
   const reached = finalPrice >= targetPrice;
   const nowStr = new Date().toISOString();
+  const newCap = finalPrice * stock.total_shares;
 
   if (reached) {
     const highLimit = Math.floor(targetPrice * 1.15);
@@ -768,7 +781,7 @@ export function applyBlueChipRampTick(db, stock) {
       UPDATE stocks
       SET previous_price = ?,
           current_price = ?,
-          market_cap = ? * total_shares,
+          market_cap = ?,
           blue_chip_ramp_active = 0,
           blue_chip_ramp_ended_at = ?,
           blue_chip_day_open_price = ?,
@@ -777,12 +790,12 @@ export function applyBlueChipRampTick(db, stock) {
           blue_chip_daily_low_limit_price = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(currentPrice, targetPrice, targetPrice, nowStr, targetPrice, nowStr, highLimit, lowLimit, nowStr, stock.id);
+    `).run(currentPrice, targetPrice, newCap, nowStr, targetPrice, nowStr, highLimit, lowLimit, nowStr, stock.id);
 
     db.prepare(`
       INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
-      VALUES (?, ?, ? * total_shares, 'blue_chip_ramp_reached')
-    `).run(stock.id, targetPrice, targetPrice);
+      VALUES (?, ?, ?, 'blue_chip_ramp_reached')
+    `).run(stock.id, targetPrice, newCap);
 
     const changeAmount = targetPrice - currentPrice;
     const changeRate = currentPrice > 0 ? changeAmount / currentPrice : 0;
@@ -797,21 +810,47 @@ export function applyBlueChipRampTick(db, stock) {
       VALUES ('시스템', 'blue_chip_ramp_reached', '우량주 목표 도달', ?, 0, 'stock', ?)
     `).run(msg, String(stock.id));
 
+    // 메모리 객체 동기화
+    stock.previous_price = currentPrice;
+    stock.current_price = targetPrice;
+    stock.market_cap = newCap;
+    stock.blue_chip_ramp_active = 0;
+    stock.blue_chip_ramp_ended_at = nowStr;
+    stock.blue_chip_day_open_price = targetPrice;
+    stock.blue_chip_day_started_at = nowStr;
+    stock.blue_chip_daily_high_limit_price = highLimit;
+    stock.blue_chip_daily_low_limit_price = lowLimit;
+
   } else {
     db.prepare(`
       UPDATE stocks
       SET previous_price = ?,
           current_price = ?,
-          market_cap = ? * total_shares,
+          market_cap = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(currentPrice, finalPrice, finalPrice, nowStr, stock.id);
+    `).run(currentPrice, finalPrice, newCap, nowStr, stock.id);
 
     db.prepare(`
       INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
-      VALUES (?, ?, ? * total_shares, 'blue_chip_ramp_started')
-    `).run(stock.id, finalPrice, finalPrice);
+      VALUES (?, ?, ?, 'blue_chip_ramp_started')
+    `).run(stock.id, finalPrice, newCap);
+
+    // 메모리 객체 동기화
+    stock.previous_price = currentPrice;
+    stock.current_price = finalPrice;
+    stock.market_cap = newCap;
   }
+
+  console.log("[BLUE_CHIP_RAMP_TICK]", {
+    stockId: stock.id,
+    name: stock.name,
+    oldPrice: currentPrice,
+    newPrice: stock.current_price,
+    targetPrice,
+    percentPerTick,
+    active: stock.blue_chip_ramp_active === 1 || stock.blue_chip_ramp_active === true
+  });
 
   return true;
 }
@@ -819,9 +858,20 @@ export function applyBlueChipRampTick(db, stock) {
 export function applyAdminTargetPriceTick(db, stock) {
   if (!stock.admin_price_target_active) return false;
 
-  const currentPrice = stock.current_price;
-  const targetPrice = stock.admin_price_target;
-  const percent = stock.admin_price_target_percent_per_tick;
+  const currentPrice = Number(stock.current_price);
+  const targetPrice = Number(stock.admin_price_target);
+  const percentPerTick = Number(stock.admin_price_target_percent_per_tick);
+
+  if (!targetPrice || !percentPerTick || percentPerTick <= 0) {
+    db.prepare(`
+      UPDATE stocks
+      SET admin_price_target_active = 0,
+          admin_price_target_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(stock.id);
+    stock.admin_price_target_active = 0;
+    return false;
+  }
 
   if (currentPrice === targetPrice) {
     db.prepare(`
@@ -830,37 +880,39 @@ export function applyAdminTargetPriceTick(db, stock) {
           admin_price_target_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE id = ?
     `).run(stock.id);
+    stock.admin_price_target_active = 0;
     return false;
   }
 
   let nextPrice;
   if (targetPrice > currentPrice) {
-    nextPrice = Math.floor(currentPrice * (1 + percent / 100));
+    nextPrice = Math.floor(currentPrice * (1 + percentPerTick / 100));
     nextPrice = Math.min(nextPrice, targetPrice);
   } else {
-    nextPrice = Math.floor(currentPrice * (1 - percent / 100));
+    nextPrice = Math.floor(currentPrice * (1 - percentPerTick / 100));
     nextPrice = Math.max(nextPrice, targetPrice);
   }
   const finalPrice = Math.max(1, nextPrice);
   const reached = finalPrice === targetPrice;
   const nowStr = new Date().toISOString();
+  const newCap = finalPrice * stock.total_shares;
 
   if (reached) {
     db.prepare(`
       UPDATE stocks
       SET previous_price = ?,
           current_price = ?,
-          market_cap = ? * total_shares,
+          market_cap = ?,
           admin_price_target_active = 0,
           admin_price_target_ended_at = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(currentPrice, targetPrice, targetPrice, nowStr, nowStr, stock.id);
+    `).run(currentPrice, targetPrice, newCap, nowStr, nowStr, stock.id);
 
     db.prepare(`
       INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
-      VALUES (?, ?, ? * total_shares, 'admin_stock_target_price_reached')
-    `).run(stock.id, targetPrice, targetPrice);
+      VALUES (?, ?, ?, 'admin_stock_target_price_reached')
+    `).run(stock.id, targetPrice, newCap);
 
     const changeAmount = targetPrice - currentPrice;
     const changeRate = currentPrice > 0 ? changeAmount / currentPrice : 0;
@@ -875,21 +927,43 @@ export function applyAdminTargetPriceTick(db, stock) {
       VALUES ('시스템', 'admin_stock_target_price_reached', '목표주가 도달', ?, 0, 'stock', ?)
     `).run(msg, String(stock.id));
 
+    // 메모리 객체 동기화
+    stock.previous_price = currentPrice;
+    stock.current_price = targetPrice;
+    stock.market_cap = newCap;
+    stock.admin_price_target_active = 0;
+    stock.admin_price_target_ended_at = nowStr;
+
   } else {
     db.prepare(`
       UPDATE stocks
       SET previous_price = ?,
           current_price = ?,
-          market_cap = ? * total_shares,
+          market_cap = ?,
           updated_at = ?
       WHERE id = ?
-    `).run(currentPrice, finalPrice, finalPrice, nowStr, stock.id);
+    `).run(currentPrice, finalPrice, newCap, nowStr, stock.id);
 
     db.prepare(`
       INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
-      VALUES (?, ?, ? * total_shares, 'admin_stock_target_price_started')
-    `).run(stock.id, finalPrice, finalPrice);
+      VALUES (?, ?, ?, 'admin_stock_target_price_started')
+    `).run(stock.id, finalPrice, newCap);
+
+    // 메모리 객체 동기화
+    stock.previous_price = currentPrice;
+    stock.current_price = finalPrice;
+    stock.market_cap = newCap;
   }
+
+  console.log("[ADMIN_TARGET_PRICE_TICK]", {
+    stockId: stock.id,
+    name: stock.name,
+    oldPrice: currentPrice,
+    newPrice: stock.current_price,
+    targetPrice,
+    percentPerTick,
+    active: stock.admin_price_target_active === 1 || stock.admin_price_target_active === true
+  });
 
   return true;
 }
