@@ -194,26 +194,57 @@ export default function StockMarketPage() {
         </div>
       )}
 
-      <div className="mb-8 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장 종목</span>
-          <strong className="block text-2xl mt-1 tabular-nums">
-            {summary.activeTradableStockCount ?? summary.total}
-            <span className="ml-1 text-sm text-base-content/40">/ {summary.targetActiveTradableStockCount ?? 16}</span>
-          </strong>
-        </BaseCard>
-        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
-          <strong className="block text-2xl mt-1 tabular-nums text-success">{summary.up} <span className="text-base-content/30 text-lg">/</span> <span className="text-error">{summary.down}</span></strong>
-        </BaseCard>
-        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주</span>
-          <strong className="block text-2xl mt-1 tabular-nums text-warning">{summary.ipoCount ?? summary.ipo}</strong>
-        </BaseCard>
-        <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/50 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-          <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">최근 상장폐지</span>
-          <strong className="block text-2xl mt-1 tabular-nums text-base-content/40">{summary.recentDelistedCount ?? (recentDelistedStocks ? recentDelistedStocks.length : 0)}</strong>
-        </BaseCard>
+      <div className="mb-8 grid gap-4 lg:grid-cols-12">
+        {/* Market Stats (Left 7/12) */}
+        <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장 종목</span>
+            <strong className="block text-xl mt-1 tabular-nums font-black text-base-content">
+              {summary.activeTradableStockCount ?? summary.total}
+              <span className="ml-1 text-xs text-base-content/30">/ {summary.targetActiveTradableStockCount ?? 16}</span>
+            </strong>
+          </BaseCard>
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
+            <strong className="block text-xl mt-1 tabular-nums font-black text-success">
+              {summary.up} <span className="text-base-content/20 text-sm font-normal">/</span> <span className="text-error">{summary.down}</span>
+            </strong>
+          </BaseCard>
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주</span>
+            <strong className="block text-xl mt-1 tabular-nums font-black text-warning">
+              {summary.ipoCount ?? summary.ipo}
+            </strong>
+          </BaseCard>
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장폐지</span>
+            <strong className="block text-xl mt-1 tabular-nums font-black text-base-content/40">
+              {summary.recentDelistedCount ?? (recentDelistedStocks ? recentDelistedStocks.length : 0)}
+            </strong>
+          </BaseCard>
+        </div>
+
+        {/* User Portfolio Stats (Right 5/12) */}
+        <div className="lg:col-span-5 grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <BaseCard className="bg-gradient-to-br from-primary/10 to-primary/5 shadow-sm border border-primary/25 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-primary/70 uppercase tracking-wider">보유 현금</span>
+            <strong className="block text-lg mt-1 tabular-nums font-black text-primary truncate">
+              {formatMoney(user.balance)}
+            </strong>
+          </BaseCard>
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">총 평가 자산</span>
+            <strong className="block text-lg mt-1 tabular-nums font-black text-base-content truncate">
+              {formatMoney(portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized))}
+            </strong>
+          </BaseCard>
+          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow col-span-2 sm:col-span-1">
+            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">평가 손익</span>
+            <strong className={`block text-lg mt-1 tabular-nums font-black truncate ${portfolio.unrealizedPnl >= 0 ? "text-success" : "text-error"}`}>
+              {portfolio.unrealizedPnl >= 0 ? "+" : ""}{formatMoney(portfolio.unrealizedPnl)}
+            </strong>
+          </BaseCard>
+        </div>
       </div>
 
       <div className="flex gap-2 p-1 bg-base-200/60 backdrop-blur-md rounded-2xl mb-6 max-w-md">
