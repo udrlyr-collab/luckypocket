@@ -41,8 +41,8 @@ meRouter.get("/", (req, res) => {
       revivalsRemaining: Math.max(0, 3 - revivalCount),
       currentRank,
       totalUsers,
-      bankruptcyEligible: user.balance < 500000,
-      bankruptcyShouldPrompt: canPromptBankruptcy(db, user),
+      bankruptcyEligible: totalEvaluatedAsset < 500000,
+      bankruptcyShouldPrompt: canPromptBankruptcy(db, user, totalEvaluatedAsset),
     },
   });
 });

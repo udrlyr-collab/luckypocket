@@ -1,4 +1,5 @@
 import { createServerNotification } from "./serverNotificationService.js";
+import { ACHIEVEMENTS } from "./achievementService.js";
 
 export const SEASON_STARTING_BALANCE = 1_000_000;
 export const SEASON_TOP_BONUSES = new Map([
@@ -274,23 +275,28 @@ export function endCurrentSeason(database, adminUser) {
       .run(newSeasonNumber).lastInsertRowid;
     const newSeason = database.prepare("SELECT * FROM seasons WHERE id = ?").get(newSeasonId);
 
-    database.prepare("DELETE FROM user_achievements").run();
     database.prepare("DELETE FROM lucky_seven_uses").run();
     database.prepare("DELETE FROM revival_claims").run();
 
     for (const user of ranked) {
-      const startingBalance = user.startingBonusForNextSeason;
+      // 업적 보상 재지급 (여태 달성했던 업적들에 대한 보상 합산)
+      const userAchRows = database.prepare("SELECT achievement_key FROM user_achievements WHERE user_id = ?").all(user.id);
+      let extraReward = 0;
+      for (const row of userAchRows) {
+        const ach = ACHIEVEMENTS.find(a => a.key === row.achievement_key || row.achievement_key.startsWith(a.key + ":"));
+        if (ach && ach.reward) {
+          extraReward += ach.reward;
+        }
+      }
+
+      const startingBalance = user.startingBonusForNextSeason + extraReward;
+      
       database
         .prepare(
           `UPDATE users
            SET balance = ?,
                initial_balance = ?,
                highest_balance = ?,
-               total_profit = 0,
-               total_bet = 0,
-               total_win = 0,
-               total_loss = 0,
-               bankruptcy_count = 0,
                last_bankruptcy_at = NULL,
                bankruptcy_prompt_dismissed_at = NULL,
                mine_click_count = 0,

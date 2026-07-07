@@ -596,7 +596,7 @@ function processNormalTick(
     const endsAt = new Date(stock.ipo_subscription_ends_at).getTime();
     if (now >= endsAt) {
       newStatus = "newly_listed";
-      const newlyListedUntil = new Date(now + STOCK_TEMP_POLICY.newlyListedDurationMs).toISOString();
+      const newlyListedUntil = new Date(now + 5 * 60 * 1000).toISOString();
       const identity = pickRandomStockIdentity(db, usedSymbols);
       
       db.prepare("UPDATE stocks SET newly_listed_until = ?, name = ?, symbol = ? WHERE id = ?").run(newlyListedUntil, identity.name, identity.symbol, stock.id);

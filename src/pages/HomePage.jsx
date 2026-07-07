@@ -68,7 +68,7 @@ export default function HomePage() {
   }, []);
 
   const todayProfit = Number(user.todayProfit || 0);
-  const isLowBalance = user.balance < 500000;
+  const isLowBalance = (user.totalAsset || user.balance) < 500000;
   const latestNews = notifications[0];
 
   const applyJackpot = async () => {
