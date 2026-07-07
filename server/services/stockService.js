@@ -4,6 +4,15 @@ import { calculateUserTotalEvaluatedAsset } from "./portfolioValuationService.js
 import { formatSignedWon } from "../utils/formatWon.js";
 
 const STOCK_TICK_INTERVAL_MS = 10_000;
+export const STOCK_TICK_INTERVAL_SECONDS = STOCK_TICK_INTERVAL_MS / 1000;
+const DAY_SECONDS = 24 * 60 * 60;
+const TICKS_PER_DAY = DAY_SECONDS / STOCK_TICK_INTERVAL_SECONDS;
+export const BLUE_CHIP_DAILY_MAX_GAIN = 0.15;
+export const BLUE_CHIP_DAILY_MAX_LOSS = -0.13;
+export const BLUE_CHIP_TICK_MAX_GAIN =
+  Math.pow(1 + BLUE_CHIP_DAILY_MAX_GAIN, 1 / TICKS_PER_DAY) - 1;
+export const BLUE_CHIP_TICK_MAX_LOSS =
+  Math.pow(1 + BLUE_CHIP_DAILY_MAX_LOSS, 1 / TICKS_PER_DAY) - 1;
 export let nextTickAt = Date.now() + STOCK_TICK_INTERVAL_MS;
 
 const EVENT_PROBABILITIES = {
@@ -19,17 +28,10 @@ const IPO_EVENT_PROBABILITIES = {
 };
 
 const BLUE_CHIP_MOVE_PROBABILITIES = {
-  steadyRise: 0.70,
-  smallRise: 0.15,
-  flat: 0.10,
-  smallDrop: 0.05
-};
-
-const BLUE_CHIP_MOVE_RANGES = {
-  steadyRise: [0.008, 0.030],
-  smallRise: [0.002, 0.008],
-  flat: [-0.002, 0.002],
-  smallDrop: [-0.020, -0.005]
+  steadyRise: 0.58,
+  smallRise: 0.22,
+  flat: 0.12,
+  smallDrop: 0.08
 };
 
 const MARKET_CAP_TIERS = [
@@ -62,6 +64,61 @@ function randomBetweenInt(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
 }
 
+function randomBetween(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+export function getBlueChipChangeRate() {
+  const r = Math.random();
+
+  if (r < BLUE_CHIP_MOVE_PROBABILITIES.steadyRise) {
+    return randomBetween(
+      BLUE_CHIP_TICK_MAX_GAIN * 0.45,
+      BLUE_CHIP_TICK_MAX_GAIN,
+    );
+  }
+
+  if (
+    r <
+    BLUE_CHIP_MOVE_PROBABILITIES.steadyRise +
+      BLUE_CHIP_MOVE_PROBABILITIES.smallRise
+  ) {
+    return randomBetween(
+      BLUE_CHIP_TICK_MAX_GAIN * 0.10,
+      BLUE_CHIP_TICK_MAX_GAIN * 0.45,
+    );
+  }
+
+  if (
+    r <
+    BLUE_CHIP_MOVE_PROBABILITIES.steadyRise +
+      BLUE_CHIP_MOVE_PROBABILITIES.smallRise +
+      BLUE_CHIP_MOVE_PROBABILITIES.flat
+  ) {
+    return randomBetween(
+      BLUE_CHIP_TICK_MAX_LOSS * 0.10,
+      BLUE_CHIP_TICK_MAX_GAIN * 0.10,
+    );
+  }
+
+  return randomBetween(
+    BLUE_CHIP_TICK_MAX_LOSS,
+    BLUE_CHIP_TICK_MAX_LOSS * 0.35,
+  );
+}
+
+export function calculateBlueChipDailyLimits(openPrice) {
+  const safeOpenPrice = Math.max(1, Math.floor(Number(openPrice) || 1));
+  return {
+    openPrice: safeOpenPrice,
+    highLimitPrice: Math.floor(safeOpenPrice * (1 + BLUE_CHIP_DAILY_MAX_GAIN)),
+    lowLimitPrice: Math.max(
+      1,
+      Math.floor(safeOpenPrice * (1 + BLUE_CHIP_DAILY_MAX_LOSS)),
+    ),
+  };
+}
+
 function createStockIdentityAndCap(isIpo = false) {
   const tier = pickWeightedTier(isIpo ? IPO_MARKET_CAP_TIERS : MARKET_CAP_TIERS);
   const targetMarketCap = randomBetweenInt(tier.min, tier.max);
@@ -78,11 +135,17 @@ export const STOCK_MARKET_POLICY = {
   marketCapWarningThreshold: 6_000_000_000,
   finalCrashMarketCap: 1_000_000_000,
   cautionRequiredTicks: 3,
-  recoveryRequiredTicks: 6,
-  delistReviewMaxTicks: 60,
+  recoveryRequiredTicks: 60,
+  delistReviewMaxTicks: 180,
   newlyListedDurationMs: 300_000,
   ownerEtfDelistPriceRatio: 0.15,
-  bluechipMaxTickVolatility: 0.003,
+  stockTickIntervalSeconds: STOCK_TICK_INTERVAL_SECONDS,
+  bluechipDailyMaxGain: BLUE_CHIP_DAILY_MAX_GAIN,
+  bluechipDailyMaxLoss: BLUE_CHIP_DAILY_MAX_LOSS,
+  bluechipTicksPerDay: TICKS_PER_DAY,
+  bluechipTickMaxGain: BLUE_CHIP_TICK_MAX_GAIN,
+  bluechipTickMaxLoss: BLUE_CHIP_TICK_MAX_LOSS,
+  bluechipMaxTickVolatility: BLUE_CHIP_TICK_MAX_GAIN,
   regularMaxTickVolatility: 0.015,
   ipoMinVolatility: 0.01,
   ipoMaxVolatility: 0.025,
@@ -295,6 +358,158 @@ function getRandomEvent(probs) {
   return "normal"; // fallback
 }
 
+function ensureBlueChipDailyBase(db, stock, nowMs = Date.now()) {
+  const startedMs = Date.parse(stock.blue_chip_day_started_at || "");
+  const openPrice = Number(stock.blue_chip_day_open_price);
+  const highLimitPrice = Number(stock.blue_chip_daily_high_limit_price);
+  const lowLimitPrice = Number(stock.blue_chip_daily_low_limit_price);
+  const needsReset =
+    !Number.isFinite(startedMs) ||
+    nowMs - startedMs >= DAY_SECONDS * 1000 ||
+    !Number.isFinite(openPrice) ||
+    openPrice <= 0 ||
+    !Number.isFinite(highLimitPrice) ||
+    !Number.isFinite(lowLimitPrice) ||
+    highLimitPrice <= 0 ||
+    lowLimitPrice <= 0;
+
+  if (!needsReset) {
+    return {
+      ...stock,
+      blue_chip_day_open_price: Math.floor(openPrice),
+      blue_chip_daily_high_limit_price: Math.floor(highLimitPrice),
+      blue_chip_daily_low_limit_price: Math.floor(lowLimitPrice),
+    };
+  }
+
+  const startedAt = new Date(nowMs).toISOString();
+  const limits = calculateBlueChipDailyLimits(stock.current_price);
+  db.prepare(
+    `UPDATE stocks
+     SET blue_chip_day_open_price = ?,
+         blue_chip_day_started_at = ?,
+         blue_chip_daily_high_limit_price = ?,
+         blue_chip_daily_low_limit_price = ?,
+         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE id = ?`,
+  ).run(
+    limits.openPrice,
+    startedAt,
+    limits.highLimitPrice,
+    limits.lowLimitPrice,
+    stock.id,
+  );
+
+  return {
+    ...stock,
+    blue_chip_day_open_price: limits.openPrice,
+    blue_chip_day_started_at: startedAt,
+    blue_chip_daily_high_limit_price: limits.highLimitPrice,
+    blue_chip_daily_low_limit_price: limits.lowLimitPrice,
+  };
+}
+
+function applyBlueChipPriceMove(db, stock) {
+  const baseStock = ensureBlueChipDailyBase(db, stock);
+  const changeRate = getBlueChipChangeRate();
+  const currentPrice = Math.max(1, Number(baseStock.current_price) || 1);
+  let nextPrice = Math.floor(currentPrice * (1 + changeRate));
+
+  nextPrice = Math.min(
+    nextPrice,
+    Number(baseStock.blue_chip_daily_high_limit_price),
+  );
+  nextPrice = Math.max(
+    nextPrice,
+    Number(baseStock.blue_chip_daily_low_limit_price),
+  );
+  nextPrice = Math.max(1, nextPrice);
+
+  return { stock: baseStock, newPrice: nextPrice, changeRate };
+}
+
+function hasBlueChipDailyNews(db, stockId, eventType, dayStartedAt) {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1
+         FROM stock_events
+         WHERE stock_id = ?
+           AND event_type = ?
+           AND created_at >= ?
+         LIMIT 1`,
+      )
+      .get(stockId, eventType, dayStartedAt || new Date(0).toISOString()),
+  );
+}
+
+function recordBlueChipDailyNews(db, stock, eventType, title, message) {
+  if (
+    hasBlueChipDailyNews(
+      db,
+      stock.id,
+      eventType,
+      stock.blue_chip_day_started_at,
+    )
+  ) {
+    return;
+  }
+  db.prepare(
+    `INSERT INTO stock_events (stock_id, event_type, title, message)
+     VALUES (?, ?, ?, ?)`,
+  ).run(stock.id, eventType, title, message);
+}
+
+function maybeRecordBlueChipDailyNews(db, stock) {
+  if (stock.is_bluechip !== 1) return;
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (!current || current.status === "delisted") return;
+
+  const openPrice = Number(current.blue_chip_day_open_price);
+  const highLimit = Number(current.blue_chip_daily_high_limit_price);
+  const lowLimit = Number(current.blue_chip_daily_low_limit_price);
+  if (!Number.isFinite(openPrice) || openPrice <= 0) return;
+
+  const dailyChangeRate = (current.current_price - openPrice) / openPrice;
+  const percent = (dailyChangeRate * 100).toFixed(2);
+  if (dailyChangeRate >= 0.05) {
+    recordBlueChipDailyNews(
+      db,
+      current,
+      "blue_chip_gain_5",
+      "우량주 상승",
+      `${current.name}이 오늘 기준가 대비 +5%를 돌파했어요. 현재 등락률 +${percent}%`,
+    );
+  }
+  if (dailyChangeRate >= 0.10) {
+    recordBlueChipDailyNews(
+      db,
+      current,
+      "blue_chip_gain_10",
+      "우량주 강세",
+      `${current.name}이 오늘 기준가 대비 +10%를 돌파했어요. 현재 등락률 +${percent}%`,
+    );
+  }
+  if (Number.isFinite(highLimit) && current.current_price >= highLimit * 0.99) {
+    recordBlueChipDailyNews(
+      db,
+      current,
+      "blue_chip_near_high_limit",
+      "우량주 상한 근접",
+      `${current.name}이 우량주 24시간 상한가에 가까워졌어요.`,
+    );
+  }
+  if (Number.isFinite(lowLimit) && current.current_price <= lowLimit * 1.01) {
+    recordBlueChipDailyNews(
+      db,
+      current,
+      "blue_chip_near_low_limit",
+      "우량주 하한 근접",
+      `${current.name}이 우량주 24시간 하한가에 가까워졌어요.`,
+    );
+  }
+}
+
 export function tickStockMarket(db) {
   try {
     nextTickAt = Date.now() + STOCK_TICK_INTERVAL_MS;
@@ -363,6 +578,7 @@ function processNormalTick(
   usedSymbols,
   { manageDelistRisk = true } = {},
 ) {
+  let priceBasisStock = stock;
   let newPrice = stock.current_price;
   let eventType = null;
   let eventMsg = null;
@@ -420,18 +636,9 @@ function processNormalTick(
     // Normal listed stock
     let isSurgeOrCrash = false;
     if (stock.is_bluechip === 1) {
-      const event = getRandomEvent(BLUE_CHIP_MOVE_PROBABILITIES);
-      let change = 0;
-      if (event === "steadyRise") {
-        change = BLUE_CHIP_MOVE_RANGES.steadyRise[0] + Math.random() * (BLUE_CHIP_MOVE_RANGES.steadyRise[1] - BLUE_CHIP_MOVE_RANGES.steadyRise[0]);
-      } else if (event === "smallRise") {
-        change = BLUE_CHIP_MOVE_RANGES.smallRise[0] + Math.random() * (BLUE_CHIP_MOVE_RANGES.smallRise[1] - BLUE_CHIP_MOVE_RANGES.smallRise[0]);
-      } else if (event === "flat") {
-        change = BLUE_CHIP_MOVE_RANGES.flat[0] + Math.random() * (BLUE_CHIP_MOVE_RANGES.flat[1] - BLUE_CHIP_MOVE_RANGES.flat[0]);
-      } else if (event === "smallDrop") {
-        change = BLUE_CHIP_MOVE_RANGES.smallDrop[0] + Math.random() * (BLUE_CHIP_MOVE_RANGES.smallDrop[1] - BLUE_CHIP_MOVE_RANGES.smallDrop[0]);
-      }
-      newPrice = Math.floor(newPrice * (1 + change));
+      const blueChipMove = applyBlueChipPriceMove(db, stock);
+      priceBasisStock = blueChipMove.stock;
+      newPrice = blueChipMove.newPrice;
     } else {
       const event = getRandomEvent(EVENT_PROBABILITIES);
       if (event === "surge") {
@@ -464,7 +671,7 @@ function processNormalTick(
       : "previous_tick";
     updateStockPrice(
       db,
-      stock,
+      priceBasisStock,
       newPrice,
       newStatus,
       eventType,
@@ -472,8 +679,11 @@ function processNormalTick(
       basis,
       { manageDelistRisk },
     );
+    if (priceBasisStock.is_bluechip === 1) {
+      maybeRecordBlueChipDailyNews(db, priceBasisStock);
+    }
   } else if (manageDelistRisk) {
-    updateDelistRiskAfterPrice(db, stock);
+    updateDelistRiskAfterPrice(db, priceBasisStock);
   }
 }
 

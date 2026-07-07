@@ -47,6 +47,37 @@ meRouter.get("/", (req, res) => {
   });
 });
 
+meRouter.get("/season-results", (req, res) => {
+  const results = db
+    .prepare(
+      `SELECT
+         season_number,
+         rank,
+         final_balance,
+         final_total_evaluated_asset,
+         total_games,
+         total_profit,
+         starting_bonus_for_next_season,
+         created_at
+       FROM season_results
+       WHERE user_id = ?
+       ORDER BY season_number DESC`,
+    )
+    .all(req.user.id)
+    .map((row) => ({
+      seasonNumber: row.season_number,
+      rank: row.rank,
+      finalBalance: row.final_balance,
+      finalTotalEvaluatedAsset: row.final_total_evaluated_asset,
+      totalGames: row.total_games,
+      totalProfit: row.total_profit,
+      startingBonusForNextSeason: row.starting_bonus_for_next_season,
+      createdAt: row.created_at,
+    }));
+
+  return res.json({ results });
+});
+
 meRouter.post("/revive", (req, res, next) => {
   try {
     const revive = db.transaction(() => {

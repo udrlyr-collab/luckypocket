@@ -64,9 +64,11 @@ export default function AdminPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [marketOpen, setMarketOpen] = useState(null);
+  const [seasonInfo, setSeasonInfo] = useState(null);
   const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
   const [balanceConfirm, setBalanceConfirm] = useState(null);
   const [resetConfirmIds, setResetConfirmIds] = useState([]);
+  const [seasonConfirmOpen, setSeasonConfirmOpen] = useState(false);
   const [resetTargets, setResetTargets] = useState(() => [
     ...allAdminResetTargets,
   ]);
@@ -98,6 +100,9 @@ export default function AdminPage() {
     api("/admin/stocks/market/status")
       .then((data) => setMarketOpen(data.marketOpen))
       .catch((requestError) => setError(requestError.message));
+    api("/seasons/current")
+      .then(setSeasonInfo)
+      .catch(() => {});
   }, []);
 
   const currentPageIds = useMemo(
@@ -250,6 +255,25 @@ export default function AdminPage() {
       const data = await api(endpoint, { method: "POST" });
       setMarketOpen(data.marketOpen);
       setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const endCurrentSeason = async () => {
+    setSeasonConfirmOpen(false);
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/seasons/end-current", { method: "POST" });
+      setMessage(data.message);
+      const current = await api("/seasons/current");
+      setSeasonInfo(current);
+      await loadUsers();
+      await refreshUser();
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -568,6 +592,50 @@ export default function AdminPage() {
         </div>
       </section>
 
+      <section className="soft-card mt-6 border-2 border-warning/30">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Season</p>
+            <h2 className="section-title text-xl">시즌 제어</h2>
+            <p className="mt-1 text-xs font-bold text-base-content/50">
+              시즌 종료 시 주식과 포지션을 정산하고 다음 시즌 시작 자산을 지급합니다.
+            </p>
+          </div>
+          <span className="badge badge-warning badge-outline font-black">
+            시즌 {seasonInfo?.season?.seasonNumber || "-"}
+          </span>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-2xl bg-base-200 p-4">
+            <span className="text-xs font-bold text-base-content/45">상태</span>
+            <strong className="mt-1 block font-black">
+              {seasonInfo?.season?.status === "active" ? "진행 중" : "확인 중"}
+            </strong>
+          </div>
+          <div className="rounded-2xl bg-base-200 p-4 sm:col-span-2">
+            <span className="text-xs font-bold text-base-content/45">시작 시간</span>
+            <strong className="mt-1 block font-black">
+              {seasonInfo?.season?.startedAt
+                ? new Date(seasonInfo.season.startedAt).toLocaleString("ko-KR")
+                : "-"}
+            </strong>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn btn-warning mt-4 h-12 w-full rounded-2xl"
+          disabled={busy || user.username !== "admin"}
+          onClick={() => setSeasonConfirmOpen(true)}
+        >
+          현재 시즌 종료하고 다음 시즌 시작
+        </button>
+        {user.username !== "admin" && (
+          <p className="mt-2 text-xs font-bold text-error">
+            시즌 종료는 username이 admin인 계정만 실행할 수 있습니다.
+          </p>
+        )}
+      </section>
+
       <p
         className={`mt-3 min-h-6 text-sm font-bold ${
           error ? "text-error" : "text-success"
@@ -614,6 +682,17 @@ export default function AdminPage() {
           onClearAll={() => setResetTargets([])}
           onConfirm={applyReset}
           onClose={() => setResetConfirmIds([])}
+        />
+      )}
+      {seasonConfirmOpen && (
+        <AdminConfirmModal
+          title="현재 시즌을 종료할까요?"
+          beforeLabel="정산 대상"
+          beforeValue={`시즌 ${seasonInfo?.season?.seasonNumber || "-"}`}
+          afterLabel="처리"
+          afterValue="주식·포지션 정산, 랭킹 저장, 다음 시즌 시작"
+          onConfirm={endCurrentSeason}
+          onClose={() => setSeasonConfirmOpen(false)}
         />
       )}
     </div>

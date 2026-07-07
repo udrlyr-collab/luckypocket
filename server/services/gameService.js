@@ -2,6 +2,11 @@ import { db } from "../db.js";
 import { awardAchievements } from "./achievementService.js";
 import { recordAssetEvent } from "./assetEventService.js";
 import { createGameNotification } from "./serverNotificationService.js";
+import {
+  addJackpotContribution,
+  buildRtpDetail,
+  recordLuckTicketUse,
+} from "./economyRtpService.js";
 import { formatWon } from "../utils/formatWon.js";
 
 export class GameError extends Error {
@@ -60,8 +65,24 @@ export function finishInstantGame({
 }) {
   const won = payout > 0;
   const profit = payout - bet;
-  const gameBalance = user.balance - bet + payout;
-  updateGameStats(user.id, gameBalance, bet, won, profit);
+  let actualPayout = payout;
+  let actualProfit = profit;
+  if (profit > 0) {
+    const tax = Math.floor(profit * 0.01);
+    if (tax > 0) {
+      actualPayout -= tax;
+      actualProfit -= tax;
+      finalDetail = {
+        ...finalDetail,
+        jackpotTax: tax,
+        jackpotPoolContribution: addJackpotContribution(db, tax),
+      };
+    }
+  }
+
+  const gameBalance = user.balance - bet + actualPayout;
+  updateGameStats(user.id, gameBalance, bet, won, actualProfit);
+  db.prepare("UPDATE users SET jackpot_tickets = jackpot_tickets + 1 WHERE id = ?").run(user.id);
 
   const log = db
     .prepare(
@@ -74,51 +95,62 @@ export function finishInstantGame({
       gameType,
       bet,
       won ? "win" : "loss",
-      payout,
-      profit,
+      actualPayout,
+      actualProfit,
       user.balance,
       gameBalance,
-      JSON.stringify(detail),
+      JSON.stringify(finalDetail),
     );
   recordAssetEvent({
     userId: user.id,
     eventType: won ? "game_win" : "game_loss",
     gameType,
-    amount: profit,
+    amount: actualProfit,
     balanceBefore: user.balance,
     balanceAfter: gameBalance,
     sourceType: "game_log",
     sourceId: log.lastInsertRowid,
-    detail,
+    detail: finalDetail,
   });
+  if (finalDetail.luckTicket?.used) {
+    recordLuckTicketUse(db, {
+      userId: user.id,
+      gameType,
+      gameLogId: log.lastInsertRowid,
+      bet,
+      payoutBoostAmount: finalDetail.luckTicket.payoutBoostAmount || 0,
+      balanceAfter: gameBalance,
+      luckTicket: finalDetail.luckTicket,
+    });
+  }
 
   const achievements = awardAchievements(db, user.id, {
     gameType,
     gameCompleted: true,
     won,
-    profit,
-    payout,
-    ...detail,
+    profit: actualProfit,
+    payout: actualPayout,
+    ...finalDetail,
     ...achievementContext,
   });
-  const finalUser = getFreshUser(user.id);
+  const userAfterGame = getFreshUser(user.id);
   createGameNotification(db, {
     gameLogId: log.lastInsertRowid,
-    user: finalUser,
+    user: userAfterGame,
     gameType,
     bet,
-    payout,
+    payout: actualPayout,
     won,
-    detail,
+    detail: finalDetail,
   });
-
+  const finalUser = getFreshUser(user.id);
   return {
     won,
-    payout,
-    profit,
+    payout: actualPayout,
+    profit: actualProfit,
     balance: finalUser.balance,
     achievements,
-    detail,
+    detail: finalDetail,
   };
 }
 
@@ -134,8 +166,24 @@ export function finishReservedGame({
   const current = getFreshUser(userId);
   const won = payout > 0;
   const profit = payout - bet;
-  const gameBalance = current.balance + payout;
-  updateGameStats(userId, gameBalance, bet, won, profit);
+  let actualPayout = payout;
+  let actualProfit = profit;
+  if (profit > 0) {
+    const tax = Math.floor(profit * 0.01);
+    if (tax > 0) {
+      actualPayout -= tax;
+      actualProfit -= tax;
+      finalDetail = {
+        ...finalDetail,
+        jackpotTax: tax,
+        jackpotPoolContribution: addJackpotContribution(db, tax),
+      };
+    }
+  }
+
+  const gameBalance = current.balance + actualPayout;
+  updateGameStats(userId, gameBalance, bet, won, actualProfit);
+  db.prepare("UPDATE users SET jackpot_tickets = jackpot_tickets + 1 WHERE id = ?").run(userId);
 
   const log = db
     .prepare(
@@ -148,51 +196,62 @@ export function finishReservedGame({
       gameType,
       bet,
       won ? "win" : "loss",
-      payout,
-      profit,
+      actualPayout,
+      actualProfit,
       balanceBefore,
       gameBalance,
-      JSON.stringify(detail),
+      JSON.stringify(finalDetail),
     );
-  const eventBalanceBefore = gameBalance - profit;
+  const eventBalanceBefore = gameBalance - actualProfit;
   recordAssetEvent({
     userId,
     eventType: won ? "game_win" : "game_loss",
     gameType,
-    amount: profit,
+    amount: actualProfit,
     balanceBefore: eventBalanceBefore,
     balanceAfter: gameBalance,
     sourceType: "game_log",
     sourceId: log.lastInsertRowid,
-    detail,
+    detail: finalDetail,
   });
+  if (finalDetail.luckTicket?.used) {
+    recordLuckTicketUse(db, {
+      userId,
+      gameType,
+      gameLogId: log.lastInsertRowid,
+      bet,
+      payoutBoostAmount: finalDetail.luckTicket.payoutBoostAmount || 0,
+      balanceAfter: gameBalance,
+      luckTicket: finalDetail.luckTicket,
+    });
+  }
 
   const achievements = awardAchievements(db, userId, {
     gameType,
     gameCompleted: true,
     won,
-    profit,
-    payout,
-    ...detail,
+    profit: actualProfit,
+    payout: actualPayout,
+    ...finalDetail,
     ...achievementContext,
   });
-  const finalUser = getFreshUser(userId);
+  const userAfterGame = getFreshUser(userId);
   createGameNotification(db, {
     gameLogId: log.lastInsertRowid,
-    user: finalUser,
+    user: userAfterGame,
     gameType,
     bet,
-    payout,
+    payout: actualPayout,
     won,
-    detail,
+    detail: finalDetail,
   });
-
+  const finalUser = getFreshUser(userId);
   return {
     won,
-    payout,
-    profit,
+    payout: actualPayout,
+    profit: actualProfit,
     balance: finalUser.balance,
     achievements,
-    detail,
+    detail: finalDetail,
   };
 }

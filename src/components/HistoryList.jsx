@@ -86,6 +86,33 @@ function eventMeta(log) {
       badgeLabel: "서버 알림",
     };
   }
+  if (log.entryType === "daily_lossback") {
+    return {
+      icon: "🩹",
+      title: "오늘 조금 운이 없었네요. 작은 회복 보너스를 받았어요.",
+      color: "bg-success/15",
+      badge: "badge-success",
+      badgeLabel: "손실 보전",
+    };
+  }
+  if (log.entryType === "luck_ticket_use") {
+    return {
+      icon: "🎟️",
+      title: "행운권을 사용했어요. 이 판은 보상이 조금 더 좋아졌어요.",
+      color: "bg-secondary/20",
+      badge: "badge-secondary",
+      badgeLabel: "행운권",
+    };
+  }
+  if (log.entryType === "jackpot_pool_reward") {
+    return {
+      icon: "🎊",
+      title: "서버 잭팟이 터졌어요!",
+      color: "bg-warning/25",
+      badge: "badge-warning",
+      badgeLabel: "서버 잭팟",
+    };
+  }
   if (log.entryType === "stock_buy") {
     return {
       icon: "📈",
@@ -158,7 +185,7 @@ export default function HistoryList({ logs, emptyText = "아직 게임 기록이
       {logs.map((log) => {
         const meta = eventMeta(log);
         const isGame = log.entryType === "game";
-        const isNonFinancial = ["nickname_change", "admin_nickname_change", "server_notification"].includes(log.entryType);
+        const isNonFinancial = ["nickname_change", "admin_nickname_change", "server_notification", "luck_ticket_use"].includes(log.entryType);
         return (
           <article className="min-w-0 rounded-2xl bg-base-100 p-4 shadow-sm" key={log.id}>
             <div className="flex min-w-0 items-center gap-3">

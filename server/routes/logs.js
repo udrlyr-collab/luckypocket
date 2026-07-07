@@ -25,6 +25,9 @@ logsRouter.get("/", (req, res) => {
     "stock_position_close",
     "stock_liquidation",
     "stock_acquire_company",
+    "daily_lossback",
+    "luck_ticket_use",
+    "jackpot_pool_reward",
   ]);
   const filter = allowed.has(req.query.gameType) ? req.query.gameType : null;
   const eventFilter = allowedEvents.has(req.query.eventType) ? req.query.eventType : null;
@@ -73,7 +76,8 @@ logsRouter.get("/", (req, res) => {
              'achievement_reward', 'support_grant', 'bankruptcy_reset',
              'admin_nickname_change', 'stock_buy', 'stock_sell',
              'stock_position_open', 'stock_position_close',
-             'stock_liquidation', 'stock_acquire_company'
+             'stock_liquidation', 'stock_acquire_company',
+             'daily_lossback', 'luck_ticket_use', 'jackpot_pool_reward'
            )
            ORDER BY id DESC LIMIT 40`,
         )

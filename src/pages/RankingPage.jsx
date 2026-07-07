@@ -54,6 +54,8 @@ export default function RankingPage() {
   const [period, setPeriod] = useState("day");
   const [type, setType] = useState("currentBalance");
   const [data, setData] = useState({ rankings: [], myStats: null, myRank: null });
+  const [seasons, setSeasons] = useState([]);
+  const [selectedSeason, setSelectedSeason] = useState("current");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [isDateFilterOpen, setIsDateFilterOpen] = useState(false);
@@ -70,13 +72,23 @@ export default function RankingPage() {
   };
 
   useEffect(() => {
+    api("/seasons")
+      .then((seasonData) => setSeasons(seasonData.seasons || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     setLoading(true);
     setError("");
-    api(`/leaderboard?date=${date}&period=${period}&type=${type}`)
+    const endpoint =
+      selectedSeason === "current"
+        ? `/leaderboard?date=${date}&period=${period}&type=${type}`
+        : `/leaderboard?season=${selectedSeason}&type=${type}`;
+    api(endpoint)
       .then(setData)
       .catch((requestError) => setError(requestError.message))
       .finally(() => setLoading(false));
-  }, [date, period, type, user.balance]);
+  }, [date, period, type, selectedSeason, user.balance]);
 
   const podium = data.rankings.slice(0, 3);
   const remaining = data.rankings.slice(3);
@@ -118,14 +130,40 @@ export default function RankingPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="badge badge-primary badge-outline font-bold">{periodLabel} 기준</span>
-          <span className="text-sm text-base-content/60 tabular-nums">{date}</span>
-          <button className="btn btn-xs btn-ghost rounded-lg" onClick={() => setIsDateFilterOpen(v => !v)}>
-            날짜 변경 {isDateFilterOpen ? "▲" : "▼"}
-          </button>
+          <select
+            className="select select-bordered h-10 min-h-10 rounded-xl text-sm font-bold"
+            value={selectedSeason}
+            onChange={(event) => {
+              setSelectedSeason(event.target.value);
+              setIsDateFilterOpen(false);
+            }}
+            aria-label="시즌 선택"
+          >
+            <option value="current">현재 시즌</option>
+            {seasons
+              .filter((season) => season.status === "ended")
+              .map((season) => (
+                <option key={season.id} value={season.seasonNumber}>
+                  시즌 {season.seasonNumber}
+                </option>
+              ))}
+          </select>
+          {selectedSeason === "current" ? (
+            <>
+              <span className="badge badge-primary badge-outline font-bold">{periodLabel} 기준</span>
+              <span className="text-sm text-base-content/60 tabular-nums">{date}</span>
+              <button className="btn btn-xs btn-ghost rounded-lg" onClick={() => setIsDateFilterOpen(v => !v)}>
+                날짜 변경 {isDateFilterOpen ? "▲" : "▼"}
+              </button>
+            </>
+          ) : (
+            <span className="badge badge-secondary badge-outline font-bold">
+              종료 시즌 최종 순위
+            </span>
+          )}
         </div>
 
-        {isDateFilterOpen && (
+        {selectedSeason === "current" && isDateFilterOpen && (
           <div className="mt-3 flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-base-200/40">
             <input
               type="date"

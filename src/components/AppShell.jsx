@@ -26,11 +26,29 @@ export default function AppShell() {
   const [bankruptcyOpen, setBankruptcyOpen] = useState(false);
   const [bankruptcyBusy, setBankruptcyBusy] = useState(false);
   const [bankruptcyError, setBankruptcyError] = useState("");
+  const [seasonNotice, setSeasonNotice] = useState(null);
+  const [seasonTop3, setSeasonTop3] = useState([]);
+  const [seasonBusy, setSeasonBusy] = useState(false);
+  const [seasonError, setSeasonError] = useState("");
   const navigationLinks = user.isAdmin ? [...links, adminLink] : links;
 
   useEffect(() => {
     if (user.bankruptcyShouldPrompt) setBankruptcyOpen(true);
   }, [user.bankruptcyShouldPrompt]);
+
+  useEffect(() => {
+    let mounted = true;
+    api("/seasons/current")
+      .then((data) => {
+        if (!mounted) return;
+        setSeasonTop3(data.latestEnded?.top3 || []);
+        setSeasonNotice(data.notice || null);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, [user.id]);
 
   const applyBankruptcy = async () => {
     setBankruptcyBusy(true);
@@ -57,6 +75,21 @@ export default function AppShell() {
       setBankruptcyError(error.message);
     } finally {
       setBankruptcyBusy(false);
+    }
+  };
+
+  const closeSeasonNotice = async () => {
+    if (!seasonNotice) return;
+    setSeasonBusy(true);
+    setSeasonError("");
+    try {
+      await api(`/seasons/notices/${seasonNotice.id}/seen`, { method: "POST" });
+      setSeasonNotice(null);
+      await refreshUser();
+    } catch (error) {
+      setSeasonError(error.message);
+    } finally {
+      setSeasonBusy(false);
     }
   };
 
@@ -180,6 +213,56 @@ export default function AppShell() {
                 {bankruptcyBusy ? <span className="loading loading-spinner loading-sm" /> : "파산신청"}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {seasonNotice && (
+        <div className="modal modal-open" role="dialog" aria-modal="true" aria-labelledby="season-title">
+          <div className="modal-box rounded-[2rem]">
+            <div className="text-center">
+              <div className="mb-3 text-5xl" aria-hidden="true">🎉</div>
+              <p className="eyebrow">New season</p>
+              <h2 id="season-title" className="text-2xl font-black">
+                시즌 {seasonNotice.seasonNumber}이 시작되었어요
+              </h2>
+              <p className="mt-3 text-sm leading-relaxed text-base-content/65">
+                이전 시즌 기록이 정산되었고, 새 시즌 시작 자산이 지급되었습니다.
+              </p>
+            </div>
+
+            <div className="mt-5 rounded-3xl bg-base-200/70 p-4">
+              <h3 className="mb-3 text-sm font-black">이전 시즌 TOP 3</h3>
+              {seasonTop3.length > 0 ? (
+                <div className="grid gap-2">
+                  {seasonTop3.map((row) => (
+                    <div key={row.userId} className="flex items-center justify-between gap-3 rounded-2xl bg-base-100 px-3 py-2">
+                      <span className="font-black">
+                        {row.rank}위 · {row.nickname}
+                      </span>
+                      <span className="text-sm font-black text-primary tabular-nums">
+                        {formatMoney(row.finalTotalEvaluatedAsset)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="rounded-2xl bg-base-100 p-4 text-center text-sm font-bold text-base-content/50">
+                  아직 종료된 시즌 기록이 없습니다.
+                </p>
+              )}
+            </div>
+
+            <p className="mt-3 min-h-5 text-center text-sm font-bold text-error" aria-live="polite">
+              {seasonError}
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary mt-2 h-12 w-full rounded-2xl"
+              disabled={seasonBusy}
+              onClick={closeSeasonNotice}
+            >
+              {seasonBusy ? <span className="loading loading-spinner loading-sm" /> : "확인"}
+            </button>
           </div>
         </div>
       )}

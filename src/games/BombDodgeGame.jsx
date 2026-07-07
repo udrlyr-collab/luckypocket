@@ -17,7 +17,8 @@ function combination(n, k) {
 
 function stageFor(bombCount, safeCount) {
   const chance = combination(16 - bombCount, safeCount) / combination(16, safeCount);
-  const targetRtp = 1.02;
+  const skillBonus = Math.min(0.017, safeCount * 0.0015 + bombCount * 0.0008);
+  const targetRtp = Math.min(0.992, 0.975 + skillBonus);
   return {
     chance,
     targetRtp,

@@ -12,22 +12,24 @@ import {
   payoutFor,
 } from "../server/services/gameMath.js";
 
-test("all configured single-outcome games have RTP above 100%", () => {
+test("repeatable configured games stay below 100% RTP except the rare slot jackpot", () => {
   for (const stage of RISK_STAGES) {
-    assert.ok(stage.cumulativeChance * stage.multiplier > 1);
+    const rtp = stage.cumulativeChance * stage.multiplier;
+    assert.ok(rtp < 1);
+    assert.ok(rtp >= 0.96);
   }
   for (let bombCount = 1; bombCount <= 8; bombCount += 1) {
     for (let safeCount = 1; safeCount <= 16 - bombCount; safeCount += 1) {
       const stage = bombStage(bombCount, safeCount);
-      assert.ok(stage.chance * stage.multiplier > 1);
-      assert.equal(stage.targetRtp, 1.02);
+      assert.ok(stage.chance * stage.multiplier < 1);
+      assert.ok(stage.targetRtp <= 0.992);
     }
   }
   for (const spec of Object.values(CARD_BETS)) {
-    assert.ok(spec.chance * spec.multiplier > 1);
+    assert.ok(spec.chance * spec.multiplier < 1);
   }
   for (const spec of Object.values(DART_BETS)) {
-    assert.ok(spec.chance * spec.multiplier > 1);
+    assert.ok(spec.chance * spec.multiplier < 1);
   }
 });
 
@@ -60,7 +62,7 @@ test("slot 777 makes the pre-game cash balance exactly 777 times larger", () => 
 test("4x4 bomb survival probability follows the combination formula", () => {
   assert.equal(bombSurvivalChance(2, 1), 14 / 16);
   assert.equal(bombSurvivalChance(8, 8), 1 / 12870);
-  assert.equal(bombStage(2, 1).multiplier, 1.17);
+  assert.equal(bombStage(2, 1).multiplier, 1.12);
 });
 
 test("dart target checks radius and sector together", () => {

@@ -29,6 +29,13 @@ import {
   getFreshUser,
   validateBet,
 } from "../services/gameService.js";
+import {
+  getDailyLuckTicketStatus,
+  getJackpotPool as getOldJackpotPool,
+  applyLuckTicketPayout,
+  prepareLuckTicket,
+} from "../services/economyRtpService.js";
+import { applyJackpotTickets, getJackpotPool } from "../services/jackpotService.js";
 
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
@@ -51,6 +58,21 @@ function saveSession(sessionId, state, status = "active") {
      SET state_json = ?, status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
      WHERE id = ?`,
   ).run(JSON.stringify(state), status, sessionId);
+}
+
+const BOMB_MIN_ACTION_INTERVAL_MS = 300;
+const BOMB_MIN_CASHOUT_AFTER_START_MS = 1200;
+
+function enforceBombActionPace(state, { cashout = false } = {}) {
+  const now = Date.now();
+  const lastActionAt = Number(state.lastActionAt || 0);
+  if (lastActionAt && now - lastActionAt < BOMB_MIN_ACTION_INTERVAL_MS) {
+    throw new GameError("너무 빠르게 진행하고 있어요. 잠시만 기다려주세요.", 429);
+  }
+  if (cashout && now - Number(state.startedAt || now) < BOMB_MIN_CASHOUT_AFTER_START_MS) {
+    throw new GameError("결과 확정은 잠시 후에 할 수 있어요.", 429);
+  }
+  state.lastActionAt = now;
 }
 
 function riskView(session, state) {
@@ -141,6 +163,25 @@ gamesRouter.get("/risk/payout-preview", (req, res) => {
     return res.status(400).json({ message: "배팅금을 올바르게 입력해 주세요." });
   }
   return res.json(getRiskPayoutPreview(betAmount));
+});
+
+gamesRouter.get("/daily-jackpot", (req, res) => {
+  const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
+  const user = db.prepare("SELECT jackpot_tickets FROM users WHERE id = ?").get(req.user.id);
+  const entryRow = db.prepare("SELECT tickets FROM jackpot_entries WHERE user_id = ? AND entry_date = ?").get(req.user.id, date);
+  return res.json({
+    jackpotPool: getJackpotPool(db),
+    myTickets: user?.jackpot_tickets || 0,
+    appliedTickets: entryRow?.tickets || 0,
+  });
+});
+
+gamesRouter.post("/daily-jackpot/apply", (req, res, next) => {
+  try {
+    return res.json(applyJackpotTickets(db, req.user.id));
+  } catch (error) {
+    return next(error);
+  }
 });
 
 gamesRouter.post("/risk-button/start", (req, res, next) => {
@@ -243,6 +284,11 @@ gamesRouter.post("/card-draw/play", (req, res, next) => {
       const spec = CARD_BETS[req.body.condition];
       if (!spec) throw new GameError("카드 조건을 선택해 주세요.");
       const bet = validateBet(user, req.body.betAmount);
+      const luckTicket = prepareLuckTicket(db, {
+        userId: user.id,
+        bet,
+        useLuckTicket: req.body.useLuckTicket === true,
+      });
       let selectedNumber = null;
       if (req.body.condition === "exact") {
         selectedNumber = Number(req.body.selectedNumber);
@@ -255,7 +301,11 @@ gamesRouter.post("/card-draw/play", (req, res, next) => {
         req.body.condition === "exact"
           ? number === selectedNumber
           : spec.test(number);
-      const payout = won ? payoutFor(bet, spec.multiplier) : 0;
+      const payoutResult = applyLuckTicketPayout(
+        won ? payoutFor(bet, spec.multiplier) : 0,
+        luckTicket,
+      );
+      const payout = payoutResult.payout;
       return finishInstantGame({
         user,
         gameType: "card-draw",
@@ -267,6 +317,7 @@ gamesRouter.post("/card-draw/play", (req, res, next) => {
           selectedNumber,
           number,
           multiplier: spec.multiplier,
+          luckTicket: payoutResult.luckTicket,
         },
         achievementContext: { condition: req.body.condition },
       });
@@ -293,6 +344,8 @@ gamesRouter.post("/bomb-dodge/start", (req, res, next) => {
         bombs: createBombPositions(bombCount),
         openedNumbers: [],
         balanceBefore: user.balance,
+        startedAt: Date.now(),
+        lastActionAt: 0,
       };
       db.prepare(
         "UPDATE users SET balance = balance - ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
@@ -326,6 +379,7 @@ gamesRouter.post("/bomb-dodge/pick", (req, res, next) => {
       if (state.openedNumbers.includes(number)) {
         throw new GameError("이미 연 안전 숫자예요.");
       }
+      enforceBombActionPace(state);
       if (state.bombs.includes(number)) {
         const detail = {
           pickedNumber: number,
@@ -376,6 +430,7 @@ gamesRouter.post("/bomb-dodge/cashout", (req, res, next) => {
       const state = parseState(session);
       const safeCount = state.openedNumbers.length;
       if (safeCount < 1) throw new GameError("안전 숫자를 하나 이상 연 뒤 확정할 수 있어요.");
+      enforceBombActionPace(state, { cashout: true });
       const spec = bombStage(state.bombs.length, safeCount);
       const payout = payoutFor(session.bet_amount, spec.multiplier);
       const detail = {
@@ -414,21 +469,28 @@ gamesRouter.post("/slot/play", (req, res, next) => {
     const play = db.transaction(() => {
       const user = getFreshUser(req.user.id);
       const bet = validateBet(user, req.body.betAmount);
+      if (req.body.useLuckTicket === true) {
+        throw new GameError("슬롯은 행운권을 사용할 수 없어요.");
+      }
+      const luckTicket = { used: false, requested: false };
       const numbers = spinSlot();
       const outcome = classifySlot(numbers);
-      const payout = calculateSlotPayout({
+      const basePayout = calculateSlotPayout({
         balance: user.balance,
         bet,
         outcome,
       });
+      const payoutResult = applyLuckTicketPayout(basePayout, luckTicket);
+      const payout = payoutResult.payout;
       const detail = outcome.outcome === "777"
         ? {
             numbers,
             ...outcome,
             jackpotBalanceBefore: user.balance,
             jackpotBalanceAfter: user.balance * outcome.balanceMultiplier,
+            luckTicket: payoutResult.luckTicket,
           }
-        : { numbers, ...outcome };
+        : { numbers, ...outcome, luckTicket: payoutResult.luckTicket };
       return finishInstantGame({
         user,
         gameType: "slot",
@@ -451,13 +513,22 @@ gamesRouter.post("/dart/play", (req, res, next) => {
       const spec = DART_BETS[req.body.target];
       if (!spec) throw new GameError("다트 목표를 선택해 주세요.");
       const bet = validateBet(user, req.body.betAmount, spec.event ? 100000 : Infinity);
+      const luckTicket = prepareLuckTicket(db, {
+        userId: user.id,
+        bet,
+        useLuckTicket: req.body.useLuckTicket === true,
+      });
       const selectedSector = spec.needsSector ? Number(req.body.sector) : null;
       if (spec.needsSector && (!Number.isInteger(selectedSector) || selectedSector < 1 || selectedSector > 20)) {
         throw new GameError("1부터 20까지 섹터를 선택해 주세요.");
       }
       const dart = throwDart();
       const won = isDartWin(spec, dart, selectedSector);
-      const payout = won ? payoutFor(bet, spec.multiplier) : 0;
+      const payoutResult = applyLuckTicketPayout(
+        won ? payoutFor(bet, spec.multiplier) : 0,
+        luckTicket,
+      );
+      const payout = payoutResult.payout;
       return finishInstantGame({
         user,
         gameType: "dart",
@@ -472,6 +543,7 @@ gamesRouter.post("/dart/play", (req, res, next) => {
           x: Number(dart.x.toFixed(6)),
           y: Number(dart.y.toFixed(6)),
           sector: dart.sector,
+          luckTicket: payoutResult.luckTicket,
         },
         achievementContext: { radius: dart.radius, target: req.body.target },
       });

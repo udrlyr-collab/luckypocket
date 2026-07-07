@@ -63,6 +63,67 @@ function periodBounds(dateValue, period) {
 
 rankingsRouter.get("/", (req, res, next) => {
   try {
+    const seasonQuery = String(req.query.season || "current");
+    if (seasonQuery !== "current") {
+      const seasonNumber = Number(seasonQuery);
+      if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1) {
+        return res.status(400).json({ message: "시즌 번호를 확인해주세요." });
+      }
+      const season = db
+        .prepare("SELECT * FROM seasons WHERE season_number = ?")
+        .get(seasonNumber);
+      if (!season) {
+        return res.status(404).json({ message: "해당 시즌을 찾을 수 없어요." });
+      }
+      const rows = db
+        .prepare(
+          `SELECT *
+           FROM season_results
+           WHERE season_id = ?
+           ORDER BY rank ASC, final_total_evaluated_asset DESC, user_id ASC
+           LIMIT 100`,
+        )
+        .all(season.id);
+      const serializeSeasonResult = (row) => ({
+        userId: row.user_id,
+        nickname: row.nickname_snapshot,
+        balance: row.final_balance,
+        highestBalance: row.final_total_evaluated_asset,
+        totalProfit: row.total_profit,
+        todayEarned: 0,
+        todayLost: 0,
+        todayNetProfit: 0,
+        todayProfitRate: 0,
+        transferReceived: 0,
+        transferSent: 0,
+        startBalance: 0,
+        totalGames: row.total_games,
+        achievementCount: 0,
+        bankruptcyCount: 0,
+        rank: row.rank,
+        seasonNumber: row.season_number,
+        startingBonusForNextSeason: row.starting_bonus_for_next_season,
+      });
+      const mineRow = db
+        .prepare("SELECT * FROM season_results WHERE season_id = ? AND user_id = ?")
+        .get(season.id, req.user.id);
+      const mine = mineRow ? serializeSeasonResult(mineRow) : null;
+      return res.json({
+        season: {
+          id: season.id,
+          seasonNumber: season.season_number,
+          status: season.status,
+          startedAt: season.started_at,
+          endedAt: season.ended_at,
+        },
+        type: req.query.type || "currentBalance",
+        rankings: rows.map(serializeSeasonResult),
+        mine,
+        myRank: mine?.rank ?? null,
+        myStats: mine,
+      });
+    }
+
     const today = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
     const date = req.query.date || today;
     if (!validDate(date)) {

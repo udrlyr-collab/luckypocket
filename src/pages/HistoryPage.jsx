@@ -21,6 +21,15 @@ export default function HistoryPage() {
       "bankruptcy_reset",
       "admin_nickname_change",
       "server_notification",
+      "daily_lossback",
+      "luck_ticket_use",
+      "jackpot_pool_reward",
+      "stock_buy",
+      "stock_sell",
+      "stock_position_open",
+      "stock_position_close",
+      "stock_liquidation",
+      "stock_acquire_company",
     ]);
     const query = filter
       ? eventFilters.has(filter)
@@ -59,6 +68,9 @@ export default function HistoryPage() {
           ["bankruptcy_reset", "🌱 파산신청"],
           ["admin_nickname_change", "🛡️ 관리자 변경"],
           ["server_notification", "📣 서버 알림"],
+          ["daily_lossback", "🩹 손실 보전"],
+          ["luck_ticket_use", "🎟️ 행운권 사용"],
+          ["jackpot_pool_reward", "🎊 서버 잭팟"],
           ["stock_buy", "📈 주식 매수"],
           ["stock_sell", "📉 주식 매도"],
           ["stock_position_open", "🔥 레버리지 진입"],

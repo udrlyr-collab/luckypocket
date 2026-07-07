@@ -20,8 +20,10 @@ import { serverNotificationsRouter } from "./routes/serverNotifications.js";
 import { serverStatsRouter } from "./routes/serverStats.js";
 import { mineRouter } from "./routes/mine.js";
 import { stocksRouter } from "./routes/stocks.js";
+import { seasonsRouter } from "./routes/seasons.js";
 import { initStockMarket, tickStockMarket } from "./services/stockService.js";
 import { readClientAssetVersion } from "./services/clientVersionService.js";
+import { runJackpotDraw } from "./services/jackpotService.js";
 
 const app = express();
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -112,6 +114,7 @@ app.use("/api/server/notifications", serverNotificationsRouter);
 app.use("/api/server/stats", serverStatsRouter);
 app.use("/api/mine", mineRouter);
 app.use("/api/stocks", stocksRouter);
+app.use("/api/seasons", seasonsRouter);
 
 app.use("/api", (_req, res) => {
   res.status(404).json({ message: "요청한 API를 찾을 수 없어요." });
@@ -149,6 +152,31 @@ const server = app.listen(config.port, "127.0.0.1", () => {
   } catch (err) {
     console.error("주식 시장 초기화 실패:", err);
   }
+
+  // Initialize jackpot scheduler
+  function scheduleNextJackpot() {
+    const now = new Date();
+    // next midnight KST
+    // KST is UTC+9, so midnight KST is 15:00 UTC.
+    const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+    const nextMidnightKst = new Date(kstNow);
+    nextMidnightKst.setUTCHours(24, 0, 0, 0); // Next day 00:00:00
+    
+    const msUntilMidnight = nextMidnightKst.getTime() - kstNow.getTime();
+    console.log(`다음 잭팟 추첨까지 ${Math.floor(msUntilMidnight / 1000 / 60)}분 남았습니다.`);
+    
+    setTimeout(() => {
+      console.log("자정 잭팟 추첨을 시작합니다...");
+      try {
+        const result = runJackpotDraw(db);
+        console.log("잭팟 추첨 결과:", result);
+      } catch (e) {
+        console.error("잭팟 추첨 오류:", e);
+      }
+      scheduleNextJackpot(); // Schedule the next one
+    }, msUntilMidnight);
+  }
+  scheduleNextJackpot();
 });
 
 function shutdown() {

@@ -172,6 +172,129 @@ stocksRouter.get("/market-snapshot", (req, res) => {
   });
 });
 
+function topLimit(value) {
+  const limit = Number(value || 5);
+  if (!Number.isSafeInteger(limit)) return 5;
+  return Math.min(20, Math.max(1, limit));
+}
+
+stocksRouter.get("/:stockId/top-holders", (req, res) => {
+  const stockId = Number(req.params.stockId);
+  const limit = topLimit(req.query.limit);
+  const stock = db
+    .prepare("SELECT id, name, current_price FROM stocks WHERE id = ?")
+    .get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없어요." });
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT
+         h.user_id,
+         u.nickname,
+         h.quantity,
+         h.average_price,
+         s.current_price,
+         h.quantity * s.current_price AS holding_value,
+         h.quantity * h.average_price AS cost_basis
+       FROM stock_holdings h
+       JOIN users u ON u.id = h.user_id
+       JOIN stocks s ON s.id = h.stock_id
+       WHERE h.stock_id = ?
+         AND h.quantity > 0
+       ORDER BY holding_value DESC, h.user_id ASC
+       LIMIT ?`,
+    )
+    .all(stockId, limit);
+
+  const holders = rows.map((row, index) => {
+    const holdingValue = Math.floor(Number(row.holding_value) || 0);
+    const costBasis = Math.floor(Number(row.cost_basis) || 0);
+    const profit = holdingValue - costBasis;
+    return {
+      rank: index + 1,
+      userId: row.user_id,
+      nickname: row.nickname,
+      quantity: row.quantity,
+      averagePrice: row.average_price,
+      currentPrice: row.current_price,
+      holdingValue,
+      costBasis,
+      profit,
+      profitRate: costBasis > 0 ? profit / costBasis : 0,
+    };
+  });
+
+  return res.json({
+    stockId: stock.id,
+    stockName: stock.name,
+    holders,
+  });
+});
+
+stocksRouter.get("/:stockId/top-positions", (req, res) => {
+  const stockId = Number(req.params.stockId);
+  const limit = topLimit(req.query.limit);
+  const stock = db
+    .prepare("SELECT id, name, current_price FROM stocks WHERE id = ?")
+    .get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없어요." });
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT
+         p.user_id,
+         u.nickname,
+         p.side,
+         p.leverage,
+         p.margin_amount,
+         p.position_size,
+         p.quantity,
+         p.entry_price,
+         s.current_price,
+         p.liquidation_price
+       FROM stock_positions p
+       JOIN users u ON u.id = p.user_id
+       JOIN stocks s ON s.id = p.stock_id
+       WHERE p.stock_id = ?
+         AND p.status = 'open'
+       ORDER BY p.position_size DESC, p.id ASC
+       LIMIT ?`,
+    )
+    .all(stockId, limit);
+
+  const positions = rows.map((row, index) => {
+    const direction = row.side === "short" ? -1 : 1;
+    const unrealizedPnl = Math.floor(
+      row.quantity * (row.current_price - row.entry_price) * direction,
+    );
+    return {
+      rank: index + 1,
+      userId: row.user_id,
+      nickname: row.nickname,
+      side: row.side === "short" ? "short" : "long",
+      leverage: row.leverage,
+      marginAmount: row.margin_amount,
+      positionSize: row.position_size,
+      quantity: row.quantity,
+      entryPrice: row.entry_price,
+      currentPrice: row.current_price,
+      liquidationPrice: row.liquidation_price,
+      unrealizedPnl,
+      profitRate: row.margin_amount > 0 ? unrealizedPnl / row.margin_amount : 0,
+    };
+  });
+
+  return res.json({
+    stockId: stock.id,
+    stockName: stock.name,
+    positions,
+  });
+});
+
 stocksRouter.get("/:id", (req, res) => {
   const { id } = req.params;
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
@@ -20,10 +20,25 @@ export default function DartGame() {
   const [lastDart, setLastDart] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [benefits, setBenefits] = useState(null);
+  const [useLuckTicket, setUseLuckTicket] = useState(false);
   const [phase, setPhase] = useState("idle");
   const spec = useMemo(() => dartBets.find((item) => item.key === target), [target]);
   const selectedLabel = spec.sector ? `${sector}번 ${spec.label}` : spec.label;
   const successCondition = getSuccessCondition(spec, sector);
+  const luckTicketDisabled =
+    !benefits?.luckTickets?.remaining ||
+    Number(bet || 0) > (benefits?.luckTickets?.maxBetAmount || 0);
+
+  useEffect(() => {
+    api("/games/daily-benefits")
+      .then(setBenefits)
+      .catch(() => {});
+  }, [user.balance]);
+
+  useEffect(() => {
+    if (luckTicketDisabled) setUseLuckTicket(false);
+  }, [luckTicketDisabled]);
 
   const clearPreviousResult = () => {
     setLastDart(null);
@@ -56,6 +71,7 @@ export default function DartGame() {
           betAmount: Number(bet),
           target,
           sector: spec.sector ? sector : undefined,
+          useLuckTicket,
         }),
       });
       setLastDart(data.detail);
@@ -64,6 +80,7 @@ export default function DartGame() {
       await new Promise((resolve) => setTimeout(resolve, 850));
       setPhase("impact");
       await refreshUser();
+      api("/games/daily-benefits").then(setBenefits).catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 800));
       setResult(data);
       setPhase("settled");
@@ -86,6 +103,25 @@ export default function DartGame() {
       <div className="grid min-w-0 gap-6 lg:grid-cols-[0.82fr_1.18fr]">
         <div className="space-y-5">
           <BetInput balance={user.balance} value={bet} onChange={setBet} eventCap={spec.event} disabled={busy} />
+          <section className="soft-card border-2 border-secondary/20">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-secondary mt-1"
+                checked={useLuckTicket}
+                disabled={busy || luckTicketDisabled}
+                onChange={(event) => setUseLuckTicket(event.target.checked)}
+              />
+              <span>
+                <strong className="block font-black">행운권 사용</strong>
+                <span className="mt-1 block text-xs font-bold leading-relaxed text-base-content/55">
+                  이 판은 보상이 3% 더 좋아져요. 남은 행운권{" "}
+                  {(benefits?.luckTickets?.remaining || 0).toLocaleString("ko-KR")}장 ·
+                  최대 {formatMoney(benefits?.luckTickets?.maxBetAmount || 100000)}
+                </span>
+              </span>
+            </label>
+          </section>
           <section className="soft-card">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>

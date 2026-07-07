@@ -1,41 +1,41 @@
 import { randomBytes, randomInt } from "node:crypto";
 
 export const RISK_STAGES = [
-  { stepChance: 0.88, cumulativeChance: 0.88, multiplier: 1.16 },
-  { stepChance: 0.75, cumulativeChance: 0.66, multiplier: 1.55 },
-  { stepChance: 0.62, cumulativeChance: 0.4092, multiplier: 2.5 },
-  { stepChance: 0.48, cumulativeChance: 0.196416, multiplier: 5.2 },
-  { stepChance: 0.33, cumulativeChance: 0.06481728, multiplier: 15.74 },
-  { stepChance: 0.21, cumulativeChance: 0.0136116288, multiplier: 74.94 },
-  { stepChance: 0.1, cumulativeChance: 0.00136116288, multiplier: 749.36 },
+  { stepChance: 0.88, cumulativeChance: 0.88, multiplier: 1.12 },
+  { stepChance: 0.75, cumulativeChance: 0.66, multiplier: 1.49 },
+  { stepChance: 0.62, cumulativeChance: 0.4092, multiplier: 2.42 },
+  { stepChance: 0.48, cumulativeChance: 0.196416, multiplier: 5.02 },
+  { stepChance: 0.33, cumulativeChance: 0.06481728, multiplier: 15.2 },
+  { stepChance: 0.21, cumulativeChance: 0.0136116288, multiplier: 72.3 },
+  { stepChance: 0.1, cumulativeChance: 0.00136116288, multiplier: 723 },
 ];
 
 export const CARD_BETS = {
-  odd: { label: "홀수", chance: 0.5, multiplier: 2.04, test: (n) => n % 2 === 1 },
-  even: { label: "짝수", chance: 0.5, multiplier: 2.04, test: (n) => n % 2 === 0 },
-  ge7: { label: "7 이상", chance: 0.4, multiplier: 2.55, test: (n) => n >= 7 },
-  ge8: { label: "8 이상", chance: 0.3, multiplier: 3.4, test: (n) => n >= 8 },
-  ge9: { label: "9 이상", chance: 0.2, multiplier: 5.1, test: (n) => n >= 9 },
-  exact: { label: "정확한 숫자", chance: 0.1, multiplier: 10.2 },
+  odd: { label: "홀수", chance: 0.5, multiplier: 1.97, test: (n) => n % 2 === 1 },
+  even: { label: "짝수", chance: 0.5, multiplier: 1.97, test: (n) => n % 2 === 0 },
+  ge7: { label: "7 이상", chance: 0.4, multiplier: 2.46, test: (n) => n >= 7 },
+  ge8: { label: "8 이상", chance: 0.3, multiplier: 3.28, test: (n) => n >= 8 },
+  ge9: { label: "9 이상", chance: 0.2, multiplier: 4.92, test: (n) => n >= 9 },
+  exact: { label: "정확한 숫자", chance: 0.1, multiplier: 9.85 },
 };
 
 export const DART_BETS = {
-  wide: { label: "넓은 원", chance: 0.49, multiplier: 2.09, radius: 0.7 },
-  middle: { label: "중간 원", chance: 0.25, multiplier: 4.08, radius: 0.5 },
-  small: { label: "작은 원", chance: 0.0625, multiplier: 16.32, radius: 0.25 },
-  bullseye: { label: "불스아이", chance: 0.01, multiplier: 102, radius: 0.1 },
-  sector: { label: "특정 섹터", chance: 0.05, multiplier: 20.4, needsSector: true },
+  wide: { label: "넓은 원", chance: 0.49, multiplier: 2, radius: 0.7 },
+  middle: { label: "중간 원", chance: 0.25, multiplier: 3.92, radius: 0.5 },
+  small: { label: "작은 원", chance: 0.0625, multiplier: 15.68, radius: 0.25 },
+  bullseye: { label: "불스아이", chance: 0.01, multiplier: 98, radius: 0.1 },
+  sector: { label: "특정 섹터", chance: 0.05, multiplier: 19.6, needsSector: true },
   sector_middle: {
     label: "섹터 + 중간 원",
     chance: 0.0125,
-    multiplier: 81.6,
+    multiplier: 78.4,
     radius: 0.5,
     needsSector: true,
   },
   sector_bullseye: {
     label: "섹터 + 불스아이",
     chance: 0.0005,
-    multiplier: 2040,
+    multiplier: 1960,
     radius: 0.1,
     needsSector: true,
     event: true,
@@ -88,7 +88,8 @@ export function bombStage(bombCount, safeOpened) {
     };
   }
   const chanceValue = bombSurvivalChance(bombCount, safeOpened);
-  const targetRtp = 1.02;
+  const skillBonus = Math.min(0.017, safeOpened * 0.0015 + bombCount * 0.0008);
+  const targetRtp = Math.min(0.992, 0.975 + skillBonus);
   return {
     chance: chanceValue,
     targetRtp,

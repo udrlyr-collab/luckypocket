@@ -22,6 +22,7 @@ export default function ProfilePage() {
   const { user, logout, refreshUser } = useAuth();
   const [summary, setSummary] = useState(null);
   const [gameStats, setGameStats] = useState([]);
+  const [seasonResults, setSeasonResults] = useState([]);
   const [range, setRange] = useState("day");
   const [scaleMode, setScaleMode] = useState("zoom");
   const [history, setHistory] = useState(null);
@@ -34,12 +35,14 @@ export default function ProfilePage() {
   const achievements = user.achievements || [];
 
   const loadProfile = async () => {
-    const [summaryData, statsData] = await Promise.all([
+    const [summaryData, statsData, seasonData] = await Promise.all([
       api("/profile/summary"),
       api("/profile/game-stats"),
+      api("/me/season-results"),
     ]);
     setSummary(summaryData.summary);
     setGameStats(statsData.stats);
+    setSeasonResults(seasonData.results || []);
   };
 
   useEffect(() => {
@@ -184,6 +187,49 @@ export default function ProfilePage() {
           />
         )}
       </div>
+
+      <section className="soft-card mb-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="eyebrow">Season records</p>
+            <h2 className="section-title text-xl">이전 시즌 기록</h2>
+            <p className="mt-1 text-xs font-bold text-base-content/45">
+              시즌 종료 시점의 순위와 최종 평가 자산입니다.
+            </p>
+          </div>
+          <span className="badge badge-primary badge-outline font-black">
+            {seasonResults.length.toLocaleString("ko-KR")}개 시즌
+          </span>
+        </div>
+        <div className="mt-4 grid gap-2">
+          {seasonResults.slice(0, 8).map((row) => (
+            <article key={row.id} className="grid gap-2 rounded-2xl border border-base-300 bg-base-100 p-4 sm:grid-cols-[auto_1fr_auto] sm:items-center">
+              <span className="badge badge-primary badge-outline font-black">
+                시즌 {row.seasonNumber}
+              </span>
+              <div className="min-w-0">
+                <strong className="block text-lg font-black tabular-nums">
+                  {row.rank.toLocaleString("ko-KR")}위
+                </strong>
+                <span className="text-xs font-bold text-base-content/45">
+                  게임 {row.totalGames.toLocaleString("ko-KR")}판 · 다음 시즌 시작 자산 {formatMoney(row.startingBonusForNextSeason)}
+                </span>
+              </div>
+              <div className="text-left sm:text-right">
+                <span className="block text-xs font-bold text-base-content/45">최종 평가 자산</span>
+                <strong className="font-black text-primary tabular-nums">
+                  {formatMoney(row.finalTotalEvaluatedAsset)}
+                </strong>
+              </div>
+            </article>
+          ))}
+          {seasonResults.length === 0 && (
+            <p className="rounded-2xl bg-base-200 p-6 text-center text-sm font-bold text-base-content/50">
+              아직 종료된 시즌 기록이 없습니다.
+            </p>
+          )}
+        </div>
+      </section>
 
       <section className="soft-card asset-chart-card mb-8 min-w-0 overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-4">

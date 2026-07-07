@@ -15,6 +15,7 @@ import {
   isStockMarketOpen,
   setStockMarketOpen,
 } from "../services/marketStateService.js";
+import { endCurrentSeason } from "../services/seasonService.js";
 
 export const adminRouter = Router();
 adminRouter.use(requireAuth);
@@ -111,6 +112,30 @@ adminRouter.post("/users/bulk/reset", (req, res) => {
     });
   } catch (error) {
     return res.status(400).json({ message: error.message });
+  }
+});
+
+adminRouter.post("/seasons/end-current", (req, res, next) => {
+  if (req.user.username !== "admin") {
+    return res.status(403).json({ message: "admin 계정만 시즌을 종료할 수 있어요." });
+  }
+  try {
+    const result = endCurrentSeason(db, req.user);
+    return res.json({
+      message: `시즌 ${result.endedSeason.season_number}이 종료되고 시즌 ${result.newSeason.season_number}이 시작되었어요.`,
+      endedSeason: {
+        id: result.endedSeason.id,
+        seasonNumber: result.endedSeason.season_number,
+      },
+      newSeason: {
+        id: result.newSeason.id,
+        seasonNumber: result.newSeason.season_number,
+      },
+      top3: result.top3,
+      userCount: result.userCount,
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -382,15 +407,41 @@ adminRouter.post("/stocks/:id/resume", (req, res) => {
 adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
   const stockId = Number(req.params.id);
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  const dayOpenPrice = stock
+    ? Math.max(1, Math.floor(Number(stock.current_price) || 1))
+    : 1;
+  const dailyHighLimitPrice = Math.floor(dayOpenPrice * 1.15);
+  const dailyLowLimitPrice = Math.max(1, Math.floor(dayOpenPrice * 0.87));
   if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
   
   db.prepare(`
     UPDATE stocks 
     SET is_bluechip = 1, 
         blue_chip_selected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 
-        blue_chip_selected_by_user_id = ? 
+        blue_chip_selected_by_user_id = ?,
+        blue_chip_cancelled_at = NULL,
+        blue_chip_day_open_price = ?,
+        blue_chip_day_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        blue_chip_daily_high_limit_price = ?,
+        blue_chip_daily_low_limit_price = ?
     WHERE id = ?
-  `).run(req.user.id, stockId);
+  `).run(
+    req.user.id,
+    dayOpenPrice,
+    dailyHighLimitPrice,
+    dailyLowLimitPrice,
+    stockId,
+  );
+
+  db.prepare(`
+    INSERT INTO stock_events (stock_id, event_type, title, message)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    stockId,
+    "blue_chip_selected",
+    "우량주 선정",
+    `${stock.name}이 우량주로 선정됐어요. 24시간 등락 제한은 -13% ~ +15%입니다.`,
+  );
   
   return res.json({ message: "해당 종목을 우량주로 선정했습니다." });
 });
@@ -406,6 +457,16 @@ adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
         blue_chip_cancelled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') 
     WHERE id = ?
   `).run(stockId);
+
+  db.prepare(`
+    INSERT INTO stock_events (stock_id, event_type, title, message)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    stockId,
+    "blue_chip_cancelled",
+    "우량주 취소",
+    `${stock.name}의 우량주 지정이 취소됐어요.`,
+  );
   
   return res.json({ message: "해당 종목의 우량주 지정을 취소했습니다." });
 });

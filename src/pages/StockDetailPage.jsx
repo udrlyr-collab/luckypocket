@@ -12,6 +12,8 @@ export default function StockDetailPage() {
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const [data, setData] = useState(null);
+  const [topHolders, setTopHolders] = useState([]);
+  const [topPositions, setTopPositions] = useState([]);
   const [nextTickAt, setNextTickAt] = useState(null);
   const [timeRemaining, setTimeRemaining] = useState(10);
   const [ipoTimeRemaining, setIpoTimeRemaining] = useState(0);
@@ -31,8 +33,14 @@ export default function StockDetailPage() {
 
   const fetchStock = async () => {
     try {
-      const res = await api(`/stocks/${id}`);
+      const [res, holdersData, positionsData] = await Promise.all([
+        api(`/stocks/${id}`),
+        api(`/stocks/${id}/top-holders?limit=5`),
+        api(`/stocks/${id}/top-positions?limit=5`),
+      ]);
       setData(res);
+      setTopHolders(holdersData.holders || []);
+      setTopPositions(positionsData.positions || []);
       setNextTickAt(new Date(res.nextTickAt || Date.now() + 10000).getTime());
     } catch (e) {
       setError(e.message);
@@ -236,6 +244,13 @@ export default function StockDetailPage() {
   };
 
   const todayRate = ((stock.current_price - stock.initial_price) / stock.initial_price) * 100;
+  const blueChipDayOpenPrice = Number(stock.blue_chip_day_open_price || 0);
+  const blueChipDailyChangeRate = blueChipDayOpenPrice > 0
+    ? (stock.current_price - blueChipDayOpenPrice) / blueChipDayOpenPrice
+    : null;
+  const blueChipDailyChangePercent = blueChipDailyChangeRate === null
+    ? null
+    : `${blueChipDailyChangeRate > 0 ? "+" : ""}${(blueChipDailyChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
   return (
     <div className="page-content">
@@ -290,6 +305,41 @@ export default function StockDetailPage() {
       <section className="soft-card mb-6 p-4">
         <StockChart history={history} isDelisted={isDelisted} />
       </section>
+
+      {stock.is_bluechip === 1 && (
+        <section className="soft-card mb-6 border-2 border-info/20 bg-info/5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+            <div>
+              <p className="text-xs font-black tracking-widest text-info mb-1">BLUE CHIP LIMIT</p>
+              <h2 className="section-title text-xl mb-2">우량주 24시간 등락 제한</h2>
+              <p className="text-sm font-bold text-base-content/60">
+                하루 시작가 대비 -13% ~ +15% 범위 안에서만 움직입니다.
+              </p>
+            </div>
+            <div className={`text-3xl font-black tabular-nums ${blueChipDailyChangeRate > 0 ? "text-success" : blueChipDailyChangeRate < 0 ? "text-error" : "text-base-content"}`}>
+              {blueChipDailyChangePercent || "0.00%"}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mt-5">
+            <div className="rounded-2xl bg-base-100/80 border border-base-300/50 p-4">
+              <p className="text-xs font-bold text-base-content/50 mb-1">오늘 기준가</p>
+              <p className="font-black tabular-nums">{formatMoney(stock.blue_chip_day_open_price || stock.current_price)}</p>
+            </div>
+            <div className="rounded-2xl bg-base-100/80 border border-success/20 p-4">
+              <p className="text-xs font-bold text-base-content/50 mb-1">오늘 상한</p>
+              <p className="font-black tabular-nums text-success">{formatMoney(stock.blue_chip_daily_high_limit_price || Math.floor(stock.current_price * 1.15))}</p>
+            </div>
+            <div className="rounded-2xl bg-base-100/80 border border-error/20 p-4">
+              <p className="text-xs font-bold text-base-content/50 mb-1">오늘 하한</p>
+              <p className="font-black tabular-nums text-error">{formatMoney(stock.blue_chip_daily_low_limit_price || Math.max(1, Math.floor(stock.current_price * 0.87)))}</p>
+            </div>
+            <div className="rounded-2xl bg-base-100/80 border border-info/20 p-4">
+              <p className="text-xs font-bold text-base-content/50 mb-1">1틱 최대 변동</p>
+              <p className="font-black tabular-nums text-info">±0.0016%</p>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ADMIN CONTROL PANEL */}
       {isAdmin && (
@@ -631,6 +681,21 @@ export default function StockDetailPage() {
         </section>
       </div>
 
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <StockTopList
+          title="대주주 TOP 5"
+          emptyText="아직 이 종목을 많이 보유한 유저가 없어요."
+          rows={topHolders}
+          type="holders"
+        />
+        <StockTopList
+          title="레버리지 TOP 5"
+          emptyText="아직 열린 레버리지 포지션이 없어요."
+          rows={topPositions}
+          type="positions"
+        />
+      </div>
+
       {/* ACQUISITION PANEL */}
       {!isAcquired && !isDelisted && stock.status !== 'ipo' && (
         <section className="mt-6 soft-card border-2 border-primary/20 flex flex-col sm:flex-row gap-4 items-center justify-between">
@@ -700,6 +765,98 @@ export default function StockDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+function formatRate(rate) {
+  const value = Number(rate || 0) * 100;
+  return `${value > 0 ? "+" : ""}${value.toLocaleString(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1,
+  })}%`;
+}
+
+function StockTopList({ title, emptyText, rows, type }) {
+  return (
+    <section className="soft-card min-w-0">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div>
+          <p className="eyebrow">Stock ranking</p>
+          <h2 className="section-title text-xl">{title}</h2>
+        </div>
+        <span className="badge badge-primary badge-outline font-black">
+          TOP {Math.min(5, rows.length || 5)}
+        </span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="rounded-2xl bg-base-200/50 p-5 text-center text-sm font-bold text-base-content/45">
+          {emptyText}
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {rows.map((row) =>
+            type === "holders" ? (
+              <article
+                key={`${type}-${row.rank}-${row.userId}`}
+                className="rounded-2xl border border-base-300/60 bg-base-100/80 p-4"
+              >
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <strong className="block truncate text-base">
+                      {row.rank}위 {row.nickname}
+                    </strong>
+                    <p className="mt-1 text-xs font-bold text-base-content/50">
+                      보유 {Number(row.quantity).toLocaleString("ko-KR")}주 · 평균 {formatMoney(row.averagePrice)}
+                    </p>
+                  </div>
+                  <strong className="shrink-0 tabular-nums text-primary">
+                    {formatMoney(row.holdingValue)}
+                  </strong>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold text-base-content/60">
+                  <span>현재가 {formatMoney(row.currentPrice)}</span>
+                  <span className={row.profit >= 0 ? "text-success" : "text-error"}>
+                    손익 {formatSignedMoney(row.profit)} · {formatRate(row.profitRate)}
+                  </span>
+                </div>
+              </article>
+            ) : (
+              <article
+                key={`${type}-${row.rank}-${row.userId}`}
+                className="rounded-2xl border border-base-300/60 bg-base-100/80 p-4"
+              >
+                <div className="mb-2 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <strong className="block truncate text-base">
+                      {row.rank}위 {row.nickname}
+                    </strong>
+                    <p className="mt-1 text-xs font-bold text-base-content/50">
+                      <span className={row.side === "short" ? "text-error" : "text-success"}>
+                        {row.side === "short" ? "숏" : "롱"} {row.leverage}x
+                      </span>{" "}
+                      · 증거금 {formatMoney(row.marginAmount)}
+                    </p>
+                  </div>
+                  <strong className="shrink-0 tabular-nums text-primary">
+                    {formatMoney(row.positionSize)}
+                  </strong>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs font-bold text-base-content/60">
+                  <span>보유 {Number(row.quantity).toLocaleString("ko-KR")}주</span>
+                  <span>진입가 {formatMoney(row.entryPrice)}</span>
+                  <span>현재가 {formatMoney(row.currentPrice)}</span>
+                  <span>청산가 {formatMoney(row.liquidationPrice)}</span>
+                  <span className={`col-span-2 ${row.unrealizedPnl >= 0 ? "text-success" : "text-error"}`}>
+                    미실현 손익 {formatSignedMoney(row.unrealizedPnl)} · {formatRate(row.profitRate)}
+                  </span>
+                </div>
+              </article>
+            ),
+          )}
+        </div>
+      )}
+    </section>
   );
 }
 

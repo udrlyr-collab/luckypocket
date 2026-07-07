@@ -2,7 +2,8 @@ import { RISK_STAGES, payoutFor } from "./gameMath.js";
 
 /** 고액 배팅 배당률 조정 상수 */
 const THRESHOLD = 5_000_000;
-const MIN_RTP = 1.01;
+const HIGH_BET_MIN_RTP = 0.96;
+const MIN_RTP = HIGH_BET_MIN_RTP;
 const TAPER_ALPHA = 0.45;
 
 /**
@@ -10,7 +11,7 @@ const TAPER_ALPHA = 0.45;
  * - betAmount <= THRESHOLD 이면 baseMultiplier 그대로 반환
  * - betAmount > THRESHOLD 이면 연속 함수(power-law)로 점진 감소
  * - 총 지급액은 배팅금이 커질수록 항상 증가
- * - 고액 배팅의 기대 지급률(RTP)은 최소 MIN_RTP(101%)까지 점진 조정
+ * - 고액 배팅의 기대 지급률(RTP)은 HIGH_BET_MIN_RTP(96%)까지 점진 조정
  */
 export function getAdjustedMultiplier({ betAmount, baseMultiplier, cumulativeProbability }) {
   if (betAmount <= THRESHOLD) {
@@ -19,7 +20,7 @@ export function getAdjustedMultiplier({ betAmount, baseMultiplier, cumulativePro
 
   const baseRtp = cumulativeProbability * baseMultiplier;
   const taperRatio = Math.pow(THRESHOLD / betAmount, TAPER_ALPHA);
-  const targetRtp = MIN_RTP + (baseRtp - MIN_RTP) * taperRatio;
+  const targetRtp = HIGH_BET_MIN_RTP + (baseRtp - HIGH_BET_MIN_RTP) * taperRatio;
   const adjustedMultiplier = targetRtp / cumulativeProbability;
 
   return adjustedMultiplier;
@@ -113,4 +114,4 @@ export function calculateRiskCashoutPayout(betAmount, stage) {
   };
 }
 
-export { THRESHOLD, MIN_RTP, TAPER_ALPHA };
+export { THRESHOLD, HIGH_BET_MIN_RTP, MIN_RTP, TAPER_ALPHA };

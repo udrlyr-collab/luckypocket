@@ -5,18 +5,31 @@ import { formatMoney } from "../src/utils/format.js";
 import { RISK_STAGES } from "../server/services/gameMath.js";
 import {
   getAdjustedMultiplier,
+  HIGH_BET_MIN_RTP,
   MIN_RTP,
   THRESHOLD,
 } from "../server/services/riskPayoutService.js";
 import {
+  BLUE_CHIP_DAILY_MAX_GAIN,
+  BLUE_CHIP_DAILY_MAX_LOSS,
+  BLUE_CHIP_TICK_MAX_GAIN,
+  BLUE_CHIP_TICK_MAX_LOSS,
+  calculateBlueChipDailyLimits,
   enforceStockMarketLimit,
   getMarketCapPolicyState,
   minimumSharesForTradableMarketCap,
   requiredCompanyAcquisitionBalance,
   shouldDelistOwnerEtf,
+  STOCK_TICK_INTERVAL_SECONDS,
   STOCK_MARKET_POLICY,
 } from "../server/services/stockService.js";
 import { calculateUserTotalEvaluatedAsset } from "../server/services/portfolioValuationService.js";
+import {
+  applyLuckTicketPayout,
+  getDailyLuckTicketStatus,
+  prepareLuckTicket,
+  RTP_POLICY,
+} from "../server/services/economyRtpService.js";
 
 test("money is displayed with Korean large-number units", () => {
   assert.equal(formatMoney(140_100_000_000), "1,401억원");
@@ -25,7 +38,7 @@ test("money is displayed with Korean large-number units", () => {
   assert.ok(formatMoney(1.63e242).length < 40);
 });
 
-test("high risk-button bets remain above 100% RTP without decreasing payouts", () => {
+test("high risk-button bets taper below 100% RTP without decreasing payouts", () => {
   const stage = RISK_STAGES[4];
   const bets = [THRESHOLD, THRESHOLD * 10, THRESHOLD * 100];
   const payouts = bets.map((betAmount) => {
@@ -35,12 +48,50 @@ test("high risk-button bets remain above 100% RTP without decreasing payouts", (
       cumulativeProbability: stage.cumulativeChance,
     });
     const rtp = stage.cumulativeChance * multiplier;
-    assert.ok(rtp >= MIN_RTP);
-    assert.ok(rtp > 1);
+    assert.ok(rtp >= HIGH_BET_MIN_RTP);
+    assert.ok(rtp < 1);
     return Math.floor(betAmount * multiplier);
   });
   assert.ok(payouts[1] > payouts[0]);
   assert.ok(payouts[2] > payouts[1]);
+  assert.equal(MIN_RTP, HIGH_BET_MIN_RTP);
+});
+
+test("daily recovery and luck ticket policies use the configured caps", () => {
+  assert.equal(RTP_POLICY.dailyLossback.minimumNetLoss, 1_000_000);
+  assert.equal(RTP_POLICY.dailyLossback.rate, 0.05);
+  assert.equal(RTP_POLICY.dailyLossback.maximumAmount, 200_000);
+  assert.equal(RTP_POLICY.dailyLuckTickets.count, 3);
+  assert.equal(RTP_POLICY.dailyLuckTickets.maxBetAmount, 100_000);
+  assert.equal(RTP_POLICY.dailyLuckTickets.rtpBoost, 0.03);
+
+  const database = new Database(":memory:");
+  database.exec(`
+    CREATE TABLE asset_events (
+      id INTEGER PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    );
+  `);
+  const status = getDailyLuckTicketStatus(database, 1);
+  assert.equal(status.remaining, 3);
+  const ticket = prepareLuckTicket(database, {
+    userId: 1,
+    bet: 100_000,
+    useLuckTicket: true,
+  });
+  const boosted = applyLuckTicketPayout(1_000_000, ticket);
+  assert.equal(boosted.payout, 1_030_000);
+  assert.equal(boosted.luckTicket.payoutBoostAmount, 30_000);
+  assert.throws(() =>
+    prepareLuckTicket(database, {
+      userId: 1,
+      bet: 100_001,
+      useLuckTicket: true,
+    }),
+  );
+  database.close();
 });
 
 test("stock policy caps ordinary and IPO tick volatility", () => {
@@ -52,11 +103,36 @@ test("stock policy caps ordinary and IPO tick volatility", () => {
   assert.equal(STOCK_MARKET_POLICY.cautionRequiredTicks, 3);
   assert.equal(STOCK_MARKET_POLICY.recoveryRequiredTicks, 60);
   assert.equal(STOCK_MARKET_POLICY.delistReviewMaxTicks, 180);
-  assert.equal(STOCK_MARKET_POLICY.newlyListedDurationMs, 60_000);
   assert.ok(STOCK_MARKET_POLICY.regularMaxTickVolatility <= 0.015);
-  assert.ok(STOCK_MARKET_POLICY.bluechipMaxTickVolatility <= 0.003);
+  assert.equal(STOCK_MARKET_POLICY.bluechipMaxTickVolatility, BLUE_CHIP_TICK_MAX_GAIN);
+  assert.ok(STOCK_MARKET_POLICY.bluechipMaxTickVolatility < 0.00002);
   assert.ok(STOCK_MARKET_POLICY.ipoMaxVolatility <= 0.025);
   assert.equal(STOCK_MARKET_POLICY.ownerEtfDelistPriceRatio, 0.15);
+});
+
+test("blue chip tick limits are derived from 24-hour daily caps", () => {
+  const ticksPerDay = (24 * 60 * 60) / STOCK_TICK_INTERVAL_SECONDS;
+  assert.equal(STOCK_TICK_INTERVAL_SECONDS, 10);
+  assert.equal(ticksPerDay, 8640);
+  assert.equal(BLUE_CHIP_DAILY_MAX_GAIN, 0.15);
+  assert.equal(BLUE_CHIP_DAILY_MAX_LOSS, -0.13);
+  assert.equal(
+    BLUE_CHIP_TICK_MAX_GAIN,
+    Math.pow(1 + BLUE_CHIP_DAILY_MAX_GAIN, 1 / ticksPerDay) - 1,
+  );
+  assert.equal(
+    BLUE_CHIP_TICK_MAX_LOSS,
+    Math.pow(1 + BLUE_CHIP_DAILY_MAX_LOSS, 1 / ticksPerDay) - 1,
+  );
+  assert.ok(BLUE_CHIP_TICK_MAX_GAIN > 0);
+  assert.ok(BLUE_CHIP_TICK_MAX_GAIN < 0.00002);
+  assert.ok(BLUE_CHIP_TICK_MAX_LOSS < 0);
+  assert.ok(BLUE_CHIP_TICK_MAX_LOSS > -0.00002);
+
+  const limits = calculateBlueChipDailyLimits(473_445);
+  assert.equal(limits.openPrice, 473_445);
+  assert.equal(limits.highLimitPrice, Math.floor(473_445 * 1.15));
+  assert.equal(limits.lowLimitPrice, Math.floor(473_445 * 0.87));
 });
 
 test("company acquisition requires cash equal to five times the acquisition cost", () => {

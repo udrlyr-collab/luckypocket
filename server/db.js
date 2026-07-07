@@ -16,6 +16,56 @@ db.pragma("foreign_keys = ON");
 db.pragma("busy_timeout = 5000");
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS seasons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_number INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    ended_at TEXT,
+    ended_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_season
+    ON seasons(status)
+    WHERE status = 'active';
+
+  CREATE TABLE IF NOT EXISTS season_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    season_number INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    nickname_snapshot TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    final_balance INTEGER NOT NULL,
+    final_stock_value INTEGER NOT NULL DEFAULT 0,
+    final_total_evaluated_asset INTEGER NOT NULL,
+    total_profit INTEGER NOT NULL DEFAULT 0,
+    total_games INTEGER NOT NULL DEFAULT 0,
+    starting_bonus_for_next_season INTEGER NOT NULL DEFAULT 1000000,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(season_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_season_results_season_rank
+    ON season_results(season_id, rank ASC);
+
+  CREATE TABLE IF NOT EXISTS user_season_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    season_number INTEGER NOT NULL,
+    notice_type TEXT NOT NULL,
+    seen_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, season_id, notice_type)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_season_notices_user
+    ON user_season_notices(user_id, seen_at, created_at DESC);
+
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -28,9 +78,22 @@ db.exec(`
     total_bet INTEGER NOT NULL DEFAULT 0,
     total_win INTEGER NOT NULL DEFAULT 0,
     total_loss INTEGER NOT NULL DEFAULT 0,
+    jackpot_tickets INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
+
+  CREATE TABLE IF NOT EXISTS jackpot_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    entry_date TEXT NOT NULL,
+    tickets INTEGER NOT NULL CHECK (tickets > 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, entry_date)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_jackpot_entries_date
+    ON jackpot_entries(entry_date);
 
   CREATE TABLE IF NOT EXISTS game_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +106,8 @@ db.exec(`
     balance_before INTEGER NOT NULL,
     balance_after INTEGER NOT NULL,
     detail_json TEXT NOT NULL DEFAULT '{}',
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -56,6 +121,8 @@ db.exec(`
     bet_amount INTEGER NOT NULL,
     state_json TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
@@ -68,6 +135,8 @@ db.exec(`
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     achievement_key TEXT NOT NULL,
     reward INTEGER NOT NULL,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     unlocked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(user_id, achievement_key)
   );
@@ -98,6 +167,8 @@ db.exec(`
     source_type TEXT,
     source_id TEXT,
     detail_json TEXT NOT NULL DEFAULT '{}',
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -119,6 +190,8 @@ db.exec(`
     sender_balance_after INTEGER NOT NULL,
     receiver_balance_before INTEGER NOT NULL,
     receiver_balance_after INTEGER NOT NULL,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -149,6 +222,8 @@ db.exec(`
     reward_amount INTEGER NOT NULL,
     balance_before INTEGER NOT NULL,
     balance_after INTEGER NOT NULL,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -181,6 +256,8 @@ db.exec(`
     metadata_json TEXT NOT NULL DEFAULT '{}',
     source_type TEXT,
     source_id TEXT,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -200,6 +277,8 @@ db.exec(`
     actual_reward INTEGER NOT NULL,
     balance_before INTEGER NOT NULL,
     balance_after INTEGER NOT NULL,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -235,6 +314,14 @@ db.exec(`
     delist_review_max_ticks INTEGER NOT NULL DEFAULT 180,
     final_crash_at TEXT,
     final_crash_reason TEXT,
+    is_bluechip INTEGER NOT NULL DEFAULT 0,
+    blue_chip_selected_at TEXT,
+    blue_chip_selected_by_user_id INTEGER,
+    blue_chip_cancelled_at TEXT,
+    blue_chip_day_open_price INTEGER,
+    blue_chip_day_started_at TEXT,
+    blue_chip_daily_high_limit_price INTEGER,
+    blue_chip_daily_low_limit_price INTEGER,
     etf_tracking_type TEXT,
     etf_base_price INTEGER,
     etf_base_top_balance INTEGER,
@@ -264,6 +351,8 @@ db.exec(`
     stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE RESTRICT,
     quantity INTEGER NOT NULL CHECK (quantity >= 0),
     average_price REAL NOT NULL DEFAULT 0,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     UNIQUE(user_id, stock_id)
@@ -283,9 +372,13 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'open',
     unrealized_pnl INTEGER NOT NULL DEFAULT 0,
     realized_pnl INTEGER NOT NULL DEFAULT 0,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     opened_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     closed_at TEXT,
-    liquidated_at TEXT
+    liquidated_at TEXT,
+    close_price INTEGER,
+    payout_amount INTEGER
   );
 
   CREATE INDEX IF NOT EXISTS idx_stock_positions_user_status
@@ -306,6 +399,8 @@ db.exec(`
     realized_pnl INTEGER NOT NULL DEFAULT 0,
     balance_before INTEGER NOT NULL,
     balance_after INTEGER NOT NULL,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
@@ -331,6 +426,63 @@ db.exec(`
   );
 `);
 
+function tableColumns(tableName) {
+  return new Set(
+    db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name),
+  );
+}
+
+function addColumnIfMissing(tableName, columnName, definition) {
+  const columns = tableColumns(tableName);
+  if (!columns.has(columnName)) {
+    db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+  }
+}
+
+db.exec(`
+  INSERT INTO seasons (season_number, status)
+  SELECT COALESCE((SELECT MAX(season_number) FROM seasons), 0) + 1, 'active'
+  WHERE NOT EXISTS (SELECT 1 FROM seasons WHERE status = 'active');
+`);
+
+addColumnIfMissing("season_results", "starting_bonus_for_next_season", "INTEGER NOT NULL DEFAULT 1000000");
+
+for (const tableName of [
+  "game_logs",
+  "game_sessions",
+  "user_achievements",
+  "asset_events",
+  "transfer_logs",
+  "bonus_code_redemptions",
+  "server_notifications",
+  "mine_logs",
+  "stock_holdings",
+  "stock_positions",
+  "stock_trades",
+]) {
+  addColumnIfMissing(tableName, "season_id", "INTEGER REFERENCES seasons(id) ON DELETE SET NULL");
+  addColumnIfMissing(tableName, "season_number", "INTEGER");
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_${tableName}_season_stamp
+    AFTER INSERT ON ${tableName}
+    WHEN NEW.season_id IS NULL
+    BEGIN
+      UPDATE ${tableName}
+      SET season_id = (SELECT id FROM seasons WHERE status = 'active' ORDER BY season_number DESC LIMIT 1),
+          season_number = (SELECT season_number FROM seasons WHERE status = 'active' ORDER BY season_number DESC LIMIT 1)
+      WHERE id = NEW.id;
+    END;
+
+    UPDATE ${tableName}
+    SET season_id = COALESCE(season_id, (SELECT id FROM seasons WHERE status = 'active' ORDER BY season_number DESC LIMIT 1)),
+        season_number = COALESCE(season_number, (SELECT season_number FROM seasons WHERE status = 'active' ORDER BY season_number DESC LIMIT 1))
+    WHERE season_id IS NULL OR season_number IS NULL;
+  `);
+}
+
+addColumnIfMissing("stock_positions", "close_price", "INTEGER");
+addColumnIfMissing("stock_positions", "payout_amount", "INTEGER");
+
 const stockColumns = new Set(
   db.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
 );
@@ -355,6 +507,38 @@ if (!stockColumns.has("blue_chip_selected_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_selected_by_user_id INTEGER");
   db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_cancelled_at TEXT");
 }
+
+if (!stockColumns.has("blue_chip_day_open_price")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_day_open_price INTEGER");
+}
+if (!stockColumns.has("blue_chip_day_started_at")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_day_started_at TEXT");
+}
+if (!stockColumns.has("blue_chip_daily_high_limit_price")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_daily_high_limit_price INTEGER");
+}
+if (!stockColumns.has("blue_chip_daily_low_limit_price")) {
+  db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_daily_low_limit_price INTEGER");
+}
+
+db.exec(`
+  UPDATE stocks
+  SET blue_chip_day_open_price = COALESCE(blue_chip_day_open_price, current_price),
+      blue_chip_day_started_at = COALESCE(
+        blue_chip_day_started_at,
+        blue_chip_selected_at,
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      ),
+      blue_chip_daily_high_limit_price = COALESCE(
+        blue_chip_daily_high_limit_price,
+        CAST(current_price * 1.15 AS INTEGER)
+      ),
+      blue_chip_daily_low_limit_price = COALESCE(
+        blue_chip_daily_low_limit_price,
+        MAX(1, CAST(current_price * 0.87 AS INTEGER))
+      )
+  WHERE is_bluechip = 1
+`);
 
 if (!stockColumns.has("is_trading_suspended")) {
   db.exec(

@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
 import ResultModal from "../components/ResultModal";
 import { useAuth } from "../context/AuthContext";
 import { cardBets } from "../data/games";
+import { formatMoney } from "../utils/format";
 
 export default function CardDrawGame() {
   const { user, refreshUser } = useAuth();
@@ -17,7 +18,22 @@ export default function CardDrawGame() {
   const [phase, setPhase] = useState("idle");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [benefits, setBenefits] = useState(null);
+  const [useLuckTicket, setUseLuckTicket] = useState(false);
   const spec = useMemo(() => cardBets.find((item) => item.key === condition), [condition]);
+  const luckTicketDisabled =
+    !benefits?.luckTickets?.remaining ||
+    Number(bet || 0) > (benefits?.luckTickets?.maxBetAmount || 0);
+
+  useEffect(() => {
+    api("/games/daily-benefits")
+      .then(setBenefits)
+      .catch(() => {});
+  }, [user.balance]);
+
+  useEffect(() => {
+    if (luckTicketDisabled) setUseLuckTicket(false);
+  }, [luckTicketDisabled]);
 
   const play = async () => {
     setBusy(true);
@@ -32,6 +48,7 @@ export default function CardDrawGame() {
           betAmount: Number(bet),
           condition,
           selectedNumber: condition === "exact" ? selectedNumber : undefined,
+          useLuckTicket,
         }),
       });
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -41,6 +58,7 @@ export default function CardDrawGame() {
       await new Promise((resolve) => setTimeout(resolve, 1100));
       setPhase("settled");
       await refreshUser();
+      api("/games/daily-benefits").then(setBenefits).catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 700));
       setResult(data);
     } catch (requestError) {
@@ -62,6 +80,25 @@ export default function CardDrawGame() {
       <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-5">
           <BetInput balance={user.balance} value={bet} onChange={setBet} />
+          <section className="soft-card border-2 border-secondary/20">
+            <label className="flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                className="checkbox checkbox-secondary mt-1"
+                checked={useLuckTicket}
+                disabled={busy || luckTicketDisabled}
+                onChange={(event) => setUseLuckTicket(event.target.checked)}
+              />
+              <span>
+                <strong className="block font-black">행운권 사용</strong>
+                <span className="mt-1 block text-xs font-bold leading-relaxed text-base-content/55">
+                  이 판은 보상이 3% 더 좋아져요. 남은 행운권{" "}
+                  {(benefits?.luckTickets?.remaining || 0).toLocaleString("ko-KR")}장 ·
+                  최대 {formatMoney(benefits?.luckTickets?.maxBetAmount || 100000)}
+                </span>
+              </span>
+            </label>
+          </section>
           <section className="soft-card">
             <h2 className="mb-3 font-black">어떤 숫자를 기다릴까요?</h2>
             <div className="grid grid-cols-2 gap-2">

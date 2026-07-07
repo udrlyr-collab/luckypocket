@@ -9,19 +9,42 @@ import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/for
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 
 export default function HomePage() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
   const [logs, setLogs] = useState([]);
   const [rankings, setRankings] = useState([]);
   const [serverStats, setServerStats] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  const [jackpotData, setJackpotData] = useState(null);
+  const [jackpotBusy, setJackpotBusy] = useState(false);
+  const [jackpotMessage, setJackpotMessage] = useState("");
+  const [showNewsModal, setShowNewsModal] = useState(false);
+  const [timeUntilMidnight, setTimeUntilMidnight] = useState("");
+
+  useEffect(() => {
+    const updateTimer = () => {
+      const now = new Date();
+      const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
+      const nextMidnightKst = new Date(kstNow);
+      nextMidnightKst.setUTCHours(24, 0, 0, 0);
+      const ms = nextMidnightKst.getTime() - kstNow.getTime();
+      const h = Math.floor(ms / (1000 * 60 * 60));
+      const m = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+      const s = Math.floor((ms % (1000 * 60)) / 1000);
+      setTimeUntilMidnight(`${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`);
+    };
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, []);
   const [showNewsModal, setShowNewsModal] = useState(false);
 
   useEffect(() => {
-    Promise.all([api("/logs"), api("/rankings")])
-      .then(([logData, rankData]) => {
+    Promise.all([api("/logs"), api("/rankings"), api("/games/daily-jackpot")])
+      .then(([logData, rankData, jackpotDataResult]) => {
         setLogs(logData.logs.slice(0, 5));
         setRankings(rankData.rankings.slice(0, 3));
+        setJackpotData(jackpotDataResult);
       })
       .catch(() => {});
   }, [user.balance]);
@@ -48,46 +71,55 @@ export default function HomePage() {
   const isLowBalance = user.balance < 500000;
   const latestNews = notifications[0];
 
+  const applyJackpot = async () => {
+    setJackpotBusy(true);
+    setJackpotMessage("");
+    try {
+      const data = await api("/games/daily-jackpot/apply", { method: "POST" });
+      setJackpotMessage(data.message);
+      setJackpotData((current) => current ? { ...current, myTickets: 0, appliedTickets: data.totalApplied } : current);
+      await refreshUser();
+    } catch (error) {
+      setJackpotMessage(error.message);
+    } finally {
+      setJackpotBusy(false);
+    }
+  };
+
   return (
     <div className="page-content">
       {/* Hero Card */}
       <section className="mb-8 grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
-        <div className="balance-summary-card m-0! shadow-md">
-          <div className="balance-summary-owner">
-            <span className="balance-summary-pouch" aria-hidden="true">👛</span>
-            <div className="min-w-0">
-              <p className="text-xs font-black text-primary/80">행운주머니가 이만큼 자랐어요</p>
-              <h2 className="mt-1 text-base font-black break-keep">{user.nickname}님의 주머니</h2>
+        <div className="soft-card flex flex-col justify-between p-6 shadow-md bg-gradient-to-br from-base-100 to-base-200">
+          <div className="flex items-center gap-4 mb-6">
+            <div className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-3xl shadow-inner">👛</div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-black tracking-widest text-primary/80 uppercase">행운주머니가 이만큼 자랐어요</p>
+              <h2 className="mt-1 text-xl font-black truncate">{user.nickname}님의 주머니</h2>
             </div>
           </div>
-          <div className="balance-summary-main border-b-0 pb-0">
-            <span className="summary-label">총 평가 자산</span>
-            <strong className="balance-summary-amount">
+          <div className="mb-6">
+            <span className="text-xs font-bold text-base-content/50">총 평가 자산</span>
+            <strong className="mt-1 block text-4xl font-black tracking-tight text-primary tabular-nums break-words" style={{wordBreak: "break-all"}}>
               <AnimatedMoney value={user.totalAsset || user.balance} />
             </strong>
-            <span className={`mt-2 inline-flex items-center gap-1 text-sm font-black tabular-nums ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
+            <span className={`mt-2 inline-flex items-center gap-1 text-sm font-bold ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
               {todayProfit >= 0 ? "↗" : "↘"} 오늘 손익 {formatSignedMoney(todayProfit)}
             </span>
           </div>
-          <div className="balance-summary-metrics">
-            <div className="balance-summary-metric">
-              <span className="text-xl" aria-hidden="true">✨</span>
-              <div className="min-w-0">
-                <span className="summary-label">최고 자산</span>
-                <strong className="block truncate text-sm font-black tabular-nums">{formatMoney(user.highestBalance)}</strong>
-              </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="rounded-xl bg-base-100 p-4 shadow-sm">
+              <span className="text-[11px] font-bold text-base-content/50 flex items-center gap-1">✨ 최고 자산</span>
+              <strong className="mt-1 block truncate text-base font-black tabular-nums">{formatMoney(user.highestBalance)}</strong>
             </div>
-            <div className="balance-summary-metric">
-              <span className="text-xl" aria-hidden="true">🏆</span>
-              <div className="min-w-0">
-                <span className="summary-label">내 순위</span>
-                <strong className="block truncate text-sm font-black tabular-nums">{user.currentRank ? `${user.currentRank.toLocaleString("ko-KR")}위` : "-"}</strong>
-                {user.totalUsers && <span className="text-[10px] font-bold text-base-content/40">전체 {user.totalUsers.toLocaleString("ko-KR")}명</span>}
-              </div>
+            <div className="rounded-xl bg-base-100 p-4 shadow-sm">
+              <span className="text-[11px] font-bold text-base-content/50 flex items-center gap-1">🏆 내 순위</span>
+              <strong className="mt-1 block truncate text-base font-black tabular-nums">{user.currentRank ? `${user.currentRank.toLocaleString("ko-KR")}위` : "-"}</strong>
+              {user.totalUsers && <span className="text-[10px] font-bold text-base-content/40 block mt-0.5">전체 {user.totalUsers.toLocaleString("ko-KR")}명</span>}
             </div>
           </div>
           {isLowBalance && (
-            <div className="relative z-10 mt-2 flex items-center justify-between rounded-xl bg-error/15 p-3 shadow-inner">
+            <div className="relative z-10 mt-4 flex items-center justify-between rounded-xl bg-error/15 p-3 shadow-inner">
               <div className="min-w-0 flex-1">
                 <span className="block text-xs font-black text-error-content/90">자산이 부족해졌어요.</span>
                 <span className="mt-0.5 block truncate text-[11px] font-bold text-error-content/60">탄광에서 자원을 캐서 다시 모아볼까요?</span>
@@ -130,6 +162,56 @@ export default function HomePage() {
               </p>
             )}
           </div>
+          {jackpotData && (
+            <div className="soft-card p-5 shadow-sm bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-950/20 dark:to-purple-950/20 border border-indigo-100 dark:border-indigo-900/50">
+              <div className="flex justify-between items-start">
+                <div>
+                  <p className="text-[10px] font-black tracking-widest text-indigo-500 uppercase">DAILY JACKPOT</p>
+                  <h3 className="mt-1 text-lg font-black text-indigo-950 dark:text-indigo-100">오늘의 잭팟</h3>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-black text-indigo-400">추첨까지 남은 시간</span>
+                  <strong className="block text-sm font-black text-indigo-600 dark:text-indigo-300 tabular-nums">
+                    {timeUntilMidnight}
+                  </strong>
+                </div>
+              </div>
+              
+              <div className="mt-4 rounded-2xl bg-white/60 dark:bg-black/20 p-4 border border-indigo-50 dark:border-indigo-900/30">
+                <span className="text-xs font-bold text-indigo-900/60 dark:text-indigo-200/60">누적 상금 금액</span>
+                <strong className="mt-1 block text-2xl font-black text-warning tabular-nums">
+                  {formatMoney(jackpotData.jackpotPool || 0)}
+                </strong>
+              </div>
+
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="rounded-2xl bg-white/60 dark:bg-black/20 p-3">
+                  <span className="text-[11px] font-bold text-indigo-900/60 dark:text-indigo-200/60">보유 행운권</span>
+                  <strong className="mt-1 block text-sm font-black text-secondary tabular-nums">
+                    {(jackpotData.myTickets || 0).toLocaleString("ko-KR")}장
+                  </strong>
+                </div>
+                <div className="rounded-2xl bg-white/60 dark:bg-black/20 p-3">
+                  <span className="text-[11px] font-bold text-indigo-900/60 dark:text-indigo-200/60">오늘 응모한 행운권</span>
+                  <strong className="mt-1 block text-sm font-black text-primary tabular-nums">
+                    {(jackpotData.appliedTickets || 0).toLocaleString("ko-KR")}장
+                  </strong>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-sm mt-3 w-full rounded-xl border-none bg-gradient-to-r from-indigo-500 to-purple-500 text-white hover:from-indigo-600 hover:to-purple-600 shadow-md shadow-indigo-500/20"
+                disabled={jackpotBusy || jackpotData.myTickets <= 0}
+                onClick={applyJackpot}
+              >
+                {jackpotBusy ? <span className="loading loading-spinner loading-sm" /> : "응모하기"}
+              </button>
+              <p className="mt-2 text-[10px] font-bold text-indigo-900/50 dark:text-indigo-200/50 text-center">
+                {jackpotMessage || "행운권 1장당 0.1%씩 가중치가 올라갑니다."}
+              </p>
+            </div>
+          )}
         </div>
       </section>
 
