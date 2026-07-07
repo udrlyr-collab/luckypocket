@@ -16,6 +16,11 @@ export default function StockMarketPage() {
   const [news, setNews] = useState([]);
   const [busy, setBusy] = useState(false);
   const lastIpoRefreshRef = useRef(0);
+  const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
+  const [blueChipStock, setBlueChipStock] = useState(null);
+  const [blueChipTargetPrice, setBlueChipTargetPrice] = useState("");
+  const [blueChipRampPercent, setBlueChipRampPercent] = useState("30");
+  const [blueChipReason, setBlueChipReason] = useState("우량주 편입 이벤트");
   const loading = !market || !portfolio;
   const {
     serverNow,
@@ -33,6 +38,35 @@ export default function StockMarketPage() {
       const isDelete = endpoint.includes('method=DELETE');
       const path = endpoint.split('?')[0];
       await api(path, { method: isDelete ? "DELETE" : "POST" });
+      await fetchMarket();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openBlueChipModal = (stock) => {
+    setBlueChipStock(stock);
+    setBlueChipTargetPrice("");
+    setBlueChipRampPercent("30");
+    setBlueChipReason("우량주 편입 이벤트");
+    setBlueChipModalOpen(true);
+  };
+
+  const submitBlueChip = async () => {
+    if (!blueChipStock || blueChipTargetPrice === "" || blueChipRampPercent === "") return;
+    setBusy(true);
+    try {
+      await api(`/admin/stocks/${blueChipStock.id}/blue-chip`, {
+        method: "POST",
+        body: JSON.stringify({
+          targetPrice: Number(blueChipTargetPrice),
+          rampPercentPerTick: Number(blueChipRampPercent),
+          reason: blueChipReason,
+        })
+      });
+      setBlueChipModalOpen(false);
       await fetchMarket();
     } catch (e) {
       alert(e.message);
@@ -198,6 +232,7 @@ export default function StockMarketPage() {
                   stock={stock}
                   isAdmin={isAdmin}
                   handleAdminAction={handleAdminAction}
+                  openBlueChipModal={openBlueChipModal}
                   remainingSecondsUntil={remainingSecondsUntil}
                 />
               ))}
@@ -211,6 +246,7 @@ export default function StockMarketPage() {
                         stock={stock}
                         isAdmin={isAdmin}
                         handleAdminAction={handleAdminAction}
+                        openBlueChipModal={openBlueChipModal}
                         remainingSecondsUntil={remainingSecondsUntil}
                       />
                     ))}
@@ -310,11 +346,85 @@ export default function StockMarketPage() {
           )}
         </BaseCard>
       </section>
+
+      {blueChipModalOpen && blueChipStock && (
+        <div className="modal modal-open">
+          <div className="modal-box rounded-3xl border border-base-300 shadow-xl max-w-md bg-base-100">
+            <h3 className="font-black text-lg text-base-content mb-4">⭐ 우량주 선정 및 급등 시작</h3>
+            <div className="text-sm text-base-content/70 mb-3">
+              종목명: <strong className="text-base-content font-black">{blueChipStock.name}</strong>
+            </div>
+
+            <div className="grid gap-3">
+              <div className="rounded-2xl bg-base-200/50 p-3 text-sm">
+                <span className="text-xs font-bold text-base-content/50">현재가</span>
+                <strong className="block text-primary text-base font-black">
+                  {formatMoney(blueChipStock.currentPrice || blueChipStock.current_price)}
+                </strong>
+              </div>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">목표주가</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  type="number"
+                  min="1"
+                  value={blueChipTargetPrice}
+                  onChange={(event) => setBlueChipTargetPrice(event.target.value)}
+                  placeholder="예: 30000"
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">tick당 상승률 (%)</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={blueChipRampPercent}
+                  onChange={(event) => setBlueChipRampPercent(event.target.value)}
+                  placeholder="예: 30"
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">사유</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  value={blueChipReason}
+                  onChange={(event) => setBlueChipReason(event.target.value)}
+                  placeholder="예: 우량주 편입 이벤트"
+                  maxLength={120}
+                />
+              </label>
+            </div>
+
+            <div className="modal-action mt-6 gap-2">
+              <button
+                type="button"
+                className="btn btn-outline rounded-2xl flex-1 h-12"
+                onClick={() => setBlueChipModalOpen(false)}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary rounded-2xl flex-1 h-12"
+                disabled={busy || blueChipTargetPrice === "" || blueChipRampPercent === ""}
+                onClick={submitBlueChip}
+              >
+                선택 및 급등 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </PageContainer>
   );
 }
 
-function StockRow({ stock, isAdmin, handleAdminAction, remainingSecondsUntil }) {
+function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remainingSecondsUntil }) {
   const isDelisted = stock.status === 'delisted';
   const isUp = stock.priceChangeAmount > 0;
   const isDown = stock.priceChangeAmount < 0;
@@ -347,17 +457,33 @@ function StockRow({ stock, isAdmin, handleAdminAction, remainingSecondsUntil }) 
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
           {Boolean(stock.is_etf) && <span className="badge badge-outline badge-primary badge-xs py-1 font-bold">인수자 ETF</span>}
           {stock.is_bluechip === 1 && <span className="badge badge-info badge-xs py-1 font-bold">우량주</span>}
+          {stock.blueChipRampActive && (
+            <span className="badge badge-error badge-xs py-1 font-bold text-white">목표주가 진행 중</span>
+          )}
+          {stock.adminPriceTargetActive && (
+            <span className="badge badge-warning badge-xs py-1 font-bold">목표주가 진행 중</span>
+          )}
           <StockTierBadge stock={stock} compact />
           {stock.is_trading_suspended === 1 && <span className="badge badge-error badge-xs py-1 font-bold">거래 정지</span>}
           {isDelisted && <span className="badge badge-ghost badge-xs py-1 font-bold">상장폐지</span>}
           <StockRiskBadges stock={stock} compact />
+
+          {(stock.blueChipRampActive || stock.adminPriceTargetActive) && (
+            <span className="text-[10px] font-bold text-base-content/65 ml-1">
+              {stock.blueChipRampActive ? (
+                `+${stock.blueChipRampPercentPerTick}%/틱 · 도달률 ${Math.min(100, Math.floor((stock.currentPrice / stock.blueChipTargetPrice) * 100))}%`
+              ) : (
+                `${stock.adminPriceTargetDirection === "up" ? "+" : "-"}${stock.adminPriceTargetPercentPerTick}%/틱 · 도달률 ${Math.min(100, Math.floor((stock.currentPrice / stock.adminPriceTarget) * 100))}%`
+              )}
+            </span>
+          )}
           
           {isAdmin && !isDelisted && (
             <div className="flex gap-1 ml-2 border-l border-base-200 pl-2">
               {stock.is_bluechip === 1 ? (
                 <button className="btn btn-xs btn-outline btn-warning" onClick={(e) => { e.preventDefault(); handleAdminAction(`/admin/stocks/${stock.id}/blue-chip?method=DELETE`); }}>우량주 취소</button>
               ) : stock.status !== 'ipo_subscription' && stock.status !== 'newly_listed' && !stock.is_etf ? (
-                <button className="btn btn-xs btn-outline btn-info" onClick={(e) => { e.preventDefault(); handleAdminAction(`/admin/stocks/${stock.id}/blue-chip`); }}>우량주 선정</button>
+                <button className="btn btn-xs btn-outline btn-info" onClick={(e) => { e.preventDefault(); openBlueChipModal(stock); }}>우량주 선정</button>
               ) : null}
             </div>
           )}

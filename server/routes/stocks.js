@@ -67,7 +67,24 @@ stocksRouter.get("/", (req, res) => {
       priceChangeAmount: s.current_price - s.previous_price,
       priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
       offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
+      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null,
+      is_bluechip: s.is_bluechip,
+      isBlueChip: s.is_bluechip === 1,
+      blueChipRampActive: s.blue_chip_ramp_active === 1,
+      blueChipTargetPrice: s.blue_chip_target_price,
+      blueChipRampPercentPerTick: s.blue_chip_ramp_percent_per_tick,
+      blueChipRampStartedAt: s.blue_chip_ramp_started_at,
+      blueChipRampEndedAt: s.blue_chip_ramp_ended_at,
+      blueChipRampReason: s.blue_chip_ramp_reason,
+      blueChipRampStartedByUserId: s.blue_chip_ramp_started_by_user_id,
+      adminPriceTargetActive: s.admin_price_target_active === 1,
+      adminPriceTarget: s.admin_price_target,
+      adminPriceTargetDirection: s.admin_price_target_direction,
+      adminPriceTargetPercentPerTick: s.admin_price_target_percent_per_tick,
+      adminPriceTargetStartedAt: s.admin_price_target_started_at,
+      adminPriceTargetEndedAt: s.admin_price_target_ended_at,
+      adminPriceTargetReason: s.admin_price_target_reason,
+      adminPriceTargetStartedByUserId: s.admin_price_target_started_by_user_id
     };
   };
 
@@ -461,7 +478,24 @@ stocksRouter.get("/:id", (req, res) => {
     priceChangeAmount: s.current_price - s.previous_price,
     priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
     offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-    offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
+    offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null,
+    is_bluechip: s.is_bluechip,
+    isBlueChip: s.is_bluechip === 1,
+    blueChipRampActive: s.blue_chip_ramp_active === 1,
+    blueChipTargetPrice: s.blue_chip_target_price,
+    blueChipRampPercentPerTick: s.blue_chip_ramp_percent_per_tick,
+    blueChipRampStartedAt: s.blue_chip_ramp_started_at,
+    blueChipRampEndedAt: s.blue_chip_ramp_ended_at,
+    blueChipRampReason: s.blue_chip_ramp_reason,
+    blueChipRampStartedByUserId: s.blue_chip_ramp_started_by_user_id,
+    adminPriceTargetActive: s.admin_price_target_active === 1,
+    adminPriceTarget: s.admin_price_target,
+    adminPriceTargetDirection: s.admin_price_target_direction,
+    adminPriceTargetPercentPerTick: s.admin_price_target_percent_per_tick,
+    adminPriceTargetStartedAt: s.admin_price_target_started_at,
+    adminPriceTargetEndedAt: s.admin_price_target_ended_at,
+    adminPriceTargetReason: s.admin_price_target_reason,
+    adminPriceTargetStartedByUserId: s.admin_price_target_started_by_user_id
   });
 
   const stockWithCalculations = processStock(stock);

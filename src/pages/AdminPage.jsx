@@ -68,8 +68,20 @@ export default function AdminPage() {
     mode: "percent",
     direction: "up",
     value: "",
+    targetPrice: "",
     reason: "",
   });
+  const [stockTarget, setStockTarget] = useState({
+    stockId: "",
+    targetPrice: "",
+    percentPerTick: "",
+    reason: "",
+  });
+  const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
+  const [blueChipStockId, setBlueChipStockId] = useState("");
+  const [blueChipTargetPrice, setBlueChipTargetPrice] = useState("");
+  const [blueChipRampPercent, setBlueChipRampPercent] = useState("30");
+  const [blueChipReason, setBlueChipReason] = useState("우량주 편입 이벤트");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -129,6 +141,11 @@ export default function AdminPage() {
           ...current,
           stockId: current.stockId || String(list[0]?.id || ""),
         }));
+        setStockTarget((current) => ({
+          ...current,
+          stockId: current.stockId || String(list[0]?.id || ""),
+        }));
+        setBlueChipStockId((current) => current || String(list[0]?.id || ""));
       })
       .catch(() => {});
   }, []);
@@ -260,7 +277,11 @@ export default function AdminPage() {
   };
 
   const applyStockAdjustment = async () => {
-    if (!stockAdjust.stockId || stockAdjust.value === "") return;
+    if (!stockAdjust.stockId) return;
+    const isSetPrice = stockAdjust.mode === "set_price";
+    if (!isSetPrice && stockAdjust.value === "") return;
+    if (isSetPrice && stockAdjust.targetPrice === "") return;
+
     setBusy(true);
     setError("");
     setMessage("");
@@ -269,8 +290,9 @@ export default function AdminPage() {
         method: "POST",
         body: JSON.stringify({
           mode: stockAdjust.mode,
-          direction: stockAdjust.direction,
-          value: Number(stockAdjust.value),
+          direction: isSetPrice ? undefined : stockAdjust.direction,
+          value: isSetPrice ? undefined : Number(stockAdjust.value),
+          targetPrice: isSetPrice ? Number(stockAdjust.targetPrice) : undefined,
           reason: stockAdjust.reason,
         }),
       });
@@ -278,7 +300,61 @@ export default function AdminPage() {
       const stockData = await api("/stocks");
       const list = (stockData.stocks || []).filter((stock) => stock.status !== "delisted");
       setStocks(list);
-      setStockAdjust((current) => ({ ...current, value: "", reason: "" }));
+      setStockAdjust((current) => ({ ...current, value: "", targetPrice: "", reason: "" }));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyStockTargetPriceEvent = async () => {
+    if (!stockTarget.stockId || stockTarget.targetPrice === "" || stockTarget.percentPerTick === "") return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/stocks/${stockTarget.stockId}/target-price`, {
+        method: "POST",
+        body: JSON.stringify({
+          targetPrice: Number(stockTarget.targetPrice),
+          percentPerTick: Number(stockTarget.percentPerTick),
+          reason: stockTarget.reason,
+        }),
+      });
+      setMessage(data.message);
+      setStockTarget((current) => ({
+        ...current,
+        targetPrice: "",
+        percentPerTick: "",
+        reason: "",
+      }));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyBlueChipDesignation = async () => {
+    if (!blueChipStockId || blueChipTargetPrice === "" || blueChipRampPercent === "") return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api(`/admin/stocks/${blueChipStockId}/blue-chip`, {
+        method: "POST",
+        body: JSON.stringify({
+          targetPrice: Number(blueChipTargetPrice),
+          rampPercentPerTick: Number(blueChipRampPercent),
+          reason: blueChipReason,
+        }),
+      });
+      setMessage(data.message);
+      setBlueChipModalOpen(false);
+      const stockData = await api("/stocks");
+      const list = (stockData.stocks || []).filter((stock) => stock.status !== "delisted");
+      setStocks(list);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -732,7 +808,7 @@ export default function AdminPage() {
                 : "상태 확인 중"}
           </span>
         </div>
-        <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="mt-4 grid grid-cols-3 gap-2">
           <button
             type="button"
             className="btn btn-success h-12 rounded-2xl"
@@ -749,15 +825,30 @@ export default function AdminPage() {
           >
             주식장 휴장
           </button>
+          <button
+            type="button"
+            className="btn btn-info h-12 rounded-2xl"
+            onClick={() => {
+              if (stocks.length > 0) {
+                setBlueChipStockId(String(stocks[0].id));
+                setBlueChipTargetPrice("");
+                setBlueChipRampPercent("30");
+                setBlueChipReason("우량주 편입 이벤트");
+                setBlueChipModalOpen(true);
+              }
+            }}
+          >
+            우량주 선정 및 급등 설정
+          </button>
         </div>
       </BaseCard>
 
       <BaseCard className="mt-6 border-2 border-info/25">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <SectionHeader title="주가 수동 조정" eyebrow="ADMIN STOCK CONTROL" className="mb-1" />
+            <SectionHeader title="주가 즉시 조정" eyebrow="ADMIN STOCK CONTROL" className="mb-1" />
             <p className="text-xs font-bold text-base-content/50">
-              선택한 종목의 현재가를 기준으로 퍼센트 또는 원 단위로 즉시 조정합니다.
+              선택한 종목의 현재가를 기준으로 퍼센트, 금액, 또는 직접 값을 정하여 즉시 조정합니다.
             </p>
           </div>
           <span className="badge badge-info badge-outline font-black">
@@ -805,42 +896,158 @@ export default function AdminPage() {
             >
               <option value="percent">퍼센트(%)</option>
               <option value="amount">금액(원)</option>
+              <option value="set_price">직접 가격설정(원)</option>
             </select>
           </label>
-          <label className="form-control">
-            <span className="label-text mb-1 font-bold">조정 방향</span>
-            <select
-              className="select select-bordered h-12 rounded-2xl"
-              value={stockAdjust.direction}
-              onChange={(event) =>
-                setStockAdjust((current) => ({ ...current, direction: event.target.value }))
-              }
-            >
-              <option value="up">상승</option>
-              <option value="down">하락</option>
-            </select>
-          </label>
+          {stockAdjust.mode !== "set_price" && (
+            <label className="form-control">
+              <span className="label-text mb-1 font-bold">조정 방향</span>
+              <select
+                className="select select-bordered h-12 rounded-2xl"
+                value={stockAdjust.direction}
+                onChange={(event) =>
+                  setStockAdjust((current) => ({ ...current, direction: event.target.value }))
+                }
+              >
+                <option value="up">상승</option>
+                <option value="down">하락</option>
+              </select>
+            </label>
+          )}
         </div>
 
         <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_auto]">
-          <input
-            className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
-            type="number"
-            min="0"
-            step={stockAdjust.mode === "percent" ? "0.1" : "1"}
-            value={stockAdjust.value}
-            onChange={(event) =>
-              setStockAdjust((current) => ({ ...current, value: event.target.value }))
-            }
-            placeholder={stockAdjust.mode === "percent" ? "예: 5" : "예: 500"}
-          />
+          {stockAdjust.mode === "set_price" ? (
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
+              type="number"
+              min="1"
+              value={stockAdjust.targetPrice}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, targetPrice: event.target.value }))
+              }
+              placeholder="예: 5000"
+            />
+          ) : (
+            <input
+              className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
+              type="number"
+              min="0"
+              step={stockAdjust.mode === "percent" ? "0.1" : "1"}
+              value={stockAdjust.value}
+              onChange={(event) =>
+                setStockAdjust((current) => ({ ...current, value: event.target.value }))
+              }
+              placeholder={stockAdjust.mode === "percent" ? "예: 5" : "예: 500"}
+            />
+          )}
           <button
             type="button"
             className="btn btn-primary h-12 whitespace-nowrap rounded-2xl"
-            disabled={busy || !stockAdjust.stockId || stockAdjust.value === ""}
+            disabled={
+              busy ||
+              !stockAdjust.stockId ||
+              (stockAdjust.mode !== "set_price" && stockAdjust.value === "") ||
+              (stockAdjust.mode === "set_price" && stockAdjust.targetPrice === "")
+            }
             onClick={applyStockAdjustment}
           >
-            주가 조정 적용
+            즉시 적용
+          </button>
+        </div>
+      </BaseCard>
+
+      <BaseCard className="mt-6 border-2 border-info/25">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <SectionHeader title="목표주가 이벤트" eyebrow="ADMIN TARGET PRICE" className="mb-1" />
+            <p className="text-xs font-bold text-base-content/50">
+              선택한 종목의 가격이 목표주가에 도달할 때까지 틱당 지정한 비율만큼 변동시킵니다.
+            </p>
+          </div>
+          <span className="badge badge-info badge-outline font-black">
+            현재가 {stocks.find(s => String(s.id) === String(stockTarget.stockId)) ? formatMoney(stocks.find(s => String(s.id) === String(stockTarget.stockId)).current_price || stocks.find(s => String(s.id) === String(stockTarget.stockId)).currentPrice) : "-"}
+          </span>
+        </div>
+
+        <div className="mt-4 grid gap-3 lg:grid-cols-2">
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">종목 선택</span>
+            <select
+              className="select select-bordered w-full h-12 min-w-0 rounded-2xl"
+              value={stockTarget.stockId}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, stockId: event.target.value }))
+              }
+            >
+              {stocks.map((stock) => (
+                <option key={stock.id} value={stock.id}>
+                  {stock.name} · {formatMoney(stock.current_price || stock.currentPrice)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1 block font-bold">사유</span>
+            <input
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
+              value={stockTarget.reason}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, reason: event.target.value }))
+              }
+              placeholder="사유 입력 (선택)"
+              maxLength={120}
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 block font-bold">목표주가</span>
+            <input
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
+              type="number"
+              min="1"
+              value={stockTarget.targetPrice}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, targetPrice: event.target.value }))
+              }
+              placeholder="예: 30000"
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 block font-bold">tick당 변동률 (%)</span>
+            <input
+              className="input input-bordered w-full h-12 min-w-0 rounded-2xl"
+              type="number"
+              min="1"
+              max="100"
+              value={stockTarget.percentPerTick}
+              onChange={(event) =>
+                setStockTarget((current) => ({ ...current, percentPerTick: event.target.value }))
+              }
+              placeholder="예: 20"
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="text-sm font-bold text-base-content/60">
+            예상 방향:{" "}
+            {stocks.find(s => String(s.id) === String(stockTarget.stockId)) && stockTarget.targetPrice ? (
+              Number(stockTarget.targetPrice) > (stocks.find(s => String(s.id) === String(stockTarget.stockId)).current_price || stocks.find(s => String(s.id) === String(stockTarget.stockId)).currentPrice) ? (
+                <span className="text-error font-black">상승 ▲</span>
+              ) : (
+                <span className="text-primary font-black">하락 ▼</span>
+              )
+            ) : (
+              "-"
+            )}
+          </span>
+          <button
+            type="button"
+            className="btn btn-primary h-12 whitespace-nowrap rounded-2xl px-6"
+            disabled={busy || !stockTarget.stockId || stockTarget.targetPrice === "" || stockTarget.percentPerTick === ""}
+            onClick={applyStockTargetPriceEvent}
+          >
+            목표주가 이벤트 시작
           </button>
         </div>
       </BaseCard>
@@ -948,6 +1155,104 @@ export default function AdminPage() {
           </p>
         )}
       </BaseCard>
+
+      {seasonConfirmOpen && (
+        <AdminConfirmModal
+          title="현재 시즌을 종료하고 다음 시즌을 시작할까요?"
+          beforeLabel="시즌 번호"
+          beforeValue={`시즌 ${seasonInfo?.season?.seasonNumber || ""}`}
+          afterLabel="정산 대상"
+          afterValue={`${(result?.total || 0).toLocaleString("ko-KR")}명`}
+          onConfirm={endCurrentSeason}
+          onClose={() => setSeasonConfirmOpen(false)}
+        />
+      )}
+
+      {blueChipModalOpen && (
+        <div className="modal modal-open">
+          <div className="modal-box rounded-3xl border border-base-300 shadow-xl max-w-md bg-base-100">
+            <h3 className="font-black text-lg text-base-content mb-4">⭐ 우량주 선정 및 급등 시작</h3>
+            
+            <div className="grid gap-3">
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">대상 종목</span>
+                <select
+                  className="select select-bordered w-full h-12 rounded-2xl"
+                  value={blueChipStockId}
+                  onChange={(event) => setBlueChipStockId(event.target.value)}
+                >
+                  {stocks.map((stock) => (
+                    <option key={stock.id} value={stock.id}>
+                      {stock.name} ({stock.is_bluechip === 1 ? "우량주" : "일반"})
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="rounded-2xl bg-base-200/50 p-3 text-sm">
+                <span className="text-xs font-bold text-base-content/50">현재가</span>
+                <strong className="block text-primary text-base font-black">
+                  {formatMoney(stocks.find(s => String(s.id) === String(blueChipStockId))?.current_price || stocks.find(s => String(s.id) === String(blueChipStockId))?.currentPrice || 0)}
+                </strong>
+              </div>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">목표주가</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  type="number"
+                  min="1"
+                  value={blueChipTargetPrice}
+                  onChange={(event) => setBlueChipTargetPrice(event.target.value)}
+                  placeholder="예: 30000"
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">tick당 상승률 (%)</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={blueChipRampPercent}
+                  onChange={(event) => setBlueChipRampPercent(event.target.value)}
+                  placeholder="예: 30"
+                />
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">사유</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl"
+                  value={blueChipReason}
+                  onChange={(event) => setBlueChipReason(event.target.value)}
+                  placeholder="예: 우량주 편입 이벤트"
+                  maxLength={120}
+                />
+              </label>
+            </div>
+
+            <div className="modal-action mt-6 gap-2">
+              <button
+                type="button"
+                className="btn btn-outline rounded-2xl flex-1 h-12"
+                onClick={() => setBlueChipModalOpen(false)}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary rounded-2xl flex-1 h-12"
+                disabled={busy || !blueChipStockId || blueChipTargetPrice === "" || blueChipRampPercent === ""}
+                onClick={applyBlueChipDesignation}
+              >
+                선택 및 급등 시작
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <p
         className={`mt-3 min-h-6 text-sm font-bold ${

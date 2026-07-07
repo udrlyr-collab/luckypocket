@@ -446,6 +446,7 @@ adminRouter.post("/stocks/:stockId/manual-adjust", (req, res) => {
       mode: req.body?.mode,
       direction: req.body?.direction,
       value: req.body?.value,
+      targetPrice: req.body?.targetPrice !== undefined ? Number(req.body.targetPrice) : undefined,
       reason: req.body?.reason,
     });
 
@@ -620,44 +621,90 @@ adminRouter.post("/stocks/:id/resume", (req, res) => {
 
 adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
   const stockId = Number(req.params.id);
+  const targetPrice = Number(req.body?.targetPrice);
+  const rampPercentPerTick = Number(req.body?.rampPercentPerTick);
+  const reason = String(req.body?.reason || "").trim().slice(0, 120);
+
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
-  const dayOpenPrice = stock
-    ? Math.max(1, Math.floor(Number(stock.current_price) || 1))
-    : 1;
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+
+  if (stock.status === 'acquired' || stock.is_etf === 1) {
+    return res.status(400).json({ message: "이미 인수자 ETF 종목이므로 우량주로 설정할 수 없습니다." });
+  }
+
+  if (!Number.isSafeInteger(targetPrice) || targetPrice <= stock.current_price) {
+    return res.status(400).json({ message: "목표주가는 현재가보다 높아야 해요." });
+  }
+
+  if (!Number.isFinite(rampPercentPerTick) || rampPercentPerTick < 1 || rampPercentPerTick > 100) {
+    return res.status(400).json({ message: "tick당 상승률은 1% ~ 100% 사이여야 해요." });
+  }
+
+  const dayOpenPrice = Math.max(1, Math.floor(Number(stock.current_price) || 1));
   const dailyHighLimitPrice = Math.floor(dayOpenPrice * 1.15);
   const dailyLowLimitPrice = Math.max(1, Math.floor(dayOpenPrice * 0.87));
-  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
-  
-  db.prepare(`
-    UPDATE stocks 
-    SET is_bluechip = 1, 
-        blue_chip_selected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 
-        blue_chip_selected_by_user_id = ?,
-        blue_chip_cancelled_at = NULL,
-        blue_chip_day_open_price = ?,
-        blue_chip_day_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        blue_chip_daily_high_limit_price = ?,
-        blue_chip_daily_low_limit_price = ?
-    WHERE id = ?
-  `).run(
-    req.user.id,
-    dayOpenPrice,
-    dailyHighLimitPrice,
-    dailyLowLimitPrice,
-    stockId,
-  );
 
-  db.prepare(`
-    INSERT INTO stock_events (stock_id, event_type, title, message)
-    VALUES (?, ?, ?, ?)
-  `).run(
-    stockId,
-    "blue_chip_selected",
-    "우량주 선정",
-    `${stock.name}이 우량주로 선정됐어요. 24시간 등락 제한은 -13% ~ +15%입니다.`,
-  );
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE stocks 
+      SET is_bluechip = 1, 
+          blue_chip_selected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), 
+          blue_chip_selected_by_user_id = ?,
+          blue_chip_cancelled_at = NULL,
+          blue_chip_day_open_price = ?,
+          blue_chip_day_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          blue_chip_daily_high_limit_price = ?,
+          blue_chip_daily_low_limit_price = ?,
+          blue_chip_ramp_active = 1,
+          blue_chip_target_price = ?,
+          blue_chip_ramp_percent_per_tick = ?,
+          blue_chip_ramp_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          blue_chip_ramp_ended_at = NULL,
+          blue_chip_ramp_reason = ?,
+          blue_chip_ramp_started_by_user_id = ?,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(
+      req.user.id,
+      dayOpenPrice,
+      dailyHighLimitPrice,
+      dailyLowLimitPrice,
+      targetPrice,
+      rampPercentPerTick,
+      reason,
+      req.user.id,
+      stockId,
+    );
+
+    db.prepare(`
+      INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+      VALUES (?, ?, 'blue_chip_ramp_started', ?, ?)
+    `).run(
+      req.user.id,
+      req.user.id,
+      String(stock.is_bluechip),
+      JSON.stringify({
+        stockId,
+        stockName: stock.name,
+        targetPrice,
+        rampPercentPerTick,
+        reason,
+      })
+    );
+
+    const msg = `[우량주 선정] ${stock.name}이 우량주로 편입되었습니다! 목표주가 ${targetPrice.toLocaleString("ko-KR")}원까지 틱당 ${rampPercentPerTick}%씩 급등합니다.`;
+    db.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message)
+      VALUES (?, 'blue_chip_ramp_started', '우량주 선정 및 급등', ?)
+    `).run(stockId, msg);
+
+    db.prepare(`
+      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      VALUES ('시스템', 'blue_chip_ramp_started', '우량주 선정', ?, 0, 'stock', ?)
+    `).run(msg, String(stockId));
+  })();
   
-  return res.json({ message: "해당 종목을 우량주로 선정했습니다." });
+  return res.json({ message: "해당 종목을 우량주로 선정하고 목표주가 급등 이벤트를 시작했습니다." });
 });
 
 adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
@@ -668,6 +715,7 @@ adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
   db.prepare(`
     UPDATE stocks 
     SET is_bluechip = 0, 
+        blue_chip_ramp_active = 0,
         blue_chip_cancelled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') 
     WHERE id = ?
   `).run(stockId);
@@ -683,4 +731,80 @@ adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
   );
   
   return res.json({ message: "해당 종목의 우량주 지정을 취소했습니다." });
+});
+
+adminRouter.post("/stocks/:id/target-price", (req, res) => {
+  const stockId = Number(req.params.id);
+  const targetPrice = Number(req.body?.targetPrice);
+  const percentPerTick = Number(req.body?.percentPerTick);
+  const reason = String(req.body?.reason || "").trim().slice(0, 120);
+
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+
+  if (stock.status === 'acquired' || stock.is_etf === 1) {
+    return res.status(400).json({ message: "인수된 ETF 종목은 목표주가를 설정할 수 없습니다." });
+  }
+
+  if (!Number.isSafeInteger(targetPrice) || targetPrice <= 0) {
+    return res.status(400).json({ message: "목표가는 0보다 큰 정수로 입력해 주세요." });
+  }
+
+  if (targetPrice === stock.current_price) {
+    return res.status(400).json({ message: "목표가는 현재가와 달라야 합니다." });
+  }
+
+  if (!Number.isFinite(percentPerTick) || percentPerTick < 1 || percentPerTick > 100) {
+    return res.status(400).json({ message: "틱당 변동률은 1% ~ 100% 사이여야 합니다." });
+  }
+
+  const direction = targetPrice > stock.current_price ? "up" : "down";
+
+  db.transaction(() => {
+    db.prepare(`
+      UPDATE stocks
+      SET admin_price_target_active = 1,
+          admin_price_target = ?,
+          admin_price_target_direction = ?,
+          admin_price_target_percent_per_tick = ?,
+          admin_price_target_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          admin_price_target_ended_at = NULL,
+          admin_price_target_reason = ?,
+          admin_price_target_started_by_user_id = ?,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(targetPrice, direction, percentPerTick, reason, req.user.id, stockId);
+
+    db.prepare(`
+      INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+      VALUES (?, ?, 'admin_stock_target_price_started', ?, ?)
+    `).run(
+      req.user.id,
+      req.user.id,
+      String(stock.current_price),
+      JSON.stringify({
+        stockId,
+        stockName: stock.name,
+        targetPrice,
+        direction,
+        percentPerTick,
+        reason,
+      })
+    );
+
+    const directionText = direction === "up" ? "상승" : "하락";
+    const msg = `[목표주가 설정] ${stock.name} 종목에 목표주가 ${targetPrice.toLocaleString("ko-KR")}원 (${directionText} 목표, 틱당 ${percentPerTick}%) 이벤트가 시작되었습니다.`;
+    
+    db.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message)
+      VALUES (?, 'admin_stock_target_price_started', '목표주가 시작', ?)
+    `).run(stockId, msg);
+
+    db.prepare(`
+      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      VALUES ('시스템', 'admin_stock_target_price_started', '목표주가 설정', ?, 0, 'stock', ?)
+    `).run(msg, String(stockId));
+  })();
+
+  return res.json({ message: "목표주가 이벤트를 시작했습니다." });
 });

@@ -737,6 +737,163 @@ function maybeRecordBlueChipDailyNews(db, stock) {
   }
 }
 
+export function applyBlueChipRampTick(db, stock) {
+  if (!stock.blue_chip_ramp_active) return false;
+
+  const currentPrice = stock.current_price;
+  const targetPrice = stock.blue_chip_target_price;
+  const percent = stock.blue_chip_ramp_percent_per_tick;
+
+  if (!targetPrice || currentPrice >= targetPrice) {
+    db.prepare(`
+      UPDATE stocks
+      SET blue_chip_ramp_active = 0,
+          blue_chip_ramp_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(stock.id);
+    return false;
+  }
+
+  const nextPriceByPercent = Math.floor(currentPrice * (1 + percent / 100));
+  const nextPrice = Math.min(nextPriceByPercent, targetPrice);
+  const finalPrice = Math.max(1, nextPrice);
+  const reached = finalPrice >= targetPrice;
+  const nowStr = new Date().toISOString();
+
+  if (reached) {
+    const highLimit = Math.floor(targetPrice * 1.15);
+    const lowLimit = Math.max(1, Math.floor(targetPrice * 0.87));
+
+    db.prepare(`
+      UPDATE stocks
+      SET previous_price = ?,
+          current_price = ?,
+          market_cap = ? * total_shares,
+          blue_chip_ramp_active = 0,
+          blue_chip_ramp_ended_at = ?,
+          blue_chip_day_open_price = ?,
+          blue_chip_day_started_at = ?,
+          blue_chip_daily_high_limit_price = ?,
+          blue_chip_daily_low_limit_price = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(currentPrice, targetPrice, targetPrice, nowStr, targetPrice, nowStr, highLimit, lowLimit, nowStr, stock.id);
+
+    db.prepare(`
+      INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
+      VALUES (?, ?, ? * total_shares, 'blue_chip_ramp_reached')
+    `).run(stock.id, targetPrice, targetPrice);
+
+    const changeAmount = targetPrice - currentPrice;
+    const changeRate = currentPrice > 0 ? changeAmount / currentPrice : 0;
+    const msg = `행운AI가 ${stock.name} 우량주 목표주가 ${targetPrice.toLocaleString("ko-KR")}원에 도달했어요.`;
+    db.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message, price_before, price_after, change_amount, change_rate, basis)
+      VALUES (?, 'blue_chip_ramp_reached', '목표 도달', ?, ?, ?, ?, ?, 'previous_tick')
+    `).run(stock.id, msg, currentPrice, targetPrice, changeAmount, changeRate);
+
+    db.prepare(`
+      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      VALUES ('시스템', 'blue_chip_ramp_reached', '우량주 목표 도달', ?, 0, 'stock', ?)
+    `).run(msg, String(stock.id));
+
+  } else {
+    db.prepare(`
+      UPDATE stocks
+      SET previous_price = ?,
+          current_price = ?,
+          market_cap = ? * total_shares,
+          updated_at = ?
+      WHERE id = ?
+    `).run(currentPrice, finalPrice, finalPrice, nowStr, stock.id);
+
+    db.prepare(`
+      INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
+      VALUES (?, ?, ? * total_shares, 'blue_chip_ramp_started')
+    `).run(stock.id, finalPrice, finalPrice);
+  }
+
+  return true;
+}
+
+export function applyAdminTargetPriceTick(db, stock) {
+  if (!stock.admin_price_target_active) return false;
+
+  const currentPrice = stock.current_price;
+  const targetPrice = stock.admin_price_target;
+  const percent = stock.admin_price_target_percent_per_tick;
+
+  if (currentPrice === targetPrice) {
+    db.prepare(`
+      UPDATE stocks
+      SET admin_price_target_active = 0,
+          admin_price_target_ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(stock.id);
+    return false;
+  }
+
+  let nextPrice;
+  if (targetPrice > currentPrice) {
+    nextPrice = Math.floor(currentPrice * (1 + percent / 100));
+    nextPrice = Math.min(nextPrice, targetPrice);
+  } else {
+    nextPrice = Math.floor(currentPrice * (1 - percent / 100));
+    nextPrice = Math.max(nextPrice, targetPrice);
+  }
+  const finalPrice = Math.max(1, nextPrice);
+  const reached = finalPrice === targetPrice;
+  const nowStr = new Date().toISOString();
+
+  if (reached) {
+    db.prepare(`
+      UPDATE stocks
+      SET previous_price = ?,
+          current_price = ?,
+          market_cap = ? * total_shares,
+          admin_price_target_active = 0,
+          admin_price_target_ended_at = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(currentPrice, targetPrice, targetPrice, nowStr, nowStr, stock.id);
+
+    db.prepare(`
+      INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
+      VALUES (?, ?, ? * total_shares, 'admin_stock_target_price_reached')
+    `).run(stock.id, targetPrice, targetPrice);
+
+    const changeAmount = targetPrice - currentPrice;
+    const changeRate = currentPrice > 0 ? changeAmount / currentPrice : 0;
+    const msg = `행운AI가 ${stock.name} 목표주가 ${targetPrice.toLocaleString("ko-KR")}원에 도달했어요.`;
+    db.prepare(`
+      INSERT INTO stock_events (stock_id, event_type, title, message, price_before, price_after, change_amount, change_rate, basis)
+      VALUES (?, 'admin_stock_target_price_reached', '목표 도달', ?, ?, ?, ?, ?, 'previous_tick')
+    `).run(stock.id, msg, currentPrice, targetPrice, changeAmount, changeRate);
+
+    db.prepare(`
+      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      VALUES ('시스템', 'admin_stock_target_price_reached', '목표주가 도달', ?, 0, 'stock', ?)
+    `).run(msg, String(stock.id));
+
+  } else {
+    db.prepare(`
+      UPDATE stocks
+      SET previous_price = ?,
+          current_price = ?,
+          market_cap = ? * total_shares,
+          updated_at = ?
+      WHERE id = ?
+    `).run(currentPrice, finalPrice, finalPrice, nowStr, stock.id);
+
+    db.prepare(`
+      INSERT INTO stock_price_history (stock_id, price, market_cap, event_type)
+      VALUES (?, ?, ? * total_shares, 'admin_stock_target_price_started')
+    `).run(stock.id, finalPrice, finalPrice);
+  }
+
+  return true;
+}
+
 export function tickStockMarket(db) {
   try {
     nextTickAt = Date.now() + STOCK_TICK_INTERVAL_MS;
@@ -754,6 +911,18 @@ export function tickStockMarket(db) {
           )
         ) {
           processDelistingLifecycleTick(db, stock, usedSymbols);
+          continue;
+        }
+        if (stock.status === "ipo_subscription") {
+          processNormalTick(db, stock, usedSymbols);
+          continue;
+        }
+        if (stock.is_bluechip === 1 && stock.blue_chip_ramp_active === 1) {
+          applyBlueChipRampTick(db, stock);
+          continue;
+        }
+        if (stock.admin_price_target_active === 1) {
+          applyAdminTargetPriceTick(db, stock);
           continue;
         }
         if (stock.is_etf) {
@@ -1173,21 +1342,27 @@ export function settleDueIpoSubscriptions(database, now = Date.now()) {
 
 export function manuallyAdjustStockPrice(
   database,
-  { adminUserId, stockId, mode, direction, value, reason = "" },
+  { adminUserId, stockId, mode, direction, value, targetPrice, reason = "" },
 ) {
   const normalizedMode = String(mode || "").trim();
   const normalizedDirection = String(direction || "").trim();
   const numericValue = Number(value);
   const cleanReason = String(reason || "").trim().slice(0, 120);
 
-  if (!["percent", "amount"].includes(normalizedMode)) {
-    throw new Error("조정 방식은 percent 또는 amount만 사용할 수 있어요.");
+  if (!["percent", "amount", "set_price"].includes(normalizedMode)) {
+    throw new Error("조정 방식은 percent, amount 또는 set_price만 사용할 수 있어요.");
   }
-  if (!["up", "down"].includes(normalizedDirection)) {
-    throw new Error("조정 방향은 up 또는 down만 사용할 수 있어요.");
-  }
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    throw new Error("조정값은 0보다 큰 숫자로 입력해 주세요.");
+  if (normalizedMode !== "set_price") {
+    if (!["up", "down"].includes(normalizedDirection)) {
+      throw new Error("조정 방향은 up 또는 down만 사용할 수 있어요.");
+    }
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+      throw new Error("조정값은 0보다 큰 숫자로 입력해 주세요.");
+    }
+  } else {
+    if (!Number.isSafeInteger(targetPrice) || targetPrice <= 0) {
+      throw new Error("목표가는 0보다 큰 정수로 입력해 주세요.");
+    }
   }
 
   return database.transaction(() => {
@@ -1199,20 +1374,30 @@ export function manuallyAdjustStockPrice(
     }
 
     const oldPrice = Math.max(1, Math.floor(Number(stock.current_price) || 1));
-    const rawDelta =
-      normalizedMode === "percent"
-        ? Math.floor(oldPrice * (numericValue / 100))
-        : Math.floor(numericValue);
-    const delta = Math.max(1, rawDelta);
-    const newPrice = Math.max(
-      1,
-      normalizedDirection === "up" ? oldPrice + delta : oldPrice - delta,
-    );
+    let newPrice;
+    let signedValue;
+
+    if (normalizedMode === "set_price") {
+      newPrice = targetPrice;
+      signedValue = `직접 설정 ${newPrice.toLocaleString("ko-KR")}원`;
+    } else {
+      const rawDelta =
+        normalizedMode === "percent"
+          ? Math.floor(oldPrice * (numericValue / 100))
+          : Math.floor(numericValue);
+      const delta = Math.max(1, rawDelta);
+      newPrice = Math.max(
+        1,
+        normalizedDirection === "up" ? oldPrice + delta : oldPrice - delta,
+      );
+      const changeAmount = newPrice - oldPrice;
+      signedValue =
+        normalizedMode === "percent"
+          ? `${normalizedDirection === "up" ? "+" : "-"}${numericValue}%`
+          : formatSignedWon(changeAmount);
+    }
+
     const changeAmount = newPrice - oldPrice;
-    const signedValue =
-      normalizedMode === "percent"
-        ? `${normalizedDirection === "up" ? "+" : "-"}${numericValue}%`
-        : formatSignedWon(changeAmount);
     const message = `관리자 조정: ${stock.name} 주가가 ${signedValue} 조정되었어요.${
       cleanReason ? ` 사유: ${cleanReason}` : ""
     }`;
@@ -1246,6 +1431,7 @@ export function manuallyAdjustStockPrice(
           mode: normalizedMode,
           direction: normalizedDirection,
           value: numericValue,
+          targetPrice,
           reason: cleanReason,
         }),
       );

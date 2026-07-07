@@ -542,6 +542,24 @@ if (!stockColumns.has("blue_chip_daily_low_limit_price")) {
   db.exec("ALTER TABLE stocks ADD COLUMN blue_chip_daily_low_limit_price INTEGER");
 }
 
+addColumnIfMissing("stocks", "blue_chip_ramp_active", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stocks", "blue_chip_target_price", "INTEGER");
+addColumnIfMissing("stocks", "blue_chip_ramp_percent_per_tick", "REAL");
+addColumnIfMissing("stocks", "blue_chip_ramp_started_at", "TEXT");
+addColumnIfMissing("stocks", "blue_chip_ramp_ended_at", "TEXT");
+addColumnIfMissing("stocks", "blue_chip_ramp_reason", "TEXT");
+addColumnIfMissing("stocks", "blue_chip_ramp_started_by_user_id", "INTEGER");
+
+addColumnIfMissing("stocks", "admin_price_target_active", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stocks", "admin_price_target", "INTEGER");
+addColumnIfMissing("stocks", "admin_price_target_direction", "TEXT");
+addColumnIfMissing("stocks", "admin_price_target_percent_per_tick", "REAL");
+addColumnIfMissing("stocks", "admin_price_target_started_at", "TEXT");
+addColumnIfMissing("stocks", "admin_price_target_ended_at", "TEXT");
+addColumnIfMissing("stocks", "admin_price_target_reason", "TEXT");
+addColumnIfMissing("stocks", "admin_price_target_started_by_user_id", "INTEGER");
+
+
 db.exec(`
   UPDATE stocks
   SET blue_chip_day_open_price = COALESCE(blue_chip_day_open_price, current_price),
