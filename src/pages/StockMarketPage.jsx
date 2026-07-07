@@ -15,6 +15,7 @@ export default function StockMarketPage() {
   const [portfolio, setPortfolio] = useState(null);
   const [news, setNews] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [activeTab, setActiveTab] = useState("market");
   const lastIpoRefreshRef = useRef(0);
   const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
   const [blueChipStock, setBlueChipStock] = useState(null);
@@ -215,17 +216,53 @@ export default function StockMarketPage() {
         </BaseCard>
       </div>
 
-      <div className="mb-8 grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className="flex gap-2 p-1 bg-base-200/60 backdrop-blur-md rounded-2xl mb-6 max-w-md">
+        <button
+          className={`flex-1 py-2.5 rounded-xl font-black text-sm transition-all ${
+            activeTab === "market"
+              ? "bg-base-100 text-base-content shadow-sm"
+              : "text-base-content/50 hover:text-base-content hover:bg-base-100/30"
+          }`}
+          onClick={() => setActiveTab("market")}
+        >
+          📈 시장 종목
+        </button>
+        <button
+          className={`flex-1 py-2.5 rounded-xl font-black text-sm transition-all relative ${
+            activeTab === "portfolio"
+              ? "bg-base-100 text-base-content shadow-sm"
+              : "text-base-content/50 hover:text-base-content hover:bg-base-100/30"
+          }`}
+          onClick={() => setActiveTab("portfolio")}
+        >
+          💼 내 잔고
+          {(holdings.length > 0 || positions.length > 0) && (
+            <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
+          )}
+        </button>
+        <button
+          className={`flex-1 py-2.5 rounded-xl font-black text-sm transition-all ${
+            activeTab === "news"
+              ? "bg-base-100 text-base-content shadow-sm"
+              : "text-base-content/50 hover:text-base-content hover:bg-base-100/30"
+          }`}
+          onClick={() => setActiveTab("news")}
+        >
+          📰 시장 뉴스
+        </button>
+      </div>
+
+      {activeTab === "market" && (
+        <section className="animate-fade-in mb-8">
           <SectionHeader title="시장 종목" eyebrow="STOCKS" className="mb-4" />
-          <div className="bg-base-100 rounded-2xl p-2 sm:p-4 shadow-sm border border-base-200">
-            <div className="hidden sm:flex text-xs font-bold text-base-content/50 px-4 pb-2 border-b border-base-200 mb-2">
-              <div className="flex-[2]">종목명</div>
+          <div className="bg-base-100 rounded-3xl p-3 sm:p-5 shadow-sm border border-base-200">
+            <div className="hidden sm:flex text-xs font-bold text-base-content/40 px-4 pb-3 border-b border-base-200 mb-2">
+              <div className="flex-[3] pl-2">종목명 및 상태</div>
               <div className="flex-1 text-right">현재가</div>
-              <div className="flex-1 text-right">등락률</div>
-              <div className="flex-1 text-right">시가총액</div>
+              <div className="flex-1 text-right">등락률 (10초)</div>
+              <div className="flex-1 text-right pr-2">시가총액 / 공모 정보</div>
             </div>
-            <div className="grid gap-1">
+            <div className="grid gap-1.5">
               {stocks.map(stock => (
                 <StockRow
                   key={stock.id}
@@ -237,9 +274,9 @@ export default function StockMarketPage() {
                 />
               ))}
               {recentDelistedStocks && recentDelistedStocks.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-base-200">
-                  <div className="text-xs font-bold text-base-content/50 mb-2 px-2">최근 상장폐지 (최근 5개)</div>
-                  <div className="grid gap-1 opacity-60">
+                <div className="mt-6 pt-6 border-t border-base-200">
+                  <div className="text-xs font-black text-base-content/40 mb-3 px-3 uppercase tracking-wider">최근 상장폐지 종목</div>
+                  <div className="grid gap-1.5 opacity-60">
                     {recentDelistedStocks.map(stock => (
                       <StockRow
                         key={stock.id}
@@ -255,97 +292,146 @@ export default function StockMarketPage() {
               )}
             </div>
           </div>
-        </div>
-        
-        <div>
-          <SectionHeader title="내 포트폴리오" eyebrow="PORTFOLIO" className="mb-4" />
-          <BaseCard className="mb-4 p-4 border-2 border-primary/20">
-            <h3 className="text-xs font-bold text-base-content/50 mb-2">총 평가 자산</h3>
-            <div className="text-2xl font-black">
-              <AnimatedMoney value={portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized)} />
-            </div>
-            <div className={`text-sm font-bold mt-1 ${portfolio.unrealizedPnl >= 0 ? "text-success" : "text-error"}`}>
-              {portfolio.unrealizedPnl >= 0 ? "+" : ""}<AnimatedMoney value={portfolio.unrealizedPnl} />
-            </div>
-          </BaseCard>
+        </section>
+      )}
 
-          <div className="space-y-4">
-            <div>
-              <h4 className="text-sm font-bold mb-2">보유 주식 (현물)</h4>
+      {activeTab === "portfolio" && (
+        <div className="grid gap-6 lg:grid-cols-3 animate-fade-in mb-8">
+          <div className="lg:col-span-1">
+            <BaseCard className="bg-gradient-to-br from-primary to-primary-focus text-primary-content border-none shadow-lg p-6 rounded-3xl relative overflow-hidden">
+              <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none translate-x-4 translate-y-4">
+                <svg className="w-48 h-48" fill="currentColor" viewBox="0 0 24 24"><path d="M21 18v1c0 1.1-.9 2-2 2H5c-1.11 0-2-.9-2-2V5c0-1.1.89-2 2-2h14c1.1 0 2 .9 2 2v1h-9c-1.11 0-2 .9-2 2v8c0 1.1.89 2 2 2h9zm-9-2h10V8H12v8zm4-2.5c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+              </div>
+              <span className="text-xs font-black uppercase tracking-widest opacity-80">총 평가 자산</span>
+              <strong className="block text-3xl font-black mt-2 tabular-nums">
+                <AnimatedMoney value={portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized)} />
+              </strong>
+              <div className="mt-4 pt-4 border-t border-white/20 flex justify-between items-center text-sm font-bold">
+                <span className="opacity-80">평가 수익률 (PnL)</span>
+                <span className={portfolio.unrealizedPnl >= 0 ? "text-success-content" : "text-error-content"}>
+                  {portfolio.unrealizedPnl >= 0 ? "+" : ""}<AnimatedMoney value={portfolio.unrealizedPnl} />
+                </span>
+              </div>
+            </BaseCard>
+          </div>
+
+          <div className="lg:col-span-2 grid gap-6">
+            <BaseCard className="rounded-3xl border border-base-200 bg-base-100 shadow-sm p-4 sm:p-6">
+              <SectionHeader title="보유 주식 (현물)" eyebrow="EQUITY HOLDINGS" className="mb-4" />
               {holdings.length === 0 ? (
-                <p className="text-xs text-base-content/50">보유한 주식이 없어요.</p>
+                <div className="bg-base-200/40 p-8 rounded-2xl text-center text-sm text-base-content/50 font-bold">
+                  보유한 현물 주식이 없습니다.
+                </div>
               ) : (
-                <div className="grid gap-2">
-                  {holdings.map(h => (
-                    <Link to={`/stocks/${h.stock_id}`} key={h.id} className="block bg-base-200/50 p-3 rounded-2xl hover:bg-base-200 transition">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-sm">{h.name}</span>
-                        <span className="text-xs">{h.quantity.toFixed(2)}주</span>
-                      </div>
-                      <div className="flex justify-between items-end">
-                        <span className="text-xs text-base-content/50">평가금 {formatMoney(h.value)}</span>
-                        <span className={`text-xs font-bold ${h.unrealized_pnl >= 0 ? "text-success" : "text-error"}`}>
-                          {formatSignedMoney(h.unrealized_pnl)}
-                        </span>
-                      </div>
-                    </Link>
-                  ))}
+                <div className="overflow-x-auto">
+                  <table className="table table-sm w-full">
+                    <thead>
+                      <tr className="text-xs text-base-content/50 border-b border-base-200">
+                        <th className="pl-2">종목명</th>
+                        <th className="text-right">보유량</th>
+                        <th className="text-right">평가금액</th>
+                        <th className="text-right pr-2">평가손익</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {holdings.map(h => (
+                        <tr key={h.id} className="hover:bg-base-200/40 font-bold border-b border-base-100">
+                          <td className="pl-2 py-3">
+                            <Link to={`/stocks/${h.stock_id}`} className="hover:underline text-base-content font-black">
+                              {h.name}
+                            </Link>
+                          </td>
+                          <td className="text-right tabular-nums">{h.quantity.toFixed(2)}주</td>
+                          <td className="text-right tabular-nums">{formatMoney(h.value)}</td>
+                          <td className={`text-right tabular-nums pr-2 ${h.unrealized_pnl >= 0 ? "text-success" : "text-error"}`}>
+                            {formatSignedMoney(h.unrealized_pnl)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </div>
+            </BaseCard>
 
-            <div>
-              <h4 className="text-sm font-bold mb-2">레버리지 포지션</h4>
+            <BaseCard className="rounded-3xl border border-base-200 bg-base-100 shadow-sm p-4 sm:p-6">
+              <SectionHeader title="레버리지 포지션" eyebrow="MARGIN POSITIONS" className="mb-4" />
               {positions.length === 0 ? (
-                <p className="text-xs text-base-content/50">열려있는 포지션이 없어요.</p>
+                <div className="bg-base-200/40 p-8 rounded-2xl text-center text-sm text-base-content/50 font-bold">
+                  진입한 레버리지 포지션이 없습니다.
+                </div>
               ) : (
-                <div className="grid gap-2">
-                  {positions.map(p => {
-                    const danger = p.side === "short"
-                      ? p.stock_current_price >= p.entry_price + (p.liquidation_price - p.entry_price) * 0.8
-                      : p.stock_current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
-                    return (
-                      <Link to={`/stocks/${p.stock_id}`} key={p.id} className={`block bg-base-200/50 p-3 rounded-2xl hover:bg-base-200 transition border ${danger ? "border-error/50" : "border-transparent"}`}>
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="font-bold text-sm">{p.name} <span className="text-[10px] bg-secondary/20 text-secondary-content px-1.5 py-0.5 rounded-lg ml-1">{p.leverage}x</span></span>
-                          {danger && <span className="text-[10px] font-bold text-error animate-pulse">위험</span>}
-                        </div>
-                        <div className="flex justify-between items-end">
-                          <span className="text-xs text-base-content/50">증거금 {formatMoney(p.margin_amount)}</span>
-                          <span className={`text-xs font-bold ${p.live_unrealized_pnl >= 0 ? "text-success" : "text-error"}`}>
-                            {formatSignedMoney(p.live_unrealized_pnl)}
-                          </span>
-                        </div>
-                      </Link>
-                    )
-                  })}
+                <div className="overflow-x-auto">
+                  <table className="table table-sm w-full">
+                    <thead>
+                      <tr className="text-xs text-base-content/50 border-b border-base-200">
+                        <th className="pl-2">종목명 (레버리지)</th>
+                        <th className="text-right">방향</th>
+                        <th className="text-right">증거금</th>
+                        <th className="text-right">현재가 / 청산가</th>
+                        <th className="text-right pr-2">미실현손익</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map(p => {
+                        const danger = p.side === "short"
+                          ? p.stock_current_price >= p.entry_price + (p.liquidation_price - p.entry_price) * 0.8
+                          : p.stock_current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
+                        return (
+                          <tr key={p.id} className={`hover:bg-base-200/40 font-bold border-b border-base-100 ${danger ? "bg-error/5" : ""}`}>
+                            <td className="pl-2 py-3">
+                              <Link to={`/stocks/${p.stock_id}`} className="hover:underline text-base-content font-black">
+                                {p.name}
+                                <span className="text-[10px] bg-secondary/15 text-secondary px-1.5 py-0.5 rounded-lg ml-1">{p.leverage}x</span>
+                              </Link>
+                            </td>
+                            <td className="text-right">
+                              <span className={`badge badge-sm font-black ${p.side === "long" ? "badge-success text-success-content" : "badge-error text-error-content"}`}>
+                                {p.side === "long" ? "LONG" : "SHORT"}
+                              </span>
+                            </td>
+                            <td className="text-right tabular-nums">{formatMoney(p.margin_amount)}</td>
+                            <td className="text-right tabular-nums">
+                              {formatMoney(p.stock_current_price)}<br />
+                              <span className="text-[10px] text-base-content/40">청산 {formatMoney(p.liquidation_price)}</span>
+                            </td>
+                            <td className={`text-right tabular-nums pr-2 ${p.live_unrealized_pnl >= 0 ? "text-success" : "text-error"}`}>
+                              {formatSignedMoney(p.live_unrealized_pnl)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </div>
+            </BaseCard>
           </div>
         </div>
-      </div>
+      )}
 
-      <section>
-        <SectionHeader title="최근 시장 뉴스" eyebrow="NEWS" className="mb-4" />
-        <BaseCard className="p-0 overflow-hidden">
-          {news.length === 0 ? (
-            <div className="p-6 text-center text-sm text-base-content/50">최근 소식이 없어요.</div>
-          ) : (
-            <ul className="divide-y divide-base-300">
-              {news.map(n => (
-                <li key={n.id} className="p-4 flex flex-col sm:flex-row gap-2 sm:items-center">
-                  <Badge type={n.event_type} label={n.title} sentiment={n.sentiment} />
-                  <span className="text-sm text-base-content/80 flex-1">{n.message}</span>
-                  <span className="text-[10px] text-base-content/40 whitespace-nowrap">
-                    {new Date(n.created_at).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </BaseCard>
-      </section>
+      {activeTab === "news" && (
+        <section className="animate-fade-in mb-8">
+          <SectionHeader title="최근 시장 뉴스" eyebrow="NEWS" className="mb-4" />
+          <BaseCard className="p-0 overflow-hidden shadow-sm border border-base-200 bg-base-100 rounded-3xl">
+            {news.length === 0 ? (
+              <div className="p-12 text-center text-sm text-base-content/50 font-bold">최근 등록된 시장 소식이 없습니다.</div>
+            ) : (
+              <ul className="divide-y divide-base-300">
+                {news.map(n => (
+                  <li key={n.id} className="p-4 flex flex-col sm:flex-row gap-3 sm:items-center hover:bg-base-200/30 transition">
+                    <Badge type={n.event_type} label={n.title} sentiment={n.sentiment} />
+                    <span className="text-sm text-base-content/85 font-bold flex-1">{n.message}</span>
+                    <span className="text-[10px] text-base-content/40 whitespace-nowrap font-bold">
+                      {new Date(n.created_at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </BaseCard>
+        </section>
+      )}
 
       {blueChipModalOpen && blueChipStock && (
         <div className="modal modal-open">
@@ -441,7 +527,7 @@ function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remain
   
   return (
     <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition border border-transparent hover:border-base-200/50">
-      <div className="flex-[2] flex items-center min-w-0 mb-1 sm:mb-0">
+      <div className="flex-[3] flex items-center min-w-0 mb-1 sm:mb-0">
         <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
         <div className="flex gap-1 shrink-0 flex-wrap">
           {stock.status === 'ipo_subscription' && ipoTimeRemaining !== null && (
