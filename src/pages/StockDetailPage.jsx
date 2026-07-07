@@ -836,7 +836,7 @@ function StockTopList({ title, emptyText, rows, type }) {
                       <span className={row.side === "short" ? "text-error" : "text-success"}>
                         {row.side === "short" ? "숏" : "롱"} {row.leverage}x
                       </span>{" "}
-                      · 증거금 {formatMoney(row.marginAmount)}
+                         · 증거금 {formatMoney(row.marginAmount)}
                     </p>
                   </div>
                   <strong className="shrink-0 tabular-nums text-primary">
