@@ -644,6 +644,9 @@ if (!userColumns.has("mine_total_earned")) {
 if (!userColumns.has("last_mined_at")) {
   db.exec("ALTER TABLE users ADD COLUMN last_mined_at TEXT");
 }
+if (!userColumns.has("jackpot_tickets")) {
+  db.exec("ALTER TABLE users ADD COLUMN jackpot_tickets INTEGER NOT NULL DEFAULT 0");
+}
 
 const serverNotificationColumns = new Set(
   db.prepare("PRAGMA table_info(server_notifications)").all().map((column) => column.name),

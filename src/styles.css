@@ -107,15 +107,18 @@ textarea,
 .bg-grid {
   background-color: #faf7f5;
   background-image:
-    radial-gradient(circle at 10% 10%, rgba(244, 174, 188, 0.16), transparent 25rem),
-    radial-gradient(circle at 90% 30%, rgba(157, 220, 210, 0.18), transparent 27rem);
+    radial-gradient(circle at 15% 10%, rgba(255, 143, 171, 0.22), transparent 35rem),
+    radial-gradient(circle at 85% 20%, rgba(132, 210, 246, 0.25), transparent 40rem),
+    radial-gradient(circle at 50% 80%, rgba(224, 187, 228, 0.20), transparent 45rem);
+  background-attachment: fixed;
 }
 
 .auth-background {
   background:
-    radial-gradient(circle at 20% 20%, rgba(244, 174, 188, 0.4), transparent 28rem),
-    radial-gradient(circle at 80% 80%, rgba(157, 220, 210, 0.38), transparent 28rem),
+    radial-gradient(circle at 20% 20%, rgba(255, 143, 171, 0.4), transparent 35rem),
+    radial-gradient(circle at 80% 80%, rgba(132, 210, 246, 0.38), transparent 35rem),
     #faf7f5;
+  background-attachment: fixed;
 }
 
 .virtual-banner {
