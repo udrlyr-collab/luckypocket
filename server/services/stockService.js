@@ -1537,9 +1537,19 @@ export function createIpoStock(db) {
     return null;
   }
 
-  const identity = pickRandomStockIdentity(db);
-  const symbol = identity.symbol;
-  const name = identity.name;
+  // Generate sequential IPO number
+  let ipoNumber = 1;
+  const config = db.prepare("SELECT value FROM system_config WHERE key = 'next_ipo_number'").get();
+  if (config) {
+    ipoNumber = Number(config.value);
+    db.prepare("UPDATE system_config SET value = ? WHERE key = 'next_ipo_number'").run(String(ipoNumber + 1));
+  } else {
+    // If not exists, insert 2 and use 1
+    db.prepare("INSERT INTO system_config (key, value) VALUES ('next_ipo_number', '2')").run();
+  }
+
+  const name = `공모주 ${ipoNumber}`;
+  const symbol = `IPO-${ipoNumber}`;
   
   const { currentPrice, totalShares, marketCap } = createStockIdentityAndCap(true);
 
@@ -1551,7 +1561,7 @@ export function createIpoStock(db) {
 
   const insert = db.prepare(`
     INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, ipo_subscription_started_at, ipo_subscription_ends_at, offering_price)
-    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+3 minutes'), ?)
+    VALUES (?, ?, 'ipo_subscription', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), datetime('now', '+5 minutes'), ?)
   `);
   
   const stockId = insert.run(symbol, name, currentPrice, currentPrice, currentPrice, totalShares, marketCap, volatility, currentPrice).lastInsertRowid;
@@ -1559,7 +1569,7 @@ export function createIpoStock(db) {
   createServerNotification(db, {
     type: "stock_ipo",
     title: "신규 공모주 청약",
-    message: `새 공모주가 등장했어요. 3분 동안 공모가로 구매할 수 있어요.`,
+    message: `새 공모주가 등장했어요. 5분 동안 공모가로 구매할 수 있어요.`,
     gameType: "stock",
     gameName: "주식",
     metadata: { stockId, symbol, name }
