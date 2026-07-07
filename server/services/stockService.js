@@ -806,7 +806,7 @@ export function applyBlueChipRampTick(db, stock) {
     `).run(stock.id, msg, currentPrice, targetPrice, changeAmount, changeRate);
 
     db.prepare(`
-      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      INSERT OR IGNORE INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
       VALUES ('시스템', 'blue_chip_ramp_reached', '우량주 목표 도달', ?, 0, 'stock', ?)
     `).run(msg, String(stock.id));
 
@@ -923,7 +923,7 @@ export function applyAdminTargetPriceTick(db, stock) {
     `).run(stock.id, msg, currentPrice, targetPrice, changeAmount, changeRate);
 
     db.prepare(`
-      INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+      INSERT OR IGNORE INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
       VALUES ('시스템', 'admin_stock_target_price_reached', '목표주가 도달', ?, 0, 'stock', ?)
     `).run(msg, String(stock.id));
 
@@ -1550,7 +1550,7 @@ export function manuallyAdjustStockPrice(
     // Only publish to server notifications if publishNews is true and change rate is >= 10% or <= -10%
     if (publishNews && Math.abs(changeRate) >= 0.1) {
       database.prepare(`
-        INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
+        INSERT OR IGNORE INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
         VALUES ('시스템', ?, ?, ?, 0, 'stock', ?)
       `).run(eventType, finalTitle, finalContent, String(stock.id));
     }
