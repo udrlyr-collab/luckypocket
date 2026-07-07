@@ -765,7 +765,7 @@ export default function StockDetailPage() {
           onClose={() => setShowDelistConfirm(false)} 
         />
       )}
-    </div>
+    </PageContainer>
   );
 }
 
