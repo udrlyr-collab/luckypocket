@@ -39,6 +39,10 @@ export default function StockDetailPage() {
   const [showLeverageWarning, setShowLeverageWarning] = useState(false);
   const [showAcquireConfirm, setShowAcquireConfirm] = useState(false);
   const [showDelistConfirm, setShowDelistConfirm] = useState(false);
+  const [showEditMetaModal, setShowEditMetaModal] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editSymbol, setEditSymbol] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
 
   const fetchStock = async () => {
@@ -131,6 +135,47 @@ export default function StockDetailPage() {
       setMessage(res.message);
       await fetchStock();
       await refreshUser();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUpdateMeta = async () => {
+    if (!editName.trim()) {
+      setError("회사 제목은 필수 입력 항목입니다.");
+      return;
+    }
+    if (!editSymbol.trim()) {
+      setError("종목코드(심볼)는 필수 입력 항목입니다.");
+      return;
+    }
+
+    const badWords = ["개새끼", "씨발", "병신", "좆", "씹", "아가리", "느금마", "지랄", "존나", "쌍년", "썅", "엠창", "시발", "미친년", "미친놈"];
+    const sanitizedName = editName.replace(/\s+/g, "");
+    for (const word of badWords) {
+      if (sanitizedName.includes(word)) {
+        setError("회사 제목에 비속어가 포함될 수 없습니다.");
+        return;
+      }
+    }
+
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/${stock.id}/update-meta`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: editName,
+          symbol: editSymbol,
+          description: editDescription,
+        }),
+      });
+      setMessage(res.message);
+      setShowEditMetaModal(false);
+      await fetchStock();
     } catch (e) {
       setError(e.message);
     } finally {
@@ -310,6 +355,11 @@ export default function StockDetailPage() {
               <span>시가총액 {formatMoney(stock.market_cap)}</span>
             )}
           </p>
+          {stock.description && (
+            <p className="text-xs font-semibold text-base-content/50 mt-1 max-w-xl break-all">
+              {stock.description}
+            </p>
+          )}
           {(stock.blueChipRampActive || stock.adminPriceTargetActive) && (
             <div className="mt-3 p-4 rounded-3xl bg-base-200/60 border border-base-300 max-w-xl text-sm text-base-content">
               <div className="font-bold flex items-center justify-between mb-2">
@@ -940,13 +990,25 @@ export default function StockDetailPage() {
           <div>
             <h3 className="font-black text-lg mb-1 text-warning">👑 오너 권한</h3>
             <p className="text-sm text-base-content/60 leading-relaxed">
-              당신은 이 회사의 소유자입니다. 회사를 상장폐지시키거나 다시 일반 주식으로 되돌릴 수 있습니다.<br />
+              당신은 이 회사의 소유자입니다. 회사를 상장폐지시키거나 다시 일반 주식으로 되돌릴 수 있으며, 회사 제목, 종목코드, 종목 설명을 수정할 수 있습니다.<br />
               일반 주식으로 되돌릴 경우, 인수에 사용했던 금액의 50%를 돌려받습니다.
             </p>
           </div>
           <div className="flex flex-col gap-2 shrink-0 w-full sm:w-auto">
             <button 
               className="btn btn-warning rounded-2xl w-full" 
+              disabled={busy}
+              onClick={() => {
+                setEditName(stock.name);
+                setEditSymbol(stock.symbol);
+                setEditDescription(stock.description || "");
+                setShowEditMetaModal(true);
+              }}
+            >
+              회사 정보 수정
+            </button>
+            <button 
+              className="btn btn-outline rounded-2xl w-full" 
               disabled={busy}
               onClick={() => executeAction('/revert-by-owner', '일반 주식으로 되돌리기')}
             >
@@ -987,6 +1049,72 @@ export default function StockDetailPage() {
           confirmText="상장폐지 실행"
           isBusy={busy}
         />
+      )}
+
+      {showEditMetaModal && (
+        <div className="modal modal-open">
+          <div className="modal-box rounded-3xl border border-base-300 shadow-xl max-w-md bg-base-100 text-base-content">
+            <h3 className="font-black text-lg mb-4 text-base-content">🏢 회사 정보 수정</h3>
+            <p className="text-xs text-base-content/50 mb-4">인수한 회사(ETF)의 이름, 종목코드, 설명을 원하는 대로 수정할 수 있습니다.</p>
+            
+            <div className="grid gap-4">
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">회사 제목</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl font-bold"
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="예: 행운글로벌"
+                  maxLength={30}
+                />
+                <span className="text-[10px] text-base-content/40 mt-1 pl-1">회사명에는 비속어가 포함될 수 없습니다.</span>
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">회사 종목코드 (심볼)</span>
+                <input
+                  className="input input-bordered w-full h-12 rounded-2xl font-bold uppercase"
+                  type="text"
+                  value={editSymbol}
+                  onChange={(e) => setEditSymbol(e.target.value)}
+                  placeholder="예: HW-GB"
+                  maxLength={12}
+                />
+                <span className="text-[10px] text-base-content/40 mt-1 pl-1">영문 대문자, 숫자, 대시(-)로 이루어진 2~12자리 코드</span>
+              </label>
+
+              <label className="form-control">
+                <span className="label-text mb-1 font-bold">종목 설명</span>
+                <textarea
+                  className="textarea textarea-bordered w-full min-h-[80px] rounded-2xl font-bold py-3"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  placeholder="회사의 사업 분야나 투자 요약에 대해 간단히 입력해 주세요."
+                  maxLength={200}
+                />
+              </label>
+            </div>
+
+            <div className="modal-action mt-6 gap-2">
+              <button
+                type="button"
+                className="btn btn-outline rounded-2xl flex-1 h-12"
+                onClick={() => setShowEditMetaModal(false)}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary rounded-2xl flex-1 h-12"
+                disabled={busy || !editName.trim() || !editSymbol.trim()}
+                onClick={handleUpdateMeta}
+              >
+                {busy ? <span className="loading loading-spinner loading-sm" /> : "수정 완료"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
 

@@ -1081,6 +1081,57 @@ stocksRouter.post("/:id/revert-by-owner", (req, res) => {
   res.json({ message: "일반 주식으로 되돌렸습니다. (인수 금액의 50% 환불)" });
 });
 
+stocksRouter.post("/:id/update-meta", (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.id;
+  const { name, symbol, description } = req.body;
+
+  try {
+    if (!name || !name.trim()) throw new Error("회사 제목은 필수 입력 항목입니다.");
+    if (!symbol || !symbol.trim()) throw new Error("종목코드(심볼)는 필수 입력 항목입니다.");
+
+    // 비속어 필터
+    const badWords = ["개새끼", "씨발", "병신", "좆", "씹", "아가리", "느금마", "지랄", "존나", "쌍년", "썅", "엠창", "시발", "미친년", "미친놈"];
+    const sanitizedName = name.replace(/\s+/g, ""); // 공백을 다 빼고 매치함
+    for (const word of badWords) {
+      if (sanitizedName.includes(word)) {
+        throw new Error("회사 제목에 비속어가 포함될 수 없습니다.");
+      }
+    }
+
+    // 종목코드 유효성 검증 (영문, 숫자, 대시 2~12글자)
+    const upperSymbol = symbol.toUpperCase().trim();
+    if (!/^[A-Z0-9\-]{2,12}$/.test(upperSymbol)) {
+      throw new Error("종목코드는 영문 대문자, 숫자, 대시(-)로 구성된 2~12자 형태여야 합니다.");
+    }
+
+    db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
+      if (!stock) throw new Error("존재하지 않는 종목입니다.");
+      if (stock.status !== 'acquired' || !stock.is_etf) {
+        throw new Error("인수된 회사(ETF)가 아닙니다.");
+      }
+      if (stock.owner_user_id !== userId) {
+        throw new Error("회사 오너만 메타데이터를 수정할 수 있습니다.");
+      }
+
+      // 종목코드 중복 검증
+      const dup = db.prepare("SELECT id FROM stocks WHERE symbol = ? AND id != ?").get(upperSymbol, id);
+      if (dup) throw new Error("이미 등록된 다른 종목코드입니다.");
+
+      db.prepare(`
+        UPDATE stocks
+        SET name = ?, symbol = ?, description = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id = ?
+      `).run(name.trim(), upperSymbol, description ? description.trim() : null, id);
+    })();
+
+    res.json({ message: "회사 정보를 성공적으로 업데이트했어요!" });
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 stocksRouter.post("/:id/hostile-takeover", (req, res) => {
   const { id } = req.params;
   const attackerId = req.user.id;

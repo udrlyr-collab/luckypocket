@@ -196,7 +196,7 @@ export default function StockMarketPage() {
 
       <div className="mb-8 grid gap-4 lg:grid-cols-12">
         {/* Market Stats (Left 7/12) */}
-        <div className="lg:col-span-7 grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="lg:col-span-7 grid grid-cols-2 gap-4">
           <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
             <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장 종목</span>
             <strong className="block text-xl mt-1 tabular-nums font-black text-base-content">
@@ -208,18 +208,6 @@ export default function StockMarketPage() {
             <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상승 / 하락</span>
             <strong className="block text-xl mt-1 tabular-nums font-black text-success">
               {summary.up} <span className="text-base-content/20 text-sm font-normal">/</span> <span className="text-error">{summary.down}</span>
-            </strong>
-          </BaseCard>
-          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주</span>
-            <strong className="block text-xl mt-1 tabular-nums font-black text-warning">
-              {summary.ipoCount ?? summary.ipo}
-            </strong>
-          </BaseCard>
-          <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
-            <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장폐지</span>
-            <strong className="block text-xl mt-1 tabular-nums font-black text-base-content/40">
-              {summary.recentDelistedCount ?? (recentDelistedStocks ? recentDelistedStocks.length : 0)}
             </strong>
           </BaseCard>
         </div>
@@ -443,6 +431,20 @@ export default function StockMarketPage() {
 
       {activeTab === "news" && (
         <section className="animate-fade-in mb-8">
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 p-4 rounded-2xl hover:shadow-md transition-shadow">
+              <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">공모주</span>
+              <strong className="block text-xl mt-1 tabular-nums font-black text-warning">
+                {summary.ipoCount ?? summary.ipo}
+              </strong>
+            </BaseCard>
+            <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 p-4 rounded-2xl hover:shadow-md transition-shadow">
+              <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">상장폐지</span>
+              <strong className="block text-xl mt-1 tabular-nums font-black text-base-content/40">
+                {summary.recentDelistedCount ?? (recentDelistedStocks ? recentDelistedStocks.length : 0)}
+              </strong>
+            </BaseCard>
+          </div>
           <SectionHeader title="최근 시장 뉴스" eyebrow="NEWS" className="mb-4" />
           <BaseCard className="p-0 overflow-hidden shadow-sm border border-base-200 bg-base-100 rounded-3xl">
             {news.length === 0 ? (

@@ -341,6 +341,7 @@ db.exec(`
     etf_base_top_balance INTEGER,
     etf_last_tracked_balance INTEGER,
     etf_acquisition_cost REAL,
+    description TEXT,
     listed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     delisted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
@@ -598,6 +599,7 @@ if (!stockColumns.has("caution_tick_count")) {
 if (!stockColumns.has("recovery_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN recovery_started_at TEXT");
 }
+addColumnIfMissing("stocks", "description", "TEXT");
 if (!stockColumns.has("recovery_tick_count")) {
   db.exec("ALTER TABLE stocks ADD COLUMN recovery_tick_count INTEGER NOT NULL DEFAULT 0");
 }
