@@ -505,6 +505,23 @@ export default function AdminPage() {
     }
   };
 
+  const drawJackpotManually = async () => {
+    if (!window.confirm("오늘의 잭팟을 강제로 추첨하시겠습니까?")) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/jackpot/draw", { method: "POST" });
+      setJackpotInfo(data);
+      setJackpotAmount("0");
+      setMessage(data.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const selectedIdList = [...selectedIds];
   const selectedStock = stocks.find((stock) => String(stock.id) === String(stockAdjust.stockId));
 
@@ -1200,7 +1217,7 @@ export default function AdminPage() {
             </strong>
           </div>
         </div>
-        <div className="mt-4 grid gap-2 lg:grid-cols-[1fr_auto_auto]">
+        <div className="mt-4 grid gap-2 lg:grid-cols-[1fr_auto_auto_auto]">
           <input
             className="input input-bordered h-12 min-w-0 rounded-2xl text-right tabular-nums"
             type="number"
@@ -1225,6 +1242,14 @@ export default function AdminPage() {
             onClick={resetJackpotPoolAmount}
           >
             잭팟 초기화
+          </button>
+          <button
+            type="button"
+            className="btn btn-error text-white font-bold h-12 whitespace-nowrap rounded-2xl"
+            disabled={busy}
+            onClick={drawJackpotManually}
+          >
+            🎰 잭팟 강제 추첨
           </button>
         </div>
       </BaseCard>

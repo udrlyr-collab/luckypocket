@@ -21,6 +21,7 @@ import {
   getJackpotEntryStats,
   getJackpotPool,
   setJackpotPool,
+  runJackpotDraw,
 } from "../services/jackpotService.js";
 import { formatWon } from "../utils/formatWon.js";
 
@@ -190,6 +191,27 @@ adminRouter.post("/jackpot/reset", (_req, res) => {
     jackpotPool,
     ...getJackpotEntryStats(db, date),
   });
+});
+
+adminRouter.post("/jackpot/draw", (req, res) => {
+  if (req.user.username !== "admin") {
+    return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+  }
+
+  try {
+    const result = runJackpotDraw(db);
+    if (!result.success) {
+      return res.status(400).json({ message: `잭팟 추첨에 실패했어요: ${result.reason}` });
+    }
+    const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
+    return res.json({
+      message: `잭팟 추첨을 완료했어요! 당첨된 금액은 ${formatWon(result.pool)}입니다.`,
+      jackpotPool: 0,
+      ...getJackpotEntryStats(db, date),
+    });
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
 });
 
 adminRouter.post("/users/:userId/nickname", (req, res, next) => {

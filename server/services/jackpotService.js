@@ -139,7 +139,7 @@ export function runJackpotDraw(database) {
     );
 
     createServerNotification(database, {
-      userId: winner.userId,
+      userId: null,
       nickname: winnerUser.nickname,
       type: "jackpot",
       title: "오늘의 잭팟!",
