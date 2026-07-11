@@ -374,7 +374,7 @@ export function maybeTriggerVolatilityHalt(db, stock, nowMs = Date.now()) {
   `).get(stock.id, now);
   if (!reference || Number(reference.price) <= 0) return false;
   const changeRate = Math.abs((Number(stock.current_price) - Number(reference.price)) / Number(reference.price));
-  if (changeRate < 0.30) return false;
+  if (changeRate < 0.50) return false; // 변동성 완화장치 발동 기준을 30%에서 50%로 완화
   const haltSeconds = Math.floor(randomBetween(30, 121));
   const haltUntil = nowIso(nowMs + haltSeconds * 1000);
   db.prepare(`
