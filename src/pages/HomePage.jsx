@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import HistoryList from "../components/HistoryList";
 import NewsModal from "../components/NewsModal";
+import AnimatedMoney from "../components/AnimatedMoney";
 import { useAuth } from "../context/AuthContext";
 import { gameMeta } from "../data/games";
 import { 
@@ -24,6 +25,10 @@ export default function HomePage() {
   const [jackpotMessage, setJackpotMessage] = useState("");
   const [showNewsModal, setShowNewsModal] = useState(false);
   const [timeUntilMidnight, setTimeUntilMidnight] = useState("");
+  const [marketMovers, setMarketMovers] = useState({ gainers: [], losers: [] });
+  const [dailyMissions, setDailyMissions] = useState([]);
+  const previousJackpotAmount = useRef(null);
+  const [jackpotAddedAmount, setJackpotAddedAmount] = useState(0);
 
   useEffect(() => {
     const updateTimer = () => {
@@ -43,22 +48,48 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    Promise.all([api("/logs"), api("/games/daily-jackpot")])
+    let active = true;
+    const loadJackpot = () => Promise.all([api("/logs"), api("/games/daily-jackpot")])
       .then(([logData, jackpotDataResult]) => {
+        if (!active) return;
         setLogs(logData.logs.slice(0, 5));
         setJackpotData(jackpotDataResult);
       })
       .catch(() => {});
+    loadJackpot();
+    const timer = window.setInterval(loadJackpot, 10_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
   }, [user.balance]);
+
+  useEffect(() => {
+    const currentAmount = Number(jackpotData?.jackpotPool || 0);
+    const previousAmount = previousJackpotAmount.current;
+    previousJackpotAmount.current = currentAmount;
+    if (previousAmount === null || currentAmount <= previousAmount) return undefined;
+
+    setJackpotAddedAmount(currentAmount - previousAmount);
+    const timer = window.setTimeout(() => setJackpotAddedAmount(0), 2_000);
+    return () => window.clearTimeout(timer);
+  }, [jackpotData?.jackpotPool]);
 
   useEffect(() => {
     let active = true;
     const loadServerNews = () =>
-      Promise.all([api("/server/stats"), api("/server/notifications?limit=50")])
-        .then(([stats, news]) => {
+      Promise.all([
+        api("/server/stats"),
+        api("/server/notifications?limit=50"),
+        api("/stocks/market-movers"),
+        api("/me/daily-missions"),
+      ])
+        .then(([stats, news, movers, missions]) => {
           if (!active) return;
           setServerStats(stats);
           setNotifications(news.notifications);
+          setMarketMovers(movers || { gainers: [], losers: [] });
+          setDailyMissions(missions.missions || []);
         })
         .catch(() => {});
     loadServerNews();
@@ -72,9 +103,14 @@ export default function HomePage() {
   const todayProfit = Number(user.todayProfit || 0);
   const isLowBalance = (user.totalAsset || user.balance) < 500000;
   const latestNewsItems = notifications.slice(0, 2);
-  const quickGameEntries = ["risk-button", "bomb-dodge", "slot"]
+  const quickGameEntries = ["risk-button", "bomb-dodge", "slot", "cup"]
     .map((key) => [key, gameMeta[key]])
     .filter(([, game]) => Boolean(game));
+  const completedMissionCount = dailyMissions.filter((mission) => mission.completed).length;
+  const claimableMissions = dailyMissions.filter((mission) => mission.completed && !mission.claimed);
+  const topGainer = marketMovers.gainers?.[0];
+  const topLoser = marketMovers.losers?.[0];
+  const formatRate = (value) => `${value >= 0 ? "+" : ""}${(Number(value || 0) * 100).toFixed(1)}%`;
 
   const applyJackpot = async () => {
     setJackpotBusy(true);
@@ -86,14 +122,24 @@ export default function HomePage() {
         ...current,
         myTickets: 0,
         appliedTickets: data.totalApplied,
-        totalAppliedTickets: data.totalAppliedTickets,
-        totalParticipants: data.totalParticipants,
+        totalAppliedTickets: data.jackpotInfo?.totalExtraEntries || data.totalAppliedTickets,
+        totalParticipants: data.jackpotInfo?.totalEffectiveEntries || data.totalParticipants,
       } : current);
       await refreshUser();
     } catch (error) {
       setJackpotMessage(error.message);
     } finally {
       setJackpotBusy(false);
+    }
+  };
+
+  const claimMission = async (missionId) => {
+    try {
+      const data = await api(`/me/daily-missions/${missionId}/claim`, { method: "POST" });
+      setDailyMissions(data.missions || []);
+      await refreshUser();
+    } catch (error) {
+      setJackpotMessage(error.message);
     }
   };
 
@@ -232,7 +278,12 @@ export default function HomePage() {
             <div className="mb-3 rounded-2xl border border-warning/20 bg-base-100 p-4 shadow-inner">
               <span className="text-xs font-bold text-base-content/55">누적 상금 금액</span>
               <strong className="mt-1 block text-2xl font-black text-warning tabular-nums">
-                <MoneyText value={jackpotData.jackpotPool || 0} />
+                <AnimatedMoney value={jackpotData.jackpotPool || 0} />
+                {jackpotAddedAmount > 0 && (
+                  <span className="ml-2 inline-block animate-bounce text-xs text-success">
+                    +{jackpotAddedAmount.toLocaleString("ko-KR")}원
+                  </span>
+                )}
               </strong>
             </div>
 
@@ -252,10 +303,10 @@ export default function HomePage() {
               <div className="col-span-2 rounded-2xl border border-warning/20 bg-base-100/80 p-3">
                 <span className="text-[11px] font-bold text-base-content/55">전체 응모 수</span>
                 <strong className="mt-1 block text-sm font-black text-warning tabular-nums">
-                  {(jackpotData.totalAppliedTickets || 0).toLocaleString("ko-KR")}장
+                  {(jackpotData.totalParticipants || 0).toLocaleString("ko-KR")}장
                 </strong>
                 <span className="mt-1 block text-[10px] font-bold text-base-content/45">
-                  {(jackpotData.totalParticipants || 0).toLocaleString("ko-KR")}명이 응모했어요.
+                  모든 플레이어는 기본 1장씩 자동 응모돼요.
                 </span>
               </div>
             </div>
@@ -275,6 +326,91 @@ export default function HomePage() {
             </div>
           </BaseCard>
         )}
+      </section>
+
+      <section className="mb-8 grid gap-4 lg:grid-cols-2">
+        <BaseCard className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+          <SectionHeader title="오늘의 시장" eyebrow="MARKET" className="mb-4" />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-2xl bg-success/10 p-4">
+              <p className="text-xs font-black text-success">최고 상승</p>
+              {topGainer ? (
+                <>
+                  <strong className="mt-2 block truncate text-lg font-black">{topGainer.name}</strong>
+                  <span className="mt-1 block text-sm font-black text-success tabular-nums">
+                    {formatRate(topGainer.changeRate)}
+                  </span>
+                </>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-base-content/50">상승 종목이 없습니다.</p>
+              )}
+            </div>
+            <div className="rounded-2xl bg-error/10 p-4">
+              <p className="text-xs font-black text-error">최대 하락</p>
+              {topLoser ? (
+                <>
+                  <strong className="mt-2 block truncate text-lg font-black">{topLoser.name}</strong>
+                  <span className="mt-1 block text-sm font-black text-error tabular-nums">
+                    {formatRate(topLoser.changeRate)}
+                  </span>
+                </>
+              ) : (
+                <p className="mt-2 text-sm font-bold text-base-content/50">하락 종목이 없습니다.</p>
+              )}
+            </div>
+          </div>
+          <Link to="/stocks" className="btn btn-outline mt-4 min-h-11 w-full rounded-2xl">
+            주식 시장 보기
+          </Link>
+        </BaseCard>
+
+        <BaseCard className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+          <SectionHeader
+            title="오늘의 미션"
+            eyebrow="DAILY"
+            rightContent={
+              <span className="text-xs font-black text-primary">
+                {completedMissionCount}/{dailyMissions.length || 0}
+              </span>
+            }
+            className="mb-4"
+          />
+          <div className="grid gap-2">
+            {dailyMissions.slice(0, 4).map((mission) => (
+              <div key={mission.id} className="flex items-center justify-between gap-3 rounded-2xl bg-base-200/45 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-black">{mission.title}</p>
+                  <p className="text-xs font-bold text-base-content/50 tabular-nums">
+                    {mission.progressCount}/{mission.targetCount}
+                  </p>
+                </div>
+                {mission.claimed ? (
+                  <span className="badge badge-success badge-outline shrink-0">수령 완료</span>
+                ) : mission.completed ? (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-xs min-h-8 shrink-0 rounded-xl"
+                    onClick={() => claimMission(mission.id)}
+                  >
+                    보상 받기
+                  </button>
+                ) : (
+                  <span className="badge badge-outline shrink-0">진행 중</span>
+                )}
+              </div>
+            ))}
+            {dailyMissions.length === 0 && (
+              <p className="rounded-2xl bg-base-200/45 p-4 text-sm font-bold text-base-content/50">
+                미션 정보를 불러오는 중입니다.
+              </p>
+            )}
+          </div>
+          {claimableMissions.length > 0 && (
+            <p className="mt-3 text-xs font-bold text-primary">
+              수령 가능한 보상 {claimableMissions.length}개가 있습니다.
+            </p>
+          )}
+        </BaseCard>
       </section>
 
       <section className="mb-8">

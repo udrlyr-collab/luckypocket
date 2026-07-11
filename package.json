@@ -10,6 +10,8 @@
     "build": "vite build",
     "start": "node server/index.js",
     "db:init": "node server/scripts/initDb.js",
+    "stock:repair-stats": "node server/scripts/repairStockTradeStats.js",
+    "stock:repair-accounting": "node server/scripts/repairStockAccounting.js --apply",
     "test": "node --test"
   },
   "dependencies": {

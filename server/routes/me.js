@@ -5,6 +5,11 @@ import { serializeAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { getBankruptcyStatus } from "../services/bankruptcyService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import {
+  claimDailyMissionReward,
+  getUserDailyMissions,
+} from "../services/dailyMissionService.js";
+import { getLuckStats } from "../services/luckStatsService.js";
 
 export const meRouter = Router();
 meRouter.use(requireAuth);
@@ -30,13 +35,23 @@ meRouter.get("/", (req, res) => {
       "SELECT COUNT(*) AS count FROM revival_claims WHERE user_id = ? AND claim_date = date('now', '+9 hours')",
     )
     .get(user.id).count;
-  const currentRank = db
-    .prepare("SELECT 1 + COUNT(DISTINCT balance) AS rank FROM users WHERE balance > ?")
-    .get(user.balance).rank;
-  const totalUsers = db.prepare("SELECT COUNT(*) AS count FROM users").get().count;
-
   const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
   const { totalEvaluatedAsset } = valuation;
+  const rankedUsers = db.prepare("SELECT id FROM users ORDER BY id ASC").all()
+    .map((entry) => ({
+      id: entry.id,
+      totalEvaluatedAsset: calculateUserTotalEvaluatedAsset(db, entry.id).totalEvaluatedAsset,
+    }))
+    .sort((left, right) => right.totalEvaluatedAsset - left.totalEvaluatedAsset || left.id - right.id);
+  let previousAsset = null;
+  let previousRank = 0;
+  const currentRank = rankedUsers.reduce((rank, entry, index) => {
+    const nextRank = entry.totalEvaluatedAsset === previousAsset ? previousRank : index + 1;
+    previousAsset = entry.totalEvaluatedAsset;
+    previousRank = nextRank;
+    return entry.id === user.id ? nextRank : rank;
+  }, 1);
+  const totalUsers = rankedUsers.length;
   const bankruptcyStatus = getBankruptcyStatus(db, user, valuation);
 
   if (!bankruptcyStatus.eligible && user.bankruptcy_prompt_dismissed_at) {
@@ -89,6 +104,26 @@ meRouter.get("/season-results", (req, res) => {
     }));
 
   return res.json({ results });
+});
+
+meRouter.get("/daily-missions", (req, res) => {
+  return res.json({ missions: getUserDailyMissions(db, req.user.id) });
+});
+
+meRouter.post("/daily-missions/:missionId/claim", (req, res, next) => {
+  try {
+    const missionId = Number(req.params.missionId);
+    if (!Number.isSafeInteger(missionId)) {
+      return res.status(400).json({ message: "올바른 미션 ID가 아닙니다." });
+    }
+    return res.json(claimDailyMissionReward(db, req.user.id, missionId));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+meRouter.get("/luck-stats", (req, res) => {
+  return res.json({ luckStats: getLuckStats(db, req.user.id) });
 });
 
 meRouter.post("/revive", (req, res, next) => {

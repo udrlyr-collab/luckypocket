@@ -23,6 +23,12 @@ import {
   setJackpotPool,
   runJackpotDraw,
 } from "../services/jackpotService.js";
+import {
+  getAdminDashboardSummary,
+  getLatestEconomyAudit,
+  runConsistencyCheck,
+  runEconomyAudit,
+} from "../services/economyAuditService.js";
 import { formatWon } from "../utils/formatWon.js";
 
 export const adminRouter = Router();
@@ -46,6 +52,23 @@ adminRouter.use((req, res, next) => {
     return res.status(403).json({ message: "관리자 권한이 필요해요." });
   }
   return next();
+});
+
+adminRouter.get("/dashboard/summary", (_req, res) => {
+  return res.json(getAdminDashboardSummary(db));
+});
+
+adminRouter.get("/economy/audit", (req, res) => {
+  const latest = getLatestEconomyAudit(db) || runEconomyAudit(db, req.user.id);
+  return res.json(latest);
+});
+
+adminRouter.post("/economy/audit/run", (req, res) => {
+  return res.json(runEconomyAudit(db, req.user.id));
+});
+
+adminRouter.post("/economy/consistency-check", (req, res) => {
+  return res.json(runConsistencyCheck(db, req.user.id));
 });
 
 adminRouter.get("/users/search", (req, res) => {
@@ -487,6 +510,63 @@ adminRouter.post("/stocks/:stockId/manual-adjust", (req, res) => {
   }
 });
 
+adminRouter.patch("/stocks/:stockId/profile", (req, res) => {
+  try {
+    if (req.user.username !== "admin") {
+      return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+    }
+    const stockId = Number(req.params.stockId);
+    const name = String(req.body?.name || "").trim().replace(/\s+/g, " ");
+    const sector = String(req.body?.sector || "").trim().replace(/\s+/g, " ");
+    const reason = String(req.body?.reason || "관리자 회사 정보 변경").trim().slice(0, 120);
+    if (!Number.isSafeInteger(stockId) || stockId < 1) throw new Error("종목을 확인해 주세요.");
+    if ([...name].length < 2 || [...name].length > 30) throw new Error("회사명은 2자 이상 30자 이하로 입력해 주세요.");
+    if ([...sector].length < 1 || [...sector].length > 20) throw new Error("섹터는 1자 이상 20자 이하로 입력해 주세요.");
+    if (/[<>]|\b(?:script|javascript)\b/i.test(name) || /[<>]|\b(?:script|javascript)\b/i.test(sector)) {
+      throw new Error("회사명과 섹터에는 사용할 수 없는 문자가 있어요.");
+    }
+
+    const result = db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+      if (!stock || stock.status === "delisted") throw new Error("상장 중인 종목만 변경할 수 있어요.");
+      const duplicate = db
+        .prepare("SELECT id FROM stocks WHERE id != ? AND status != 'delisted' AND name = ? COLLATE NOCASE")
+        .get(stockId, name);
+      if (duplicate) throw new Error("같은 이름의 활성 종목이 이미 있어요.");
+
+      const before = { name: stock.name, sector: stock.sector || "기타" };
+      const after = { name, sector };
+      db.prepare(
+        `UPDATE stocks
+         SET name = ?, sector = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = ?`,
+      ).run(name, sector, stockId);
+      db.prepare(
+        `INSERT INTO admin_logs
+         (admin_user_id, target_user_id, target_stock_id, action_type, before_value, after_value, reason)
+         VALUES (?, ?, ?, 'admin_stock_profile_update', ?, ?, ?)`,
+      ).run(req.user.id, req.user.id, stockId, JSON.stringify(before), JSON.stringify(after), reason || null);
+      db.prepare(
+        `INSERT INTO stock_events
+         (stock_id, stock_name_snapshot, symbol_snapshot, event_type, title, message, created_by_user_id, metadata_json)
+         VALUES (?, ?, ?, 'admin_stock_profile_update', '회사 정보 변경', ?, ?, ?)`,
+      ).run(
+        stockId,
+        name,
+        stock.symbol,
+        `${name}의 회사명 또는 섹터 정보가 관리자에 의해 변경되었어요.`,
+        req.user.id,
+        JSON.stringify({ oldName: before.name, newName: name, oldSector: before.sector, newSector: sector, reason }),
+      );
+      return db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+    })();
+
+    return res.json({ message: "회사 정보를 변경했어요.", stock: result });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
 adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
   try {
     const stockId = Number(req.params.id);
@@ -500,7 +580,10 @@ adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
       if (!stock || stock.status === 'delisted') throw new Error("존재하지 않거나 상장폐지된 종목입니다.");
       if (stock.status === 'acquired' || stock.is_etf) throw new Error("이미 인수된 종목입니다.");
       const ownerAsset = Math.max(
-        calculateUserTotalEvaluatedAsset(db, admin.id).totalEvaluatedAsset,
+        calculateUserTotalEvaluatedAsset(db, admin.id, {
+          excludeStockIds: [stock.id],
+          excludePositionsForStockIds: [stock.id],
+        }).totalEvaluatedAsset,
         1,
       );
 
@@ -509,7 +592,13 @@ adminRouter.post("/stocks/:id/acquire", (req, res, next) => {
         SET status = 'acquired', is_etf = 1, etf_tracking_type = 'owner_asset', 
             owner_user_id = ?, owner_nickname_snapshot = ?,
             etf_base_price = current_price,
-            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?
+            etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
+            etf_delist_reference_price = current_price,
+            etf_delist_reference_set_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            etf_delist_trigger_price = MAX(1, CAST(current_price * 0.15 AS INTEGER)),
+            etf_delist_triggered_at = NULL, etf_delist_reason = NULL,
+            delist_risk_status = 'normal', is_market_cap_warning = 0,
+            caution_tick_count = 0, recovery_tick_count = 0, delist_review_tick_count = 0
         WHERE id = ?
       `).run(admin.id, admin.nickname, ownerAsset, ownerAsset, stock.id);
 
@@ -540,7 +629,9 @@ adminRouter.post("/stocks/:id/revert", (req, res, next) => {
         UPDATE stocks 
         SET status = 'listed', is_etf = 0, etf_tracking_type = NULL, 
             owner_user_id = NULL, owner_nickname_snapshot = NULL,
-            etf_base_owner_asset = 0, etf_last_tracked_owner_asset = 0
+            etf_base_owner_asset = 0, etf_last_tracked_owner_asset = 0,
+            etf_delist_reference_price = NULL, etf_delist_reference_set_at = NULL,
+            etf_delist_trigger_price = NULL, etf_delist_triggered_at = NULL, etf_delist_reason = NULL
         WHERE id = ?
       `).run(stock.id);
 
@@ -741,7 +832,7 @@ adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
 
     const eventType = publishNews ? "admin_blue_chip_selected" : "admin_stock_manual_adjust";
 
-    db.prepare(`
+    const stockEvent = db.prepare(`
       INSERT INTO stock_events (
         stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
         title, message, price_before, price_after, change_amount, change_rate, 
@@ -757,8 +848,8 @@ adminRouter.post("/stocks/:id/blue-chip", (req, res) => {
     if (publishNews) {
       db.prepare(`
         INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
-        VALUES ('시스템', 'admin_blue_chip_selected', '우량주 선정', ?, 0, 'stock', ?)
-      `).run(finalContent, String(stockId));
+        VALUES ('시스템', 'admin_blue_chip_selected', '우량주 선정', ?, 0, 'stock_event', ?)
+      `).run(finalContent, String(stockEvent.lastInsertRowid));
     }
   })();
   
@@ -827,16 +918,14 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
   // Determine auto messages
   let finalTitle = String(newsTitle || "").trim();
   let finalContent = String(newsContent || "").trim();
-
-  if (direction === "up") {
-    if (!finalTitle) finalTitle = "목표주가 상향";
-    if (!finalContent) finalContent = `${stock.name}이(가) 목표주가 ${targetPrice.toLocaleString("ko-KR")}원을 향해 상승 이벤트를 시작했어요.`;
-  } else {
-    if (!finalTitle) finalTitle = "목표주가 하향";
-    if (!finalContent) finalContent = `${stock.name}이(가) 목표주가 ${targetPrice.toLocaleString("ko-KR")}원을 향해 하락 이벤트를 시작했어요.`;
+  if (!finalTitle) finalTitle = direction === "up" ? "호재" : "악재";
+  if (!finalContent) {
+    finalContent = reason
+      ? `${stock.name}: ${reason}`
+      : `${stock.name} 가격 조정이 시작되었어요.`;
   }
 
-  db.transaction(() => {
+  const startTarget = db.transaction(() => {
     db.prepare(`
       UPDATE stocks
       SET admin_price_target_active = 1,
@@ -890,12 +979,7 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
       targetPrice, percentPerTick, req.user.id, JSON.stringify({ reason })
     );
 
-    if (publishNews) {
-      db.prepare(`
-        INSERT INTO server_notifications (nickname_snapshot, type, title, message, amount, source_type, source_id)
-        VALUES ('시스템', 'admin_price_target_started', '목표주가 설정', ?, 0, 'stock', ?)
-      `).run(finalContent, String(stockId));
-    }
+    // Target price started notification removed per user request
   })();
 
   return res.json({ message: "목표주가 이벤트를 시작했습니다." });

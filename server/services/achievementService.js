@@ -26,6 +26,10 @@ export const ACHIEVEMENTS = [
   { key: "dart_small", title: "다트 명중", description: "작은 원 성공", reward: 800000 },
   { key: "dart_bullseye", title: "불스아이!", description: "불스아이 성공", reward: 3500000 },
   { key: "dart_sector", title: "섹터 스나이퍼", description: "특정 섹터 성공", reward: 1200000 },
+  { key: "cup_first", title: "첫 번째 컵", description: "컵 속 행운 처음 플레이", reward: 50000 },
+  { key: "cup_win", title: "행운의 공", description: "컵 속 행운 첫 당첨", reward: 150000 },
+  { key: "cup_8_win", title: "대담한 선택", description: "컵 8개 게임 당첨", reward: 2000000 },
+  { key: "cup_streak_3", title: "컵의 달인", description: "컵 속 행운 3연승", reward: 1000000 },
   { key: "comeback", title: "기사회생", description: "자산 100,000원 이하에서 1,000,000원 이상 회복", reward: 700000 },
   { key: "streak_3", title: "연승의 시작", description: "3연승", reward: 250000 },
   { key: "streak_5", title: "행운의 흐름", description: "5연승", reward: 800000 },
@@ -33,8 +37,8 @@ export const ACHIEVEMENTS = [
   { key: "games_100", title: "꾸준한 플레이어", description: "총 100판 플레이", reward: 1200000 },
   { key: "achievements_10", title: "행운 수집가", description: "일회성 업적 10개 획득", reward: 2500000 },
   { key: "achievements_20", title: "행운주머니의 전설", description: "일회성 업적 20개 획득", reward: 6000000 },
-  { key: "all_games_1", title: "모든 게임 탐험가", description: "5개 게임을 모두 1회 이상 플레이", reward: 500000 },
-  { key: "all_games_10", title: "균형 잡힌 플레이어", description: "5개 게임을 모두 10회 이상 플레이", reward: 2000000 },
+  { key: "all_games_1", title: "모든 게임 탐험가", description: "6개 게임을 모두 1회 이상 플레이", reward: 500000 },
+  { key: "all_games_10", title: "균형 잡힌 플레이어", description: "6개 게임을 모두 10회 이상 플레이", reward: 2000000 },
   { key: "loss_recovery", title: "손실 복구왕", description: "누적 손실 1,000,000원 이후 게임 순수익 플러스 전환", reward: 1500000 },
   { key: "daily_play", title: "오늘도 출석", description: "오늘 첫 게임 플레이", reward: 50000, repeatable: true },
 ];
@@ -42,7 +46,7 @@ export const ACHIEVEMENTS = [
 const ONE_TIME_KEYS = new Set(
   ACHIEVEMENTS.filter((achievement) => !achievement.repeatable).map((achievement) => achievement.key),
 );
-const GAME_TYPES = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart"];
+const GAME_TYPES = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
 
 function getSeoulDate(database) {
   return database.prepare("SELECT date('now', '+9 hours') AS value").get().value;
@@ -75,6 +79,11 @@ function getStats(database, userId) {
     .all(userId);
   const streak = recent.findIndex((row) => row.result !== "win");
   const currentStreak = streak === -1 ? recent.length : streak;
+  const cupRecent = database
+    .prepare("SELECT result FROM game_logs WHERE user_id = ? AND game_type = 'cup' ORDER BY id DESC LIMIT 3")
+    .all(userId);
+  const cupStreakBreak = cupRecent.findIndex((row) => row.result !== "win");
+  const cupCurrentStreak = cupStreakBreak === -1 ? cupRecent.length : cupStreakBreak;
   const lowBalance = database
     .prepare("SELECT MIN(balance_after) AS value FROM asset_events WHERE user_id = ?")
     .get(userId).value;
@@ -87,6 +96,7 @@ function getStats(database, userId) {
     ...totals,
     gameCounts,
     currentStreak,
+    cupCurrentStreak,
     lowBalance: lowBalance ?? 1000000,
     oneTimeCount,
   };
@@ -132,6 +142,10 @@ function qualifies(key, { database, userId, user, stats, context }) {
       return context.gameType === "dart" && context.won && context.radius <= 0.1;
     case "dart_sector":
       return context.gameType === "dart" && context.won && context.target?.startsWith("sector");
+    case "cup_first": return gameCount("cup") >= 1;
+    case "cup_win": return context.gameType === "cup" && context.won;
+    case "cup_8_win": return context.gameType === "cup" && context.won && context.cupCount === 8;
+    case "cup_streak_3": return stats.cupCurrentStreak >= 3;
     case "comeback": return stats.lowBalance <= 100000 && user.balance >= 1000000;
     case "streak_3": return stats.currentStreak >= 3;
     case "streak_5": return stats.currentStreak >= 5;

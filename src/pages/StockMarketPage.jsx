@@ -7,6 +7,27 @@ import AnimatedMoney from "../components/AnimatedMoney";
 import { StockRiskBadges, StockTierBadge } from "../components/StockRiskStatus";
 import { PageContainer, SectionHeader, BaseCard } from "../components/ui";
 import { useMarketClock } from "../hooks/useMarketClock";
+import StockActionErrorDialog from "../components/StockActionErrorDialog";
+
+function marketRegimeLabel(regime) {
+  return {
+    strong_bull: "강한 상승장",
+    bull: "상승장",
+    sideways: "횡보장",
+    bear: "하락장",
+    panic: "공포장",
+  }[regime] || "횡보장";
+}
+
+function marketRegimeDescription(regime) {
+  return {
+    strong_bull: "시장 전반에 강한 매수세가 이어지고 있어요.",
+    bull: "대형주 중심으로 완만한 매수세가 이어지고 있어요.",
+    sideways: "방향을 고르는 중이에요. 종목별 흐름을 살펴보세요.",
+    bear: "조심스러운 매도세가 이어지고 있어요.",
+    panic: "변동성이 커졌어요. 특히 소형주는 주의하세요.",
+  }[regime] || "시장 국면을 계산 중이에요.";
+}
 
 export default function StockMarketPage() {
   const { user } = useAuth();
@@ -14,8 +35,14 @@ export default function StockMarketPage() {
   const [market, setMarket] = useState(null);
   const [portfolio, setPortfolio] = useState(null);
   const [news, setNews] = useState([]);
+  const [marketMovers, setMarketMovers] = useState({ gainers: [], losers: [] });
+  const [volumeRankings, setVolumeRankings] = useState([]);
+  const [sectorEvents, setSectorEvents] = useState([]);
+  const [marketOverview, setMarketOverview] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState(null);
   const [activeTab, setActiveTab] = useState("market");
+  const [showWatchedOnly, setShowWatchedOnly] = useState(false);
   const lastIpoRefreshRef = useRef(0);
   const [blueChipModalOpen, setBlueChipModalOpen] = useState(false);
   const [blueChipStock, setBlueChipStock] = useState(null);
@@ -41,7 +68,7 @@ export default function StockMarketPage() {
       await api(path, { method: isDelete ? "DELETE" : "POST" });
       await fetchMarket();
     } catch (e) {
-      alert(e.message);
+      setActionError({ title: "관리자 작업을 완료하지 못했어요", message: e.message });
     } finally {
       setBusy(false);
     }
@@ -70,7 +97,7 @@ export default function StockMarketPage() {
       setBlueChipModalOpen(false);
       await fetchMarket();
     } catch (e) {
-      alert(e.message);
+      setActionError({ title: "우량주 설정을 완료하지 못했어요", message: e.message });
     } finally {
       setBusy(false);
     }
@@ -112,9 +139,41 @@ export default function StockMarketPage() {
     }
   };
 
+  const fetchMarketInsights = async () => {
+    try {
+      const [movers, volume, sectors, overview] = await Promise.all([
+        api("/stocks/market-movers"),
+        api("/stocks/trade-volume-rankings"),
+        api("/stocks/sector-events"),
+        api("/stocks/market-overview"),
+      ]);
+      setMarketMovers(movers || { gainers: [], losers: [] });
+      setVolumeRankings(volume.rankings || []);
+      setSectorEvents(sectors.events || []);
+      setMarketOverview(overview || null);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const toggleWatchlist = async (stock) => {
+    setBusy(true);
+    try {
+      await api(`/stocks/${stock.id}/watchlist`, {
+        method: stock.isWatched ? "DELETE" : "POST",
+      });
+      await fetchMarket();
+    } catch (e) {
+      setActionError({ title: "관심종목 설정을 변경하지 못했어요", message: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     fetchFullMarket().then(() => fetchMarket());
     fetchNews();
+    fetchMarketInsights();
 
     const fastInterval = setInterval(() => {
       fetchMarket();
@@ -122,6 +181,7 @@ export default function StockMarketPage() {
 
     const newsInterval = setInterval(() => {
       fetchNews();
+      fetchMarketInsights();
     }, 10000);
 
     return () => {
@@ -157,11 +217,18 @@ export default function StockMarketPage() {
 
   const { stocks, recentDelistedStocks, summary } = market;
   const { holdings, positions } = portfolio;
+  const displayedStocks = [...stocks]
+    .filter((stock) => !showWatchedOnly || stock.isWatched)
+    .sort((a, b) => {
+      if (a.isWatched !== b.isWatched) return a.isWatched ? -1 : 1;
+      return Number(b.market_cap || 0) - Number(a.market_cap || 0);
+    });
 
   const totalHoldingsValue = holdings.reduce((sum, h) => sum + h.value, 0);
   const totalHoldingsUnrealized = holdings.reduce((sum, h) => sum + h.unrealized_pnl, 0);
   const totalPositionsUnrealized = positions.reduce((sum, p) => sum + p.live_unrealized_pnl, 0);
   const totalMargin = positions.reduce((sum, p) => sum + p.margin_amount, 0);
+  const formatMoverRate = (rate) => `${rate >= 0 ? "+" : ""}${(Number(rate || 0) * 100).toFixed(1)}%`;
 
   return (
     <PageContainer>
@@ -192,6 +259,46 @@ export default function StockMarketPage() {
         <div className="alert alert-warning mb-6 rounded-2xl font-bold">
           <span>⏸ 현재 주식장은 휴장 중이에요. 가격 갱신과 모든 거래가 일시 중지됐어요.</span>
         </div>
+      )}
+
+      {marketOverview && (
+        <section className="mb-6 grid gap-4 lg:grid-cols-3">
+          <BaseCard className="rounded-3xl border border-primary/20 bg-primary/5 p-5 shadow-sm">
+            <p className="text-xs font-black tracking-widest text-primary">CURRENT MARKET</p>
+            <h2 className="mt-2 text-xl font-black">
+              {marketRegimeLabel(marketOverview.marketRegime?.key)}
+            </h2>
+            <p className="mt-2 text-sm font-bold text-base-content/60">
+              {marketRegimeDescription(marketOverview.marketRegime?.key)}
+            </p>
+          </BaseCard>
+          <BaseCard className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+            <p className="text-xs font-black tracking-widest text-secondary">SECTOR ROTATION</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(marketOverview.sectorRotation || []).slice(0, 4).map((event) => (
+                <span key={event.id} className={`badge rounded-xl font-bold ${event.sentiment === "good" ? "badge-success" : event.sentiment === "bad" ? "badge-error" : "badge-warning"}`}>
+                  {event.sector} · {event.sentiment === "good" ? "강세" : event.sentiment === "bad" ? "약세" : "변동성"}
+                </span>
+              ))}
+              {(marketOverview.sectorRotation || []).length === 0 && (
+                <span className="text-sm font-bold text-base-content/45">현재 순환매가 없어요.</span>
+              )}
+            </div>
+          </BaseCard>
+          <BaseCard className="rounded-3xl border border-warning/25 bg-warning/5 p-5 shadow-sm">
+            <p className="text-xs font-black tracking-widest text-warning">TODAY'S UNLUCKY</p>
+            {marketOverview.dailyUnluckyAward ? (
+              <>
+                <h2 className="mt-2 text-xl font-black">오늘의 불운왕 · {marketOverview.dailyUnluckyAward.nickname}</h2>
+                <p className="mt-2 text-sm font-bold text-base-content/60 tabular-nums">
+                  총평가자산 {(Number(marketOverview.dailyUnluckyAward.lossRate || 0) * 100).toFixed(1)}% 손실 · 행운권 {marketOverview.dailyUnluckyAward.awardedLuckTickets}장
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-sm font-bold text-base-content/50">아직 선정 결과가 없어요.</p>
+            )}
+          </BaseCard>
+        </section>
       )}
 
       <div className="mb-8 grid gap-4 lg:grid-cols-12">
@@ -256,7 +363,79 @@ export default function StockMarketPage() {
 
       {activeTab === "market" && (
         <section className="animate-fade-in mb-8">
-          <SectionHeader title="시장 종목" eyebrow="STOCKS" className="mb-4" />
+          <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <SectionHeader title="시장 종목" eyebrow="STOCKS" className="mb-0" />
+            <button
+              type="button"
+              className={`btn btn-sm rounded-2xl whitespace-nowrap ${showWatchedOnly ? "btn-primary" : "btn-outline"}`}
+              onClick={() => setShowWatchedOnly((value) => !value)}
+            >
+              {showWatchedOnly ? "★ 관심종목만" : "☆ 관심종목 먼저"}
+            </button>
+          </div>
+          <div className="mb-4 grid gap-3 lg:grid-cols-3">
+            <BaseCard className="rounded-2xl border border-success/20 bg-success/5 p-4 shadow-none">
+              <p className="text-xs font-black text-success">오늘 상승 TOP</p>
+              <div className="mt-3 grid gap-2">
+                {(marketMovers.gainers || []).slice(0, 3).map((item) => (
+                  <Link key={item.stockId} to={`/stocks/${item.stockId}`} className="flex items-center justify-between gap-3 text-sm font-bold">
+                    <span className="truncate">{item.name}</span>
+                    <span className="shrink-0 text-success tabular-nums">{formatMoverRate(item.changeRate)}</span>
+                  </Link>
+                ))}
+                {(marketMovers.gainers || []).length === 0 && (
+                  <span className="text-sm font-bold text-base-content/45">상승 종목 없음</span>
+                )}
+              </div>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-error/20 bg-error/5 p-4 shadow-none">
+              <p className="text-xs font-black text-error">오늘 하락 TOP</p>
+              <div className="mt-3 grid gap-2">
+                {(marketMovers.losers || []).slice(0, 3).map((item) => (
+                  <Link key={item.stockId} to={`/stocks/${item.stockId}`} className="flex items-center justify-between gap-3 text-sm font-bold">
+                    <span className="truncate">{item.name}</span>
+                    <span className="shrink-0 text-error tabular-nums">{formatMoverRate(item.changeRate)}</span>
+                  </Link>
+                ))}
+                {(marketMovers.losers || []).length === 0 && (
+                  <span className="text-sm font-bold text-base-content/45">하락 종목 없음</span>
+                )}
+              </div>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-none">
+              <p className="text-xs font-black text-primary">거래량 TOP</p>
+              <div className="mt-3 grid gap-2">
+                {volumeRankings.slice(0, 3).map((item) => (
+                  <Link key={item.stockId} to={`/stocks/${item.stockId}`} className="flex items-center justify-between gap-3 text-sm font-bold">
+                    <span className="truncate">{item.name}</span>
+                    <span className="shrink-0 tabular-nums">{Number(item.todayTradeVolume || 0).toLocaleString("ko-KR", { maximumFractionDigits: 1 })}주</span>
+                  </Link>
+                ))}
+                {volumeRankings.length === 0 && (
+                  <span className="text-sm font-bold text-base-content/45">오늘 거래 없음</span>
+                )}
+              </div>
+            </BaseCard>
+          </div>
+          {sectorEvents.length > 0 && (
+            <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+              {sectorEvents.map((event) => (
+                <span
+                  key={event.id}
+                  className={`badge badge-lg shrink-0 gap-1 rounded-2xl px-3 font-black ${
+                    event.sentiment === "good"
+                      ? "badge-success"
+                      : event.sentiment === "bad"
+                        ? "badge-error"
+                        : "badge-warning"
+                  }`}
+                  title={event.content}
+                >
+                  {event.sector} · {event.title}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="bg-base-100 rounded-3xl p-3 sm:p-5 shadow-sm border border-base-200">
             <div className="hidden sm:flex text-xs font-bold text-base-content/40 px-4 pb-3 border-b border-base-200 mb-2">
               <div className="flex-[3] pl-2">종목명 및 상태</div>
@@ -265,7 +444,12 @@ export default function StockMarketPage() {
               <div className="flex-1 text-right pr-2">시가총액 / 공모 정보</div>
             </div>
             <div className="grid gap-1.5">
-              {stocks.map(stock => (
+              {displayedStocks.length === 0 && (
+                <div className="rounded-2xl bg-base-200/50 p-8 text-center text-sm font-bold text-base-content/50">
+                  관심종목으로 등록한 종목이 없습니다.
+                </div>
+              )}
+              {displayedStocks.map(stock => (
                 <StockRow
                   key={stock.id}
                   stock={stock}
@@ -273,6 +457,8 @@ export default function StockMarketPage() {
                   handleAdminAction={handleAdminAction}
                   openBlueChipModal={openBlueChipModal}
                   remainingSecondsUntil={remainingSecondsUntil}
+                  toggleWatchlist={toggleWatchlist}
+                  busy={busy}
                 />
               ))}
               {recentDelistedStocks && recentDelistedStocks.length > 0 && (
@@ -287,6 +473,8 @@ export default function StockMarketPage() {
                         handleAdminAction={handleAdminAction}
                         openBlueChipModal={openBlueChipModal}
                         remainingSecondsUntil={remainingSecondsUntil}
+                        toggleWatchlist={toggleWatchlist}
+                        busy={busy}
                       />
                     ))}
                   </div>
@@ -399,6 +587,9 @@ export default function StockMarketPage() {
                             </td>
                             <td className={`text-right tabular-nums pr-2 ${p.live_unrealized_pnl >= 0 ? "text-success" : "text-error"}`}>
                               {formatSignedMoney(p.live_unrealized_pnl)}
+                              {p.profit_cap_applied && (
+                                <span className="block text-[10px] text-warning">상한 적용</span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -535,11 +726,17 @@ export default function StockMarketPage() {
           </div>
         </div>
       )}
+      <StockActionErrorDialog
+        open={Boolean(actionError)}
+        title={actionError?.title}
+        message={actionError?.message}
+        onClose={() => setActionError(null)}
+      />
     </PageContainer>
   );
 }
 
-function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remainingSecondsUntil }) {
+function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remainingSecondsUntil, toggleWatchlist, busy }) {
   const isDelisted = stock.status === 'delisted';
   const isUp = stock.priceChangeAmount > 0;
   const isDown = stock.priceChangeAmount < 0;
@@ -557,6 +754,19 @@ function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remain
   return (
     <Link to={`/stocks/${stock.id}`} className="group flex flex-col sm:flex-row sm:items-center p-3 rounded-xl hover:bg-base-200/50 transition border border-transparent hover:border-base-200/50">
       <div className="flex-[3] flex items-center min-w-0 mb-1 sm:mb-0">
+        <button
+          type="button"
+          className={`btn btn-ghost btn-xs mr-2 min-h-0 h-7 w-7 rounded-full px-0 ${stock.isWatched ? "text-warning" : "text-base-content/35"}`}
+          disabled={busy}
+          aria-label={stock.isWatched ? "관심종목 해제" : "관심종목 추가"}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleWatchlist?.(stock);
+          }}
+        >
+          {stock.isWatched ? "★" : "☆"}
+        </button>
         <h3 className="font-black text-base truncate mr-2">{stock.name}</h3>
         <div className="flex gap-1 shrink-0 flex-wrap">
           {stock.status === 'ipo_subscription' && ipoTimeRemaining !== null && (
@@ -567,6 +777,8 @@ function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remain
              </span>
           )}
           {stock.status === 'newly_listed' && <span className="badge badge-warning badge-xs py-1 font-bold">신규 상장</span>}
+          {stock.sector && <span className="badge badge-outline badge-xs py-1 font-bold">{stock.sector}</span>}
+          {stock.volatilityBadge && <span className="badge badge-ghost badge-xs py-1 font-bold">{stock.volatilityBadge}</span>}
           {isIpoLimitNear && <span className="badge badge-error badge-xs py-1 font-bold">상한 근접</span>}
           {!isIpoLimitNear && isIpoOverheated && <span className="badge badge-warning badge-xs py-1 font-bold">공모주 과열</span>}
           {stock.status === 'acquired' && <span className="badge badge-primary badge-xs py-1 font-bold">인수됨</span>}
@@ -615,14 +827,19 @@ function StockRow({ stock, isAdmin, handleAdminAction, openBlueChipModal, remain
           <span className="sm:ml-1 text-[10px] opacity-80">({isUp ? "+" : ""}{(stock.priceChangeRate * 100).toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%)</span>
         </div>
 
-        <div className="flex-1 text-right text-[11px] text-base-content/50 truncate hidden sm:block">
-          {stock.is_etf ? (
-            <span className="text-primary">{stock.owner_nickname_snapshot}</span>
-          ) : stock.status === 'ipo_subscription' || stock.status === 'newly_listed' ? (
-            <span className="text-warning">공모가 {formatCompactMoney(stock.offering_price)}</span>
-          ) : (
-            formatCompactMoney(stock.market_cap)
-          )}
+        <div className="flex-1 text-right text-[11px] text-base-content/50 hidden sm:block">
+          <div className="truncate">
+            {stock.is_etf ? (
+              <span className="text-primary">{stock.owner_nickname_snapshot}</span>
+            ) : stock.status === 'ipo_subscription' || stock.status === 'newly_listed' ? (
+              <span className="text-warning">공모가 {formatCompactMoney(stock.offering_price)}</span>
+            ) : (
+              formatCompactMoney(stock.market_cap)
+            )}
+          </div>
+          <div className="mt-0.5 text-[10px] text-base-content/35">
+            오늘 {Number(stock.todayTradeVolume || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}주 · {formatCompactMoney(stock.todayTradeValue || 0)}
+          </div>
         </div>
       </div>
     </Link>
@@ -657,10 +874,10 @@ function Badge({ type, label, sentiment }) {
   } else if (type === "admin_price_target_started") {
     if (sentiment === "bad") {
       colorClass = "bg-error/20 text-error";
-      displayLabel = `[악재] [목표주가 하향]`;
+      displayLabel = `[악재]`;
     } else {
       colorClass = "bg-success/20 text-success";
-      displayLabel = `[호재] [목표주가 상향]`;
+      displayLabel = `[호재]`;
     }
   } else if (type === "admin_stock_manual_adjust") {
     colorClass = "bg-base-300 text-base-content";

@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { formatMoney } from "../utils/format";
 import { SectionHeader, BaseCard } from "./ui";
+
+const COMPANY_SECTORS = ["AI", "보안", "게임", "식품", "에너지", "광업", "바이오", "미디어", "운송", "금융", "소비재", "소프트웨어", "제조", "기타"];
 
 /**
  * AdminStockControlPanel — 관리자 주가 조정 공통 패널 컴포넌트
@@ -11,7 +13,7 @@ import { SectionHeader, BaseCard } from "./ui";
  *   onActionComplete — 액션 성공 후 콜백 (refetch 등)
  *   compact      — true이면 종목 선택 숨김, 종목명/현재가만 표시 (StockDetailPage용)
  */
-export default function AdminStockControlPanel({ stock, onActionComplete, compact = false }) {
+export default function AdminStockControlPanel({ stock, onActionComplete, compact = false, canEditCompanyProfile = false }) {
   const [openSection, setOpenSection] = useState(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -48,6 +50,19 @@ export default function AdminStockControlPanel({ stock, onActionComplete, compac
     newsContent: "",
     publishNews: true,
   });
+  const [companyProfile, setCompanyProfile] = useState({
+    name: stock.name || "",
+    sector: stock.sector || "기타",
+    reason: "관리자 회사 정보 변경",
+  });
+
+  useEffect(() => {
+    setCompanyProfile({
+      name: stock.name || "",
+      sector: stock.sector || "기타",
+      reason: "관리자 회사 정보 변경",
+    });
+  }, [stock.id, stock.name, stock.sector]);
 
   const currentPrice = stock.current_price || stock.currentPrice || 0;
 
@@ -131,6 +146,15 @@ export default function AdminStockControlPanel({ stock, onActionComplete, compac
       setMessage(res.message);
     });
 
+  const applyCompanyProfile = () =>
+    doAction(async () => {
+      const res = await api(`/admin/stocks/${stock.id}/profile`, {
+        method: "PATCH",
+        body: JSON.stringify(companyProfile),
+      });
+      setMessage(res.message);
+    });
+
   const isTargetUp = target.targetPrice ? Number(target.targetPrice) > currentPrice : null;
 
   const blueChipRampActive = stock.blueChipRampActive || (stock.blue_chip_target_price && stock.blue_chip_ramp_percent_per_tick && stock.is_bluechip === 1 && currentPrice < (stock.blue_chip_target_price || stock.blueChipTargetPrice || 0));
@@ -200,6 +224,76 @@ export default function AdminStockControlPanel({ stock, onActionComplete, compac
       )}
 
       {/* 1. Manual Adjust Accordion */}
+      {canEditCompanyProfile && <AccordionCard
+        title="회사 정보 강제 변경"
+        eyebrow="ADMIN COMPANY PROFILE"
+        badge={stock.sector || "기타"}
+        isOpen={openSection === "profile"}
+        onToggle={() => toggle("profile")}
+      >
+        <div className="grid gap-3 lg:grid-cols-2">
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">현재 회사명</span>
+            <input className="input input-bordered h-12 w-full rounded-2xl" value={stock.name || ""} disabled />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">새 회사명</span>
+            <input
+              className="input input-bordered h-12 w-full rounded-2xl"
+              value={companyProfile.name}
+              onChange={(event) => setCompanyProfile((current) => ({ ...current, name: event.target.value }))}
+              maxLength={30}
+            />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">현재 섹터</span>
+            <input className="input input-bordered h-12 w-full rounded-2xl" value={stock.sector || "기타"} disabled />
+          </label>
+          <label className="form-control">
+            <span className="label-text mb-1 font-bold">새 섹터</span>
+            <select
+              className="select select-bordered h-12 w-full rounded-2xl"
+              value={COMPANY_SECTORS.includes(companyProfile.sector) ? companyProfile.sector : "__custom"}
+              onChange={(event) => setCompanyProfile((current) => ({
+                ...current,
+                sector: event.target.value === "__custom" ? "" : event.target.value,
+              }))}
+            >
+              {COMPANY_SECTORS.map((sector) => <option key={sector} value={sector}>{sector}</option>)}
+              <option value="__custom">직접 입력</option>
+            </select>
+          </label>
+          {!COMPANY_SECTORS.includes(companyProfile.sector) && (
+            <label className="form-control lg:col-span-2">
+              <span className="label-text mb-1 font-bold">직접 입력 섹터</span>
+              <input
+                className="input input-bordered h-12 w-full rounded-2xl"
+                value={companyProfile.sector}
+                onChange={(event) => setCompanyProfile((current) => ({ ...current, sector: event.target.value }))}
+                maxLength={20}
+              />
+            </label>
+          )}
+          <label className="form-control lg:col-span-2">
+            <span className="label-text mb-1 font-bold">변경 사유</span>
+            <input
+              className="input input-bordered h-12 w-full rounded-2xl"
+              value={companyProfile.reason}
+              onChange={(event) => setCompanyProfile((current) => ({ ...current, reason: event.target.value }))}
+              maxLength={120}
+            />
+          </label>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary mt-4 min-h-12 w-full rounded-2xl"
+          disabled={busy || companyProfile.name.trim().length < 2 || !companyProfile.sector.trim()}
+          onClick={applyCompanyProfile}
+        >
+          {busy ? <span className="loading loading-spinner loading-sm" /> : "회사 정보 변경"}
+        </button>
+      </AccordionCard>}
+
       <AccordionCard
         title="주가 즉시 조정"
         eyebrow="ADMIN STOCK CONTROL"

@@ -6,6 +6,7 @@ import CardDrawGame from "./games/CardDrawGame";
 import DartGame from "./games/DartGame";
 import RiskButtonGame from "./games/RiskButtonGame";
 import SlotMachineGame from "./games/SlotMachineGame";
+import CupLuckGame from "./games/CupLuckGame";
 import AuthPage from "./pages/AuthPage";
 import HistoryPage from "./pages/HistoryPage";
 import HomePage from "./pages/HomePage";
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/games/bombs" element={<BombDodgeGame />} />
         <Route path="/games/slot" element={<SlotMachineGame />} />
         <Route path="/games/dart" element={<DartGame />} />
+        <Route path="/games/cup" element={<CupLuckGame />} />
         <Route path="/mine" element={<MinePage />} />
         <Route path="/ranking" element={<RankingPage />} />
         <Route path="/history" element={<HistoryPage />} />

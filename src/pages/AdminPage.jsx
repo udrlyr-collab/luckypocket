@@ -98,6 +98,12 @@ export default function AdminPage() {
   const [seasonInfo, setSeasonInfo] = useState(null);
   const [jackpotInfo, setJackpotInfo] = useState(null);
   const [jackpotAmount, setJackpotAmount] = useState("");
+  const [dashboardSummary, setDashboardSummary] = useState(null);
+  const [economyAudit, setEconomyAudit] = useState(null);
+  const [consistencyResult, setConsistencyResult] = useState(null);
+  const [stockFeeConfig, setStockFeeConfig] = useState(null);
+  const [showAllSuspicious, setShowAllSuspicious] = useState(false);
+  const [showAllConsistencyIssues, setShowAllConsistencyIssues] = useState(false);
   const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
   const [balanceConfirm, setBalanceConfirm] = useState(null);
   const [resetConfirmIds, setResetConfirmIds] = useState([]);
@@ -157,7 +163,23 @@ export default function AdminPage() {
         setBlueChipStockId((current) => current || String(list[0]?.id || ""));
       })
       .catch(() => {});
+    loadAdminInsights();
   }, []);
+
+  const loadAdminInsights = async () => {
+    try {
+      const [summary, audit, feeConfig] = await Promise.all([
+        api("/admin/dashboard/summary"),
+        api("/admin/economy/audit"),
+        api("/stocks/fees/config"),
+      ]);
+      setDashboardSummary(summary);
+      setEconomyAudit(audit);
+      setStockFeeConfig(feeConfig);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
 
   const currentPageIds = useMemo(
     () => result.users.map((item) => item.id),
@@ -522,8 +544,48 @@ export default function AdminPage() {
     }
   };
 
+  const runEconomyAuditNow = async () => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/economy/audit/run", { method: "POST" });
+      setEconomyAudit(data);
+      const summary = await api("/admin/dashboard/summary");
+      setDashboardSummary(summary);
+      setMessage("경제 안정성 감사를 실행했습니다.");
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runConsistencyCheckNow = async () => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const data = await api("/admin/economy/consistency-check", { method: "POST" });
+      setConsistencyResult(data);
+      setMessage("자산 일관성 점검을 실행했습니다.");
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const selectedIdList = [...selectedIds];
   const selectedStock = stocks.find((stock) => String(stock.id) === String(stockAdjust.stockId));
+  const suspiciousIssues = economyAudit?.suspiciousUsers || [];
+  const displayedSuspiciousIssues = showAllSuspicious
+    ? suspiciousIssues
+    : suspiciousIssues.slice(0, 3);
+  const consistencyIssues = consistencyResult?.issues || [];
+  const displayedConsistencyIssues = showAllConsistencyIssues
+    ? consistencyIssues
+    : consistencyIssues.slice(0, 3);
 
   return (
     <PageContainer>
@@ -531,6 +593,210 @@ export default function AdminPage() {
       <p className="mt-2 text-sm font-bold text-base-content/55 mb-6">
         전체 플레이어를 검색·선택하고 단일 또는 일괄 작업을 실행합니다.
       </p>
+
+      {dashboardSummary && (
+        <section className="mb-6">
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">전체 유저</span>
+              <strong className="mt-1 block text-xl font-black tabular-nums">
+                {dashboardSummary.totalUsers.toLocaleString("ko-KR")}명
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">총 현금 자산</span>
+              <strong className="mt-1 block text-xl font-black text-primary tabular-nums">
+                {formatMoney(dashboardSummary.totalCashAssets)}
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">주식 평가액</span>
+              <strong className="mt-1 block text-xl font-black tabular-nums">
+                {formatMoney(dashboardSummary.totalStockValue)}
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">의심 계정</span>
+              <strong className="mt-1 block text-xl font-black text-error tabular-nums">
+                {dashboardSummary.suspiciousAccountCount.toLocaleString("ko-KR")}개
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">오늘 생성 자산</span>
+              <strong className="mt-1 block text-lg font-black text-success tabular-nums">
+                {formatMoney(dashboardSummary.todayCreatedAssets)}
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">오늘 제거 자산</span>
+              <strong className="mt-1 block text-lg font-black text-error tabular-nums">
+                {formatMoney(dashboardSummary.todayRemovedAssets)}
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">오늘 잭팟</span>
+              <strong className="mt-1 block text-lg font-black text-warning tabular-nums">
+                {formatMoney(dashboardSummary.todayJackpotPool)}
+              </strong>
+            </BaseCard>
+            <BaseCard className="rounded-2xl border border-base-300 p-4 shadow-sm">
+              <span className="text-xs font-black text-base-content/50">주식 위험 이벤트</span>
+              <strong className="mt-1 block text-lg font-black tabular-nums">
+                목표 {dashboardSummary.targetPriceEventCount} · 우량 {dashboardSummary.blueChipRampCount} · 부실 심사 {dashboardSummary.distressReviewCount || 0} · 상장폐지 심사 {dashboardSummary.delistReviewCount}
+              </strong>
+            </BaseCard>
+          </div>
+        </section>
+      )}
+
+      <section className="mb-6 grid gap-4 lg:grid-cols-2">
+        <BaseCard className="rounded-3xl border border-base-300 p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <SectionHeader title="경제 안정성 감사" eyebrow="AUDIT" className="mb-2" />
+              <p className="text-sm font-bold text-base-content/55">
+                급격한 자산 증가, 파산·송금 루프, 레버리지 과수익을 점검합니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary min-h-11 rounded-2xl whitespace-nowrap"
+              disabled={busy}
+              onClick={runEconomyAuditNow}
+            >
+              감사 실행
+            </button>
+          </div>
+          <div className="mt-4 rounded-2xl bg-base-200/55 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-black text-base-content/50">최근 결과</span>
+                <strong className="mt-1 block text-lg font-black tabular-nums">
+                  의심 항목 {Number(economyAudit?.summary?.suspiciousCount || 0).toLocaleString("ko-KR")}개
+                </strong>
+              </div>
+              {suspiciousIssues.length > 3 && (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-outline min-h-8 rounded-xl"
+                  onClick={() => setShowAllSuspicious((value) => !value)}
+                >
+                  {showAllSuspicious ? "접기" : `전체보기 ${suspiciousIssues.length.toLocaleString("ko-KR")}개`}
+                </button>
+              )}
+            </div>
+            <div className="mt-3 max-h-96 overflow-y-auto pr-1">
+              {displayedSuspiciousIssues.map((issue, index) => (
+                <div key={`${issue.reason}-${index}`} className="mb-2 rounded-xl bg-base-100/80 p-3 text-xs font-bold text-base-content/65">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-black text-base-content">
+                      {issue.nickname || `user ${issue.userId || "-"}`}
+                    </span>
+                    {issue.createdAt && (
+                      <span className="text-[10px] text-base-content/40">
+                        {new Date(issue.createdAt).toLocaleString("ko-KR")}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1">{issue.reason}</p>
+                  {(issue.beforeAsset !== null && issue.beforeAsset !== undefined) || (issue.afterAsset !== null && issue.afterAsset !== undefined) ? (
+                    <p className="mt-1 tabular-nums text-base-content/50">
+                      {issue.beforeAsset !== null && issue.beforeAsset !== undefined ? `전 ${formatMoney(issue.beforeAsset)}` : ""}
+                      {issue.beforeAsset !== null && issue.beforeAsset !== undefined && issue.afterAsset !== null && issue.afterAsset !== undefined ? " → " : ""}
+                      {issue.afterAsset !== null && issue.afterAsset !== undefined ? `후 ${formatMoney(issue.afterAsset)}` : ""}
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+              {suspiciousIssues.length === 0 && (
+                <p className="text-xs font-bold text-base-content/45">의심 항목 없음</p>
+              )}
+            </div>
+          </div>
+        </BaseCard>
+
+        <BaseCard className="rounded-3xl border border-base-300 p-5 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <SectionHeader title="자산 일관성 점검" eyebrow="CONSISTENCY" className="mb-2" />
+              <p className="text-sm font-bold text-base-content/55">
+                음수 잔액, 음수 보유량, 비정상 포지션 손익을 탐지만 합니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-outline min-h-11 rounded-2xl whitespace-nowrap"
+              disabled={busy}
+              onClick={runConsistencyCheckNow}
+            >
+              점검 실행
+            </button>
+          </div>
+          <div className="mt-4 rounded-2xl bg-base-200/55 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-black text-base-content/50">최근 실행 결과</span>
+                <strong className="mt-1 block text-lg font-black tabular-nums">
+                  {consistencyResult?.summary?.status || "아직 실행 안 함"}
+                </strong>
+              </div>
+              {consistencyIssues.length > 3 && (
+                <button
+                  type="button"
+                  className="btn btn-xs btn-outline min-h-8 rounded-xl"
+                  onClick={() => setShowAllConsistencyIssues((value) => !value)}
+                >
+                  {showAllConsistencyIssues ? "접기" : `전체보기 ${consistencyIssues.length.toLocaleString("ko-KR")}개`}
+                </button>
+              )}
+            </div>
+            <div className="mt-3 max-h-96 overflow-y-auto pr-1">
+              {displayedConsistencyIssues.map((issue, index) => (
+                <p key={`${issue.message}-${index}`} className="mt-2 rounded-xl bg-base-100/80 p-3 text-xs font-bold text-base-content/60">
+                  {issue.nickname || `user ${issue.userId || "-"}`} · {issue.message}
+                </p>
+              ))}
+              {consistencyResult && consistencyIssues.length === 0 && (
+                <p className="text-xs font-bold text-base-content/45">검출된 문제가 없습니다.</p>
+              )}
+            </div>
+          </div>
+        </BaseCard>
+      </section>
+
+      {stockFeeConfig && (
+        <BaseCard className="mb-6 rounded-3xl border border-warning/25 p-5 shadow-sm">
+          <SectionHeader title="주식 수수료·누진세 설정" eyebrow="STOCK ECONOMY" className="mb-3" />
+          <div className="grid gap-3 lg:grid-cols-2">
+            <div className="rounded-2xl bg-base-200/55 p-4">
+              <p className="text-xs font-black text-base-content/50">거래 수수료율</p>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-sm font-bold">
+                <span>현물 매수 {(stockFeeConfig.fees.spotBuyFeeRate * 100).toFixed(2)}%</span>
+                <span>현물 매도 {(stockFeeConfig.fees.spotSellFeeRate * 100).toFixed(2)}%</span>
+                <span>레버리지 진입 {(stockFeeConfig.fees.leverageOpenFeeRate * 100).toFixed(3)}%</span>
+                <span>레버리지 청산 {(stockFeeConfig.fees.leverageCloseFeeRate * 100).toFixed(3)}%</span>
+              </div>
+            </div>
+            <div className="rounded-2xl bg-base-200/55 p-4">
+              <p className="text-xs font-black text-base-content/50">누진 양도소득세</p>
+              <div className="mt-2 grid gap-1 text-xs font-bold">
+                {stockFeeConfig.taxBrackets.map((bracket, index) => (
+                  <div key={`${bracket.label}-${index}`} className="flex justify-between gap-3">
+                    <span>{bracket.label}</span>
+                    <span className="tabular-nums">{(bracket.rate * 100).toFixed(0)}%</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] font-bold text-base-content/45">
+                원금 제외. 수수료 차감 후 순수익에만 구간별 초과분 과세.
+              </p>
+              <p className="mt-1 text-[11px] font-bold text-primary">
+                징수한 양도소득세 전액은 오늘의 잭팟에 적립되며, 주식 수익의 별도 1% 공제는 없습니다.
+              </p>
+            </div>
+          </div>
+        </BaseCard>
+      )}
 
       <BaseCard className="border-2 border-primary/20">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">

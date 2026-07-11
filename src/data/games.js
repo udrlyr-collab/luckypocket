@@ -34,6 +34,13 @@ export const gameMeta = {
     summary: "작은 목표일수록 행운이 통통 커져요.",
     color: "bg-emerald-100",
   },
+  cup: {
+    path: "/games/cup",
+    icon: "🥤",
+    title: "컵 속 행운",
+    summary: "컵 하나를 골라 숨은 행운의 공을 찾아요.",
+    color: "bg-primary/10",
+  },
 };
 
 export const riskStages = [

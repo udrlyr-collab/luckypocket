@@ -5,20 +5,51 @@ import { createServerNotification } from "../services/serverNotificationService.
 import {
   ACTIVE_TRADABLE_STOCK_STATUSES,
   delistStock,
-  recalculateOwnerEtfs,
   requiredCompanyAcquisitionBalance,
   getStockMarketClock,
   settleDueIpoSubscriptions,
   STOCK_MARKET_POLICY,
+  liquidatePosition,
 } from "../services/stockService.js";
-import { getPortfolioSnapshot } from "../services/portfolioValuationService.js";
-import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import {
+  calculateOwnerEtfTrackingAsset,
+  calculateUserTotalEvaluatedAsset,
+  getPortfolioSnapshot,
+} from "../services/portfolioValuationService.js";
+import {
+  assertCanOpenLeveragePosition,
+  calculateLeveragedPositionOutcome,
+  getMaxAllowedLeverage,
+} from "../services/leverageRiskService.js";
 import {
   assertStockMarketOpen,
   isStockMarketOpen,
 } from "../services/marketStateService.js";
 import { addJackpotContribution } from "../services/economyRtpService.js";
+import { incrementDailyMissionProgress } from "../services/dailyMissionService.js";
+import {
+  STOCK_FEE_CONFIG,
+  calculateFee,
+  getMaxAffordableLeverageMargin,
+  getMaxAffordableQuantity,
+  getMaxAffordableTradeValue,
+  getFeeConfig,
+} from "../services/stockFeeService.js";
+import {
+  applyLeverageSettlementTax,
+  applySpotSettlementTax,
+  calculateLeverageSettlement,
+  calculateSpotSettlement,
+  getHoldingTotalCostBasis,
+} from "../services/stockSettlementService.js";
 import { formatWon } from "../utils/formatWon.js";
+import { getStockListingInfo } from "../utils/stockListingFormat.js";
+import {
+  incrementUserStockStat,
+  STOCK_STAT_TYPES,
+} from "../services/stockTradeStatsService.js";
+import { getMarketRegime } from "../services/marketDynamicsService.js";
+import { getLatestDailyUnluckyAward } from "../services/dailyUnluckyService.js";
 
 function assertStockTradeAllowed(stock) {
   assertStockMarketOpen(db);
@@ -33,6 +64,244 @@ function assertCanOpenNewStockTrade(user, stock) {
   if (isOwnOwnerEtf) {
     throw new Error("본인이 인수한 ETF는 직접 거래할 수 없어요.");
   }
+}
+
+function mergeSpotPurchase(holding, { quantity, price, buyFee }) {
+  const oldQuantity = Number(holding?.quantity || 0);
+  const oldTotalCostBasis = getHoldingTotalCostBasis(holding);
+  const oldBuyFees = Math.max(0, Math.floor(Number(holding?.total_buy_fees || 0)));
+  const additionalCostBasis = Math.floor(Number(quantity) * Number(price)) + Math.max(0, Math.floor(Number(buyFee) || 0));
+  const newQuantity = oldQuantity + Number(quantity);
+  const totalCostBasis = oldTotalCostBasis + additionalCostBasis;
+  return {
+    oldQuantity,
+    oldTotalCostBasis,
+    additionalCostBasis,
+    newQuantity,
+    totalCostBasis,
+    totalBuyFees: oldBuyFees + Math.max(0, Math.floor(Number(buyFee) || 0)),
+    averagePrice: newQuantity > 0 ? totalCostBasis / newQuantity : 0,
+  };
+}
+
+function normalizeBuyBudget(value, balance) {
+  const requestedBudget = Math.floor(Number(value));
+  if (!Number.isFinite(requestedBudget) || requestedBudget <= 0) {
+    throw new Error("매수 예산을 올바르게 입력해주세요.");
+  }
+  return Math.min(requestedBudget, Math.max(0, Math.floor(Number(balance) || 0)));
+}
+
+function getBuyPreview({ stock, user, budgetAmount }) {
+  assertCanOpenNewStockTrade(user, stock);
+  const availableBudget = normalizeBuyBudget(budgetAmount, user.balance);
+  const isIpo = stock.status === "ipo_subscription";
+  const price = Math.floor(Number(isIpo ? stock.offering_price : stock.current_price));
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error("현재 가격을 확인할 수 없어 매수할 수 없어요.");
+  }
+
+  const tradeValue = isIpo
+    ? getMaxAffordableTradeValue({ availableBalance: availableBudget })
+    : getMaxAffordableQuantity({
+      availableBalance: availableBudget,
+      currentPrice: price,
+      buyFeeRate: STOCK_FEE_CONFIG.spotBuyFeeRate,
+    }) * price;
+  const quantity = isIpo
+    ? tradeValue / price
+    : Math.floor(tradeValue / price);
+  const buyFee = calculateFee(tradeValue, STOCK_FEE_CONFIG.spotBuyFeeRate);
+  const totalCost = tradeValue + buyFee;
+
+  return {
+    budgetAmount: availableBudget,
+    quantity,
+    price,
+    tradeValue,
+    buyFee,
+    totalCost,
+    remainingBalance: Math.max(0, Math.floor(user.balance) - totalCost),
+    isIpo,
+  };
+}
+
+function serializeOpenPosition(row) {
+  const outcome = calculateLeveragedPositionOutcome(
+    row,
+    {
+      ...row,
+      status: row.stock_status || row.status,
+      delist_risk_status: row.stock_delist_risk_status || row.delist_risk_status,
+      current_price: row.stock_current_price || row.current_price,
+      market_cap: row.stock_market_cap || row.market_cap,
+      is_bluechip: row.stock_is_bluechip ?? row.is_bluechip,
+    },
+    row.stock_current_price || row.current_price,
+  );
+
+  return {
+    ...row,
+    live_unrealized_pnl: outcome.cappedPnl,
+    raw_unrealized_pnl: outcome.rawPnl,
+    profit_rate: outcome.profitRate,
+    profit_cap_applied: outcome.profitCapApplied,
+    leverage_risk_level: outcome.riskLevel,
+    would_liquidate: outcome.liquidated,
+  };
+}
+
+function getSerializedPortfolio(userId) {
+  const valuation = getPortfolioSnapshot(db, userId);
+  const holdingByStockId = new Map(valuation.holdings.map((holding) => [Number(holding.stockId), holding]));
+  const positionById = new Map(valuation.positions.map((position) => [Number(position.positionId), position]));
+  const holdings = db.prepare(`
+    SELECT h.*, s.symbol, s.name, s.current_price, s.status, s.is_etf
+    FROM stock_holdings h
+    JOIN stocks s ON h.stock_id = s.id
+    WHERE h.user_id = ? AND h.quantity > 0
+  `).all(userId).map((holding) => {
+    const estimate = holdingByStockId.get(Number(holding.stock_id));
+    return {
+      ...holding,
+      gross_value: estimate?.grossMarketValue ?? 0,
+      estimated_sell_fee: estimate?.estimatedSellFee ?? 0,
+      estimated_capital_gains_tax: estimate?.estimatedCapitalGainsTax ?? 0,
+      value: estimate?.netLiquidationValue ?? 0,
+      unrealized_pnl: estimate?.unrealizedProfitAfterEstimatedTax ?? 0,
+      unrealized_pnl_before_tax: estimate?.unrealizedProfitBeforeTax ?? 0,
+    };
+  });
+  const positions = db.prepare(`
+    SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price,
+           s.status as stock_status, s.delist_risk_status as stock_delist_risk_status,
+           s.market_cap as stock_market_cap, s.is_bluechip as stock_is_bluechip
+    FROM stock_positions p
+    JOIN stocks s ON p.stock_id = s.id
+    WHERE p.user_id = ? AND p.status = 'open'
+  `).all(userId).map(serializeOpenPosition).map((position) => {
+    const estimate = positionById.get(Number(position.id));
+    return {
+      ...position,
+      gross_settlement_value: estimate?.grossSettlementValue ?? 0,
+      estimated_close_fee: estimate?.estimatedCloseFee ?? 0,
+      estimated_capital_gains_tax: estimate?.estimatedCapitalGainsTax ?? 0,
+      net_settlement_value: estimate?.netSettlementValue ?? 0,
+      live_unrealized_pnl: estimate?.unrealizedProfitBeforeTax ?? position.live_unrealized_pnl,
+      unrealized_pnl_after_tax: estimate
+        ? estimate.netSettlementValue - Number(position.margin_amount || 0)
+        : position.live_unrealized_pnl,
+    };
+  });
+  return { ...valuation, holdings, positions };
+}
+
+function parseJsonObject(value) {
+  try {
+    return value ? JSON.parse(value) : {};
+  } catch {
+    return {};
+  }
+}
+
+function getVolatilityBadge(stock) {
+  const volatility = Number(stock?.volatility || 0);
+  if (volatility < 0.012) return "안정";
+  if (volatility < 0.03) return "보통";
+  if (volatility < 0.06) return "변동성 큼";
+  return "급등락 주의";
+}
+
+function getTodayTradeStats(stockIds) {
+  const ids = [...new Set(stockIds.map((id) => Number(id)).filter(Number.isFinite))];
+  if (ids.length === 0) return new Map();
+
+  const placeholders = ids.map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT
+         stock_id,
+         COALESCE(TOTAL(ABS(CAST(quantity AS REAL))), 0) AS today_trade_volume,
+         COALESCE(TOTAL(ABS(CAST(amount AS REAL))), 0) AS today_trade_value
+       FROM stock_trades
+       WHERE stock_id IN (${placeholders})
+         AND date(created_at, '+9 hours') = date('now', '+9 hours')
+       GROUP BY stock_id`,
+    )
+    .all(...ids);
+
+  return new Map(
+    rows.map((row) => [
+      Number(row.stock_id),
+      {
+        todayTradeVolume: Number(row.today_trade_volume || 0),
+        todayTradeValue: Math.floor(Number(row.today_trade_value || 0)),
+      },
+    ]),
+  );
+}
+
+function getWatchedStockIds(userId) {
+  if (!userId) return new Set();
+  const rows = db
+    .prepare("SELECT stock_id FROM stock_watchlists WHERE user_id = ?")
+    .all(userId);
+  return new Set(rows.map((row) => Number(row.stock_id)));
+}
+
+function serializeStock(s, { now = new Date(), tradeStatsByStockId = new Map(), watchedStockIds = new Set() } = {}) {
+  const tradeStats = tradeStatsByStockId.get(Number(s.id)) || {
+    todayTradeVolume: 0,
+    todayTradeValue: 0,
+  };
+
+  return {
+    ...s,
+    ...getStockListingInfo(s, now),
+    sector: s.sector || "소비재",
+    currentPrice: s.current_price,
+    previousPrice: s.previous_price,
+    offeringPrice: s.offering_price,
+    ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
+    ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
+    recoveryTickCount: Number(s.recovery_tick_count || 0),
+    recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
+    recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
+    recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
+    priceChangeAmount: s.current_price - s.previous_price,
+    priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
+    offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
+    offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null,
+    is_bluechip: s.is_bluechip,
+    isBlueChip: s.is_bluechip === 1,
+    blueChipRampActive: s.blue_chip_ramp_active === 1,
+    blueChipTargetPrice: s.blue_chip_target_price,
+    blueChipRampPercentPerTick: s.blue_chip_ramp_percent_per_tick,
+    blueChipRampStartedAt: s.blue_chip_ramp_started_at,
+    blueChipRampEndedAt: s.blue_chip_ramp_ended_at,
+    blueChipRampReason: s.blue_chip_ramp_reason,
+    blueChipRampStartedByUserId: s.blue_chip_ramp_started_by_user_id,
+    adminPriceTargetActive: s.admin_price_target_active === 1,
+    adminPriceTarget: s.admin_price_target,
+    adminPriceTargetDirection: s.admin_price_target_direction,
+    adminPriceTargetPercentPerTick: s.admin_price_target_percent_per_tick,
+    adminPriceTargetStartedAt: s.admin_price_target_started_at,
+    adminPriceTargetEndedAt: s.admin_price_target_ended_at,
+    adminPriceTargetReason: s.admin_price_target_reason,
+    adminPriceTargetStartedByUserId: s.admin_price_target_started_by_user_id,
+    volatilityBadge: getVolatilityBadge(s),
+    todayTradeVolume: tradeStats.todayTradeVolume,
+    todayTradeValue: tradeStats.todayTradeValue,
+    isWatched: watchedStockIds.has(Number(s.id)),
+    trendRegime: s.trend_regime || null,
+    trendRegimeStartedAt: s.trend_regime_started_at || null,
+    trendRegimeEndsAt: s.trend_regime_ends_at || null,
+    trendMarketCapBasis: Number(s.trend_market_cap_basis || s.market_cap || 0),
+    trendDriftPerTick: Number(s.trend_drift_per_tick || 0),
+    trendVolatility: Number(s.trend_volatility || s.volatility || 0),
+    marketCapEma24h: Number(s.market_cap_ema_24h || s.market_cap || 0),
+    tradingHaltedUntil: s.trading_halted_until || null,
+  };
 }
 
 export const stocksRouter = express.Router();
@@ -52,44 +321,13 @@ stocksRouter.get("/", (req, res) => {
     ORDER BY delisted_at DESC LIMIT 5
   `).all();
 
-  const processStock = (s) => {
-    return {
-      ...s,
-      currentPrice: s.current_price,
-      previousPrice: s.previous_price,
-      offeringPrice: s.offering_price,
-      ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
-      ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
-      recoveryTickCount: Number(s.recovery_tick_count || 0),
-      recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
-      recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-      recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-      priceChangeAmount: s.current_price - s.previous_price,
-      priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
-      offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null,
-      is_bluechip: s.is_bluechip,
-      isBlueChip: s.is_bluechip === 1,
-      blueChipRampActive: s.blue_chip_ramp_active === 1,
-      blueChipTargetPrice: s.blue_chip_target_price,
-      blueChipRampPercentPerTick: s.blue_chip_ramp_percent_per_tick,
-      blueChipRampStartedAt: s.blue_chip_ramp_started_at,
-      blueChipRampEndedAt: s.blue_chip_ramp_ended_at,
-      blueChipRampReason: s.blue_chip_ramp_reason,
-      blueChipRampStartedByUserId: s.blue_chip_ramp_started_by_user_id,
-      adminPriceTargetActive: s.admin_price_target_active === 1,
-      adminPriceTarget: s.admin_price_target,
-      adminPriceTargetDirection: s.admin_price_target_direction,
-      adminPriceTargetPercentPerTick: s.admin_price_target_percent_per_tick,
-      adminPriceTargetStartedAt: s.admin_price_target_started_at,
-      adminPriceTargetEndedAt: s.admin_price_target_ended_at,
-      adminPriceTargetReason: s.admin_price_target_reason,
-      adminPriceTargetStartedByUserId: s.admin_price_target_started_by_user_id
-    };
-  };
-
-  const stocks = stocksRaw.map(processStock);
-  const recentDelistedStocks = recentDelisted.map(processStock);
+  const now = new Date();
+  const tradeStatsByStockId = getTodayTradeStats([
+    ...stocksRaw.map((stock) => stock.id),
+    ...recentDelisted.map((stock) => stock.id),
+  ]);
+  const stocks = stocksRaw.map((stock) => serializeStock(stock, { now, tradeStatsByStockId }));
+  const recentDelistedStocks = recentDelisted.map((stock) => serializeStock(stock, { now, tradeStatsByStockId }));
 
   const activeTradableStocks = stocks.filter(
     (s) =>
@@ -105,6 +343,7 @@ stocksRouter.get("/", (req, res) => {
     ipoCount: ipoStocks.length,
     recentDelistedCount: recentDelistedStocks.length,
     cautionCount: stocks.filter((s) => s.delist_risk_status === "caution").length,
+    distressReviewCount: stocks.filter((s) => s.delist_risk_status === "distress_review").length,
     delistReviewCount: stocks.filter((s) => s.delist_risk_status === "delist_review").length,
     recoveryCount: stocks.filter((s) => s.delist_risk_status === "recovery").length,
     up: stocks.filter(s => s.priceChangeAmount > 0).length,
@@ -124,38 +363,153 @@ stocksRouter.get("/", (req, res) => {
 
 stocksRouter.get("/news", (req, res) => {
   const news = db.prepare(`
-    SELECT * FROM stock_events 
+    SELECT * FROM (
+      SELECT id, event_type, title, message, created_at
+      FROM stock_events
+      UNION ALL
+      SELECT id, type as event_type, title, message, created_at
+      FROM server_notifications
+      WHERE user_id IS NULL
+    )
     ORDER BY created_at DESC LIMIT 20
   `).all();
   res.json({ news });
 });
 
+stocksRouter.get("/market-movers", (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT
+         s.id,
+         s.name,
+         s.symbol,
+         s.sector,
+         s.status,
+         s.current_price,
+         COALESCE(
+           (
+             SELECT h.price
+             FROM stock_price_history h
+             WHERE h.stock_id = s.id
+               AND date(h.created_at, '+9 hours') = date('now', '+9 hours')
+             ORDER BY h.created_at ASC
+             LIMIT 1
+           ),
+           s.previous_price,
+           s.initial_price,
+           s.current_price
+         ) AS open_price
+       FROM stocks s
+       WHERE s.status NOT IN ('delisted', 'ipo_subscription')`,
+    )
+    .all()
+    .map((row) => {
+      const openPrice = Math.max(1, Number(row.open_price || row.current_price || 1));
+      const currentPrice = Math.max(1, Number(row.current_price || 1));
+      const changeAmount = currentPrice - openPrice;
+      return {
+        stockId: row.id,
+        name: row.name,
+        symbol: row.symbol,
+        sector: row.sector,
+        status: row.status,
+        openPrice,
+        currentPrice,
+        changeAmount,
+        changeRate: changeAmount / openPrice,
+      };
+    });
+
+  const gainers = [...rows]
+    .filter((row) => row.changeAmount > 0)
+    .sort((a, b) => b.changeRate - a.changeRate)
+    .slice(0, 5);
+  const losers = [...rows]
+    .filter((row) => row.changeAmount < 0)
+    .sort((a, b) => a.changeRate - b.changeRate)
+    .slice(0, 5);
+
+  res.json({ gainers, losers });
+});
+
+stocksRouter.get("/trade-volume-rankings", (_req, res) => {
+  const rankings = db
+    .prepare(
+      `SELECT
+         s.id AS stockId,
+         s.name,
+         s.symbol,
+         s.sector,
+         s.current_price AS currentPrice,
+         COALESCE(TOTAL(ABS(CAST(t.quantity AS REAL))), 0) AS todayTradeVolume,
+         COALESCE(TOTAL(ABS(CAST(t.amount AS REAL))), 0) AS todayTradeValue
+       FROM stock_trades t
+       JOIN stocks s ON s.id = t.stock_id
+       WHERE date(t.created_at, '+9 hours') = date('now', '+9 hours')
+         AND s.status != 'delisted'
+       GROUP BY s.id
+       ORDER BY todayTradeVolume DESC, todayTradeValue DESC
+       LIMIT 5`,
+    )
+    .all()
+    .map((row) => ({
+      ...row,
+      todayTradeVolume: Number(row.todayTradeVolume || 0),
+      todayTradeValue: Math.floor(Number(row.todayTradeValue || 0)),
+    }));
+
+  res.json({ rankings });
+});
+
+stocksRouter.get("/sector-events", (_req, res) => {
+  const events = db
+    .prepare(
+      `SELECT id, sector, sentiment, title, content, effect_until AS effectUntil, created_at AS createdAt
+       FROM sector_events
+       WHERE effect_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       ORDER BY created_at DESC
+       LIMIT 10`,
+    )
+    .all();
+  res.json({ events });
+});
+
+stocksRouter.get("/market-overview", (_req, res) => {
+  const regime = getMarketRegime(db);
+  const leadingSectors = db.prepare(`
+    SELECT id, sector, sentiment, title, content, effect_until AS effectUntil, created_at AS createdAt
+    FROM sector_events
+    WHERE effect_until > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    ORDER BY created_at DESC
+    LIMIT 6
+  `).all();
+  const unluckyAward = getLatestDailyUnluckyAward(db);
+  res.json({
+    marketRegime: regime ? {
+      id: regime.id,
+      key: regime.market_regime,
+      strength: Number(regime.strength || 0),
+      startedAt: regime.started_at,
+      endsAt: regime.ends_at,
+    } : null,
+    sectorRotation: leadingSectors,
+    dailyUnluckyAward: unluckyAward ? {
+      dateKey: unluckyAward.date_key,
+      nickname: unluckyAward.nickname_snapshot,
+      lossRate: Number(unluckyAward.loss_rate || 0),
+      awardedLuckTickets: Number(unluckyAward.awarded_luck_tickets || 0),
+    } : null,
+  });
+});
+
+stocksRouter.get("/fees/config", (_req, res) => {
+  res.json(getFeeConfig());
+});
+
 stocksRouter.use(requireAuth);
 
 stocksRouter.get("/portfolio", (req, res) => {
-  const userId = req.user.id;
-  
-  const holdings = db.prepare(`
-    SELECT h.*, s.symbol, s.name, s.current_price, s.status, s.is_etf,
-           (s.current_price - h.average_price) * h.quantity as unrealized_pnl,
-           (s.current_price * h.quantity) as value
-    FROM stock_holdings h
-    JOIN stocks s ON h.stock_id = s.id
-    WHERE h.user_id = ? AND h.quantity > 0
-  `).all(userId);
-
-  const positions = db.prepare(`
-    SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price, s.status as stock_status,
-           CASE 
-             WHEN p.side = 'short' THEN (p.entry_price - s.current_price) * p.quantity
-             ELSE (s.current_price - p.entry_price) * p.quantity 
-           END as live_unrealized_pnl
-    FROM stock_positions p
-    JOIN stocks s ON p.stock_id = s.id
-    WHERE p.user_id = ? AND p.status = 'open'
-  `).all(userId);
-
-  res.json({ holdings, positions });
+  res.json(getSerializedPortfolio(req.user.id));
 });
 
 stocksRouter.get("/market-snapshot", (req, res) => {
@@ -164,7 +518,6 @@ stocksRouter.get("/market-snapshot", (req, res) => {
   const clock = getStockMarketClock();
 
   // 폴링 시 실시간으로 ETF 가격 최신화
-  recalculateOwnerEtfs(db);
 
   const stocksRaw = db.prepare(`
     SELECT * FROM stocks 
@@ -172,48 +525,12 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     ORDER BY market_cap DESC
   `).all();
 
-  const portfolio = getPortfolioSnapshot(db, userId);
+  const portfolio = getSerializedPortfolio(userId);
 
-  const holdings = db.prepare(`
-    SELECT h.*, s.symbol, s.name, s.current_price, s.status, s.is_etf,
-           (s.current_price - h.average_price) * h.quantity as unrealized_pnl,
-           (s.current_price * h.quantity) as value
-    FROM stock_holdings h
-    JOIN stocks s ON h.stock_id = s.id
-    WHERE h.user_id = ? AND h.quantity > 0
-  `).all(userId);
-
-  const positions = db.prepare(`
-    SELECT p.*, s.symbol, s.name, s.current_price as stock_current_price, s.status as stock_status,
-           CASE 
-             WHEN p.side = 'short' THEN (p.entry_price - s.current_price) * p.quantity
-             ELSE (s.current_price - p.entry_price) * p.quantity 
-           END as live_unrealized_pnl
-    FROM stock_positions p
-    JOIN stocks s ON p.stock_id = s.id
-    WHERE p.user_id = ? AND p.status = 'open'
-  `).all(userId);
-
-  const processStock = (s) => {
-    return {
-      ...s,
-      currentPrice: s.current_price,
-      previousPrice: s.previous_price,
-      offeringPrice: s.offering_price,
-      ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
-      ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
-      recoveryTickCount: Number(s.recovery_tick_count || 0),
-      recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
-      recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-      recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-      priceChangeAmount: s.current_price - s.previous_price,
-      priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
-      offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-      offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null
-    };
-  };
-
-  const stocks = stocksRaw.map(processStock);
+  const now = new Date();
+  const tradeStatsByStockId = getTodayTradeStats(stocksRaw.map((stock) => stock.id));
+  const watchedStockIds = getWatchedStockIds(userId);
+  const stocks = stocksRaw.map((stock) => serializeStock(stock, { now, tradeStatsByStockId, watchedStockIds }));
   const activeTradableStocks = stocks.filter(
     (s) =>
       ACTIVE_TRADABLE_STOCK_STATUSES.includes(s.status) &&
@@ -237,8 +554,237 @@ stocksRouter.get("/market-snapshot", (req, res) => {
     marketOpen: isStockMarketOpen(db),
     stocks,
     summary,
-    portfolio: { ...portfolio, holdings, positions }
+    portfolio,
   });
+});
+
+stocksRouter.get("/watchlist", (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT w.stock_id AS stockId, w.created_at AS createdAt
+       FROM stock_watchlists w
+       JOIN stocks s ON s.id = w.stock_id
+       WHERE w.user_id = ?
+       ORDER BY w.created_at DESC`,
+    )
+    .all(req.user.id);
+  res.json({ watchlist: rows });
+});
+
+stocksRouter.post("/:id/watch", (req, res) => {
+  const stockId = Number(req.params.id);
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+
+  const stock = db.prepare("SELECT id FROM stocks WHERE id = ?").get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없습니다." });
+  }
+
+  db.prepare(
+    `INSERT OR IGNORE INTO stock_watchlists (user_id, stock_id)
+     VALUES (?, ?)`,
+  ).run(req.user.id, stockId);
+
+  res.json({ message: "관심종목에 추가되었습니다.", isWatched: true });
+});
+
+stocksRouter.delete("/:id/watch", (req, res) => {
+  const stockId = Number(req.params.id);
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+
+  db.prepare(
+    "DELETE FROM stock_watchlists WHERE user_id = ? AND stock_id = ?",
+  ).run(req.user.id, stockId);
+
+  res.json({ message: "관심종목에서 제거되었습니다.", isWatched: false });
+});
+
+stocksRouter.get("/price-alerts", (req, res) => {
+  const alerts = db
+    .prepare(
+      `SELECT
+         a.id,
+         a.stock_id AS stockId,
+         s.name AS stockName,
+         s.symbol,
+         s.current_price AS currentPrice,
+         a.target_price AS targetPrice,
+         a.direction,
+         a.triggered_at AS triggeredAt,
+         a.created_at AS createdAt
+       FROM stock_price_alerts a
+       JOIN stocks s ON s.id = a.stock_id
+       WHERE a.user_id = ?
+       ORDER BY a.triggered_at IS NOT NULL ASC, a.created_at DESC`,
+    )
+    .all(req.user.id);
+
+  res.json({ alerts });
+});
+
+stocksRouter.post("/:id/watchlist", (req, res) => {
+  const stockId = Number(req.params.id);
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+
+  const stock = db.prepare("SELECT id FROM stocks WHERE id = ?").get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없습니다." });
+  }
+
+  db.prepare(
+    `INSERT OR IGNORE INTO stock_watchlists (user_id, stock_id)
+     VALUES (?, ?)`,
+  ).run(req.user.id, stockId);
+
+  res.json({ message: "관심종목에 추가했습니다.", isWatched: true });
+});
+
+stocksRouter.delete("/:id/watchlist", (req, res) => {
+  const stockId = Number(req.params.id);
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+
+  db.prepare(
+    "DELETE FROM stock_watchlists WHERE user_id = ? AND stock_id = ?",
+  ).run(req.user.id, stockId);
+
+  res.json({ message: "관심종목에서 해제했습니다.", isWatched: false });
+});
+
+stocksRouter.get("/:id/alerts", (req, res) => {
+  const stockId = Number(req.params.id);
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+
+  const alerts = db
+    .prepare(
+      `SELECT id, target_price AS targetPrice, direction, triggered_at AS triggeredAt, created_at AS createdAt
+       FROM stock_price_alerts
+       WHERE user_id = ? AND stock_id = ?
+       ORDER BY triggered_at IS NOT NULL ASC, created_at DESC`,
+    )
+    .all(req.user.id, stockId);
+
+  res.json({ alerts });
+});
+
+stocksRouter.post("/:id/alerts", (req, res) => {
+  const stockId = Number(req.params.id);
+  const targetPrice = Math.floor(Number(req.body?.targetPrice));
+  const direction = String(req.body?.direction || "").trim();
+
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+  if (!Number.isSafeInteger(targetPrice) || targetPrice <= 0) {
+    return res.status(400).json({ message: "목표 가격을 1원 이상으로 입력해주세요." });
+  }
+  if (!["above", "below"].includes(direction)) {
+    return res.status(400).json({ message: "알림 방향은 above 또는 below만 가능합니다." });
+  }
+
+  const stock = db.prepare("SELECT id FROM stocks WHERE id = ?").get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없습니다." });
+  }
+
+  const info = db
+    .prepare(
+      `INSERT INTO stock_price_alerts (user_id, stock_id, target_price, direction)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(req.user.id, stockId, targetPrice, direction);
+
+  res.json({
+    message: "가격 알림을 추가했습니다.",
+    alert: {
+      id: info.lastInsertRowid,
+      targetPrice,
+      direction,
+      triggeredAt: null,
+    },
+  });
+});
+
+stocksRouter.post("/:id/price-alerts", (req, res) => {
+  const stockId = Number(req.params.id);
+  const targetPrice = Math.floor(Number(req.body?.targetPrice));
+  const direction = String(req.body?.direction || "").trim();
+
+  if (!Number.isSafeInteger(stockId)) {
+    return res.status(400).json({ message: "올바른 종목 ID가 아닙니다." });
+  }
+  if (!Number.isSafeInteger(targetPrice) || targetPrice <= 0) {
+    return res.status(400).json({ message: "목표 가격을 1원 이상으로 입력해주세요." });
+  }
+  if (!["above", "below"].includes(direction)) {
+    return res.status(400).json({ message: "알림 방향은 above 또는 below만 가능합니다." });
+  }
+
+  const stock = db.prepare("SELECT id FROM stocks WHERE id = ?").get(stockId);
+  if (!stock) {
+    return res.status(404).json({ message: "종목을 찾을 수 없습니다." });
+  }
+
+  const info = db
+    .prepare(
+      `INSERT INTO stock_price_alerts (user_id, stock_id, target_price, direction)
+       VALUES (?, ?, ?, ?)`,
+    )
+    .run(req.user.id, stockId, targetPrice, direction);
+
+  res.json({
+    message: "가격 알림을 추가했습니다.",
+    alert: {
+      id: info.lastInsertRowid,
+      stockId,
+      targetPrice,
+      direction,
+      triggeredAt: null,
+    },
+  });
+});
+
+stocksRouter.delete("/alerts/:alertId", (req, res) => {
+  const alertId = Number(req.params.alertId);
+  if (!Number.isSafeInteger(alertId)) {
+    return res.status(400).json({ message: "올바른 알림 ID가 아닙니다." });
+  }
+
+  const result = db
+    .prepare("DELETE FROM stock_price_alerts WHERE id = ? AND user_id = ?")
+    .run(alertId, req.user.id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ message: "가격 알림을 찾을 수 없습니다." });
+  }
+
+  res.json({ message: "가격 알림을 삭제했습니다." });
+});
+
+stocksRouter.delete("/price-alerts/:alertId", (req, res) => {
+  const alertId = Number(req.params.alertId);
+  if (!Number.isSafeInteger(alertId)) {
+    return res.status(400).json({ message: "올바른 알림 ID가 아닙니다." });
+  }
+
+  const result = db
+    .prepare("DELETE FROM stock_price_alerts WHERE id = ? AND user_id = ?")
+    .run(alertId, req.user.id);
+
+  if (result.changes === 0) {
+    return res.status(404).json({ message: "가격 알림을 찾을 수 없습니다." });
+  }
+
+  res.json({ message: "가격 알림을 삭제했습니다." });
 });
 
 function topLimit(value) {
@@ -257,43 +803,12 @@ function getCompanyAcquisitionInfo(user, stock) {
     Number(valuation.totalEvaluatedAsset || 0),
   );
   const userCashBalance = Math.floor(Number(user?.balance || 0));
-  const autoSellRow =
-    user && stock
-      ? db
-          .prepare(
-            `SELECT TOTAL(h.quantity * s.current_price) AS value
-             FROM stock_holdings h
-             JOIN stocks s ON s.id = h.stock_id
-             WHERE h.user_id = ?
-               AND h.stock_id = ?
-               AND h.quantity > 0`,
-          )
-          .get(user.id, stock.id)
-      : null;
-  const autoSellValue = Math.floor(Number(autoSellRow?.value || 0));
-  const autoCloseValue = user && stock
-    ? db
-        .prepare(
-          `SELECT p.side, p.margin_amount, p.quantity, p.entry_price, s.current_price
-           FROM stock_positions p
-           JOIN stocks s ON s.id = p.stock_id
-           WHERE p.user_id = ?
-             AND p.stock_id = ?
-             AND p.status = 'open'`,
-        )
-        .all(user.id, stock.id)
-        .reduce((sum, position) => {
-          const direction = position.side === "short" ? -1 : 1;
-          const pnl = Math.floor(
-            position.quantity *
-              (position.current_price - position.entry_price) *
-              direction,
-          );
-          return sum + Math.max(0, Math.floor(position.margin_amount + pnl));
-        }, 0)
-    : 0;
-  const estimatedCashAfterAutoClear =
-    userCashBalance + autoSellValue + autoCloseValue;
+  const hasOwnHolding = Boolean(user && stock && db
+    .prepare("SELECT 1 FROM stock_holdings WHERE user_id = ? AND stock_id = ? AND quantity > 0")
+    .get(user.id, stock.id));
+  const hasOwnPosition = Boolean(user && stock && db
+    .prepare("SELECT 1 FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'")
+    .get(user.id, stock.id));
   const existingEtf = user
     ? db
         .prepare(
@@ -319,7 +834,10 @@ function getCompanyAcquisitionInfo(user, stock) {
   } else if (userTotalEvaluatedAsset < requiredTotalAsset) {
     canAcquire = false;
     reason = "total_asset_required";
-  } else if (estimatedCashAfterAutoClear < acquisitionPrice) {
+  } else if (hasOwnHolding || hasOwnPosition) {
+    canAcquire = false;
+    reason = "own_exposure_must_close";
+  } else if (userCashBalance < acquisitionPrice) {
     canAcquire = false;
     reason = "cash_required";
   }
@@ -331,9 +849,13 @@ function getCompanyAcquisitionInfo(user, stock) {
     requiredTotalAsset,
     userTotalEvaluatedAsset,
     userCashBalance,
-    autoSellValue,
-    autoCloseValue,
-    estimatedCashAfterAutoClear,
+    autoSellValue: 0,
+    autoCloseValue: 0,
+    estimatedCashAfterAutoClear: userCashBalance,
+    hasOwnHolding,
+    hasOwnPosition,
+    meetsAssetRequirement: userTotalEvaluatedAsset >= requiredTotalAsset,
+    hasEnoughCash: userCashBalance >= acquisitionPrice,
     balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
     cost: acquisitionPrice,
     requiredBalance: requiredTotalAsset,
@@ -417,6 +939,10 @@ stocksRouter.get("/:stockId/top-positions", (req, res) => {
          p.quantity,
          p.entry_price,
          s.current_price,
+         s.status,
+         s.delist_risk_status,
+         s.market_cap,
+         s.is_bluechip,
          p.liquidation_price
        FROM stock_positions p
        JOIN users u ON u.id = p.user_id
@@ -429,10 +955,7 @@ stocksRouter.get("/:stockId/top-positions", (req, res) => {
     .all(stockId, limit);
 
   const positions = rows.map((row, index) => {
-    const direction = row.side === "short" ? -1 : 1;
-    const unrealizedPnl = Math.floor(
-      row.quantity * (row.current_price - row.entry_price) * direction,
-    );
+    const outcome = calculateLeveragedPositionOutcome(row, row, row.current_price);
     return {
       rank: index + 1,
       userId: row.user_id,
@@ -445,8 +968,11 @@ stocksRouter.get("/:stockId/top-positions", (req, res) => {
       entryPrice: row.entry_price,
       currentPrice: row.current_price,
       liquidationPrice: row.liquidation_price,
-      unrealizedPnl,
-      profitRate: row.margin_amount > 0 ? unrealizedPnl / row.margin_amount : 0,
+      unrealizedPnl: outcome.cappedPnl,
+      rawUnrealizedPnl: outcome.rawPnl,
+      profitRate: outcome.profitRate,
+      profitCapApplied: outcome.profitCapApplied,
+      riskLevel: outcome.riskLevel,
     };
   });
 
@@ -464,41 +990,11 @@ stocksRouter.get("/:id", (req, res) => {
   const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(id);
   if (!stock) return res.status(404).json({ message: "종목을 찾을 수 없어요." });
 
-  const processStock = (s) => ({
-    ...s,
-    currentPrice: s.current_price,
-    previousPrice: s.previous_price,
-    offeringPrice: s.offering_price,
-    ipoSubscriptionStartedAt: s.ipo_subscription_started_at,
-    ipoSubscriptionEndsAt: s.ipo_subscription_ends_at,
-    recoveryTickCount: Number(s.recovery_tick_count || 0),
-    recoveryRequiredTicks: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks),
-    recoveryElapsedSeconds: Number(s.recovery_tick_count || 0) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-    recoveryRequiredSeconds: Number(s.recovery_required_ticks || STOCK_MARKET_POLICY.recoveryRequiredTicks) * STOCK_MARKET_POLICY.stockTickIntervalSeconds,
-    priceChangeAmount: s.current_price - s.previous_price,
-    priceChangeRate: s.previous_price > 0 ? (s.current_price - s.previous_price) / s.previous_price : 0,
-    offeringChangeAmount: s.offering_price ? s.current_price - s.offering_price : null,
-    offeringChangeRate: s.offering_price ? (s.current_price - s.offering_price) / s.offering_price : null,
-    is_bluechip: s.is_bluechip,
-    isBlueChip: s.is_bluechip === 1,
-    blueChipRampActive: s.blue_chip_ramp_active === 1,
-    blueChipTargetPrice: s.blue_chip_target_price,
-    blueChipRampPercentPerTick: s.blue_chip_ramp_percent_per_tick,
-    blueChipRampStartedAt: s.blue_chip_ramp_started_at,
-    blueChipRampEndedAt: s.blue_chip_ramp_ended_at,
-    blueChipRampReason: s.blue_chip_ramp_reason,
-    blueChipRampStartedByUserId: s.blue_chip_ramp_started_by_user_id,
-    adminPriceTargetActive: s.admin_price_target_active === 1,
-    adminPriceTarget: s.admin_price_target,
-    adminPriceTargetDirection: s.admin_price_target_direction,
-    adminPriceTargetPercentPerTick: s.admin_price_target_percent_per_tick,
-    adminPriceTargetStartedAt: s.admin_price_target_started_at,
-    adminPriceTargetEndedAt: s.admin_price_target_ended_at,
-    adminPriceTargetReason: s.admin_price_target_reason,
-    adminPriceTargetStartedByUserId: s.admin_price_target_started_by_user_id
+  const stockWithCalculations = serializeStock(stock, {
+    now: new Date(),
+    tradeStatsByStockId: getTodayTradeStats([stock.id]),
+    watchedStockIds: getWatchedStockIds(req.user.id),
   });
-
-  const stockWithCalculations = processStock(stock);
 
   const history = db.prepare(`
     SELECT * FROM stock_price_history 
@@ -507,7 +1003,20 @@ stocksRouter.get("/:id", (req, res) => {
   `).all(id).reverse(); // Last 10 minutes (60 ticks)
 
   const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, id);
-  const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(req.user.id, id);
+  const positions = db.prepare(`
+    SELECT p.*, s.current_price as stock_current_price,
+           s.status as stock_status, s.delist_risk_status as stock_delist_risk_status,
+           s.market_cap as stock_market_cap, s.is_bluechip as stock_is_bluechip
+    FROM stock_positions p
+    JOIN stocks s ON p.stock_id = s.id
+    WHERE p.user_id = ? AND p.stock_id = ? AND p.status = 'open'
+  `).all(req.user.id, id).map(serializeOpenPosition);
+  const priceAlerts = db.prepare(`
+    SELECT id, target_price AS targetPrice, direction, triggered_at AS triggeredAt, created_at AS createdAt
+    FROM stock_price_alerts
+    WHERE user_id = ? AND stock_id = ?
+    ORDER BY triggered_at IS NOT NULL ASC, created_at DESC
+  `).all(req.user.id, id);
   const trades = db
     .prepare(
       `SELECT *
@@ -532,6 +1041,7 @@ stocksRouter.get("/:id", (req, res) => {
         profitRate: realizedPnl === 0 ? null : realizedPnl / costBasis,
         balanceBefore: trade.balance_before,
         balanceAfter: trade.balance_after,
+        detail: parseJsonObject(trade.detail_json),
         createdAt: trade.created_at,
       };
     });
@@ -549,9 +1059,15 @@ stocksRouter.get("/:id", (req, res) => {
       .get(stock.owner_user_id);
     if (defender) {
       const cost = Math.floor(defender.balance * 0.2);
+      const attackerValuation = calculateUserTotalEvaluatedAsset(db, req.user.id);
       hostileTakeover = {
         cost,
         requiredBalance: requiredCompanyAcquisitionBalance(cost),
+        requiredTotalAsset: requiredCompanyAcquisitionBalance(cost),
+        userTotalEvaluatedAsset: attackerValuation.totalEvaluatedAsset,
+        userCashBalance: currentUser.balance,
+        meetsAssetRequirement: attackerValuation.totalEvaluatedAsset >= requiredCompanyAcquisitionBalance(cost),
+        hasEnoughCash: currentUser.balance >= cost,
         balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
       };
     }
@@ -562,6 +1078,31 @@ stocksRouter.get("/:id", (req, res) => {
     WHERE stock_id = ? 
     ORDER BY created_at DESC LIMIT 20
   `).all(id);
+  const corporateEvents = db.prepare(`
+    SELECT id, event_type AS eventType, status, expected_revenue AS expectedRevenue,
+           actual_revenue AS actualRevenue, expected_profit AS expectedProfit,
+           actual_profit AS actualProfit, surprise_rate AS surpriseRate,
+           dividend_rate AS dividendRate, record_at AS recordAt, pay_at AS payAt,
+           starts_at AS startsAt, ends_at AS endsAt, metadata_json AS metadata
+    FROM stock_corporate_events
+    WHERE stock_id = ?
+    ORDER BY created_at DESC
+    LIMIT 12
+  `).all(id).map((event) => ({ ...event, metadata: parseJsonObject(event.metadata) }));
+  const shortValue = Number(db.prepare(`
+    SELECT COALESCE(SUM(position_size), 0) AS value
+    FROM stock_positions WHERE stock_id = ? AND side = 'short' AND status = 'open'
+  `).get(id)?.value || 0);
+  const shortInterestRatio = shortValue / Math.max(1, Number(stock.market_cap || 1));
+  const hostileTakeoverEvent = db.prepare(`
+    SELECT h.id, h.status, h.attack_cash AS attackCash, h.defense_cash AS defenseCash,
+           h.ends_at AS endsAt, attacker.nickname AS attackerNickname, defender.nickname AS defenderNickname
+    FROM hostile_takeover_events h
+    JOIN users attacker ON attacker.id = h.attacker_user_id
+    JOIN users defender ON defender.id = h.defender_user_id
+    WHERE h.stock_id = ? AND h.status IN ('declared', 'defended')
+    ORDER BY h.id DESC LIMIT 1
+  `).get(id) || null;
 
   res.json({
     stock: stockWithCalculations,
@@ -570,18 +1111,61 @@ stocksRouter.get("/:id", (req, res) => {
     positions,
     trades,
     events,
+    corporateEvents,
+    shortInterestRatio,
+    priceAlerts,
     marketOpen: isStockMarketOpen(db),
     ...clock,
     acquisition,
     hostileTakeover,
+    hostileTakeoverEvent,
   });
 });
 
-stocksRouter.post("/buy", (req, res) => {
-  const { stockId, quantity } = req.body; // quantity is the number of shares
-  const userId = req.user.id;
+stocksRouter.post("/:stockId/buy-preview", (req, res) => {
+  const stockId = Number(req.params.stockId);
+  try {
+    settleDueIpoSubscriptions(db);
+    const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+    if (!stock || stock.status === "delisted") throw new Error("거래할 수 없는 종목입니다.");
+    const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+    const preview = getBuyPreview({ stock, user, budgetAmount: req.body?.budgetAmount });
+    if (preview.quantity <= 0) {
+      throw new Error("현재 잔액으로는 수수료를 포함해 1주도 매수할 수 없어요.");
+    }
+    return res.json(preview);
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+});
 
-  if (!quantity || quantity <= 0) return res.status(400).json({ message: "매수 수량을 올바르게 입력해주세요." });
+stocksRouter.post("/:stockId/sell-preview", (req, res) => {
+  const stockId = Number(req.params.stockId);
+  const fraction = Number(req.body?.fraction ?? 1);
+  if (!Number.isFinite(fraction) || fraction <= 0 || fraction > 1) {
+    return res.status(400).json({ message: "매도 비율이 올바르지 않아요." });
+  }
+
+  try {
+    const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(req.user.id, stockId);
+    const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+    if (!holding || holding.quantity <= 0) throw new Error("보유 중인 주식이 없어요.");
+    if (!stock || stock.status === "delisted") throw new Error("거래할 수 없는 종목입니다.");
+    assertStockTradeAllowed(stock);
+    return res.json(calculateSpotSettlement(db, {
+      userId: req.user.id,
+      holding,
+      sellQuantity: holding.quantity * fraction,
+      sellPrice: stock.current_price,
+    }));
+  } catch (err) {
+    return res.status(400).json({ message: err.message });
+  }
+});
+
+stocksRouter.post("/buy", (req, res) => {
+  const { stockId, quantity: requestedQuantity, budgetAmount } = req.body;
+  const userId = req.user.id;
 
   let result;
   try {
@@ -592,35 +1176,95 @@ stocksRouter.post("/buy", (req, res) => {
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       assertCanOpenNewStockTrade(user, stock);
 
+      const quantity = budgetAmount !== undefined && budgetAmount !== null
+        ? getBuyPreview({ stock, user, budgetAmount }).quantity
+        : Math.floor(Number(requestedQuantity));
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        throw new Error("현재 잔액으로는 수수료를 포함해 1주도 매수할 수 없어요.");
+      }
       const amount = Math.floor(quantity * stock.current_price);
+      const buyFee = calculateFee(amount, STOCK_FEE_CONFIG.spotBuyFeeRate);
+      const totalCost = amount + buyFee;
       if (amount <= 0) throw new Error("매수 금액이 너무 작습니다.");
 
-      if (user.balance < amount) throw new Error("잔액이 부족해요.");
+      if (user.balance < totalCost) throw new Error("매수 금액과 수수료를 합친 금액보다 보유 잔액이 부족해요.");
       
       let holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, stockId);
+      const holdingBefore = holding
+        ? {
+          quantity: holding.quantity,
+          averagePrice: holding.average_price,
+          totalCostBasis: getHoldingTotalCostBasis(holding),
+        }
+        : { quantity: 0, averagePrice: 0, totalCostBasis: 0 };
+      const mergedHolding = mergeSpotPurchase(holding, {
+        quantity,
+        price: stock.current_price,
+        buyFee,
+      });
+      const buyDetail = {
+        tradeValue: amount,
+        buyFee,
+        totalCost,
+        oldQuantity: holdingBefore.quantity,
+        buyQuantity: quantity,
+        newQuantity: mergedHolding.newQuantity,
+        oldAveragePrice: holdingBefore.averagePrice,
+        buyPrice: stock.current_price,
+        newAveragePrice: mergedHolding.averagePrice,
+        oldTotalCostBasis: holdingBefore.totalCostBasis,
+        addedCostBasis: mergedHolding.additionalCostBasis,
+        newTotalCostBasis: mergedHolding.totalCostBasis,
+      };
       if (holding) {
-        const totalCost = (holding.average_price * holding.quantity) + amount;
-        const newQuantity = holding.quantity + quantity;
-        const newAvgPrice = totalCost / newQuantity;
-        db.prepare("UPDATE stock_holdings SET quantity = ?, average_price = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, newAvgPrice, holding.id);
+        db.prepare(`
+          UPDATE stock_holdings
+          SET quantity = ?, average_price = ?, total_cost_basis = ?, total_buy_fees = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE id = ?
+        `).run(mergedHolding.newQuantity, mergedHolding.averagePrice, mergedHolding.totalCostBasis, mergedHolding.totalBuyFees, holding.id);
       } else {
-        db.prepare("INSERT INTO stock_holdings (user_id, stock_id, quantity, average_price) VALUES (?, ?, ?, ?)").run(userId, stockId, quantity, stock.current_price);
+        db.prepare(`
+          INSERT INTO stock_holdings (user_id, stock_id, quantity, average_price, total_cost_basis, total_buy_fees)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(userId, stockId, mergedHolding.newQuantity, mergedHolding.averagePrice, mergedHolding.totalCostBasis, mergedHolding.totalBuyFees);
       }
 
-      const balanceAfter = user.balance - amount;
+      const balanceAfter = user.balance - totalCost;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-        VALUES (?, 'stock_buy', ?, ?, ?, ?)
-      `).run(userId, -amount, user.balance, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+        VALUES (?, 'stock_buy', ?, ?, ?, ?, ?)
+      `).run(userId, -totalCost, user.balance, balanceAfter, stockId, JSON.stringify(buyDetail));
 
-      db.prepare(`
-        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
-        VALUES (?, ?, 'buy', ?, ?, ?, 1, ?, ?)
-      `).run(userId, stockId, amount, quantity, stock.current_price, user.balance, balanceAfter);
+      const trade = db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after, detail_json)
+        VALUES (?, ?, 'buy', ?, ?, ?, 1, ?, ?, ?)
+      `).run(userId, stockId, amount, quantity, stock.current_price, user.balance, balanceAfter, JSON.stringify(buyDetail));
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.spotTradeCount,
+        sourceType: "stock_trade",
+        sourceId: trade.lastInsertRowid,
+      });
 
-      return { balance: balanceAfter, stockPrice: stock.current_price };
+      incrementDailyMissionProgress(db, userId, "stock_buy");
+
+      return {
+        balance: balanceAfter, quantity, stockPrice: stock.current_price, tradeValue: amount, buyFee, totalCost,
+        holdingMerge: {
+          oldQuantity: holdingBefore.quantity,
+          buyQuantity: quantity,
+          newQuantity: mergedHolding.newQuantity,
+          oldAveragePrice: holdingBefore.averagePrice,
+          buyPrice: stock.current_price,
+          newAveragePrice: mergedHolding.averagePrice,
+          oldTotalCostBasis: holdingBefore.totalCostBasis,
+          addedCostBasis: mergedHolding.additionalCostBasis,
+          newTotalCostBasis: mergedHolding.totalCostBasis,
+        },
+      };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -630,10 +1274,8 @@ stocksRouter.post("/buy", (req, res) => {
 });
 
 stocksRouter.post("/buy-ipo", (req, res) => {
-  const { stockId, amount } = req.body;
+  const { stockId, amount: requestedAmount, budgetAmount } = req.body;
   const userId = req.user.id;
-
-  if (!amount || amount <= 0) return res.status(400).json({ message: "올바른 구매 금액을 입력해주세요." });
 
   let result;
   try {
@@ -648,34 +1290,99 @@ stocksRouter.post("/buy-ipo", (req, res) => {
 
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       assertCanOpenNewStockTrade(user, stock);
-      if (user.balance < amount) throw new Error("잔액이 부족해요.");
-
-      const quantity = amount / stock.offering_price;
+      const preview = budgetAmount !== undefined && budgetAmount !== null
+        ? getBuyPreview({ stock, user, budgetAmount })
+        : (() => {
+          const tradeValue = Math.floor(Number(requestedAmount));
+          if (!Number.isFinite(tradeValue) || tradeValue <= 0) throw new Error("올바른 구매 금액을 입력해주세요.");
+          const buyFee = calculateFee(tradeValue, STOCK_FEE_CONFIG.spotBuyFeeRate);
+          return {
+            tradeValue,
+            buyFee,
+            totalCost: tradeValue + buyFee,
+            quantity: tradeValue / stock.offering_price,
+          };
+        })();
+      const { tradeValue: amount, buyFee, totalCost, quantity } = preview;
+      if (quantity <= 0) throw new Error("현재 잔액으로는 수수료를 포함해 청약할 수 없어요.");
+      if (user.balance < totalCost) throw new Error("매수 금액과 수수료를 합친 금액보다 보유 잔액이 부족해요.");
 
       let holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, stockId);
+      const holdingBefore = holding
+        ? {
+          quantity: holding.quantity,
+          averagePrice: holding.average_price,
+          totalCostBasis: getHoldingTotalCostBasis(holding),
+        }
+        : { quantity: 0, averagePrice: 0, totalCostBasis: 0 };
+      const mergedHolding = mergeSpotPurchase(holding, {
+        quantity,
+        price: stock.offering_price,
+        buyFee,
+      });
+      const buyDetail = {
+        tradeValue: amount,
+        buyFee,
+        totalCost,
+        oldQuantity: holdingBefore.quantity,
+        buyQuantity: quantity,
+        newQuantity: mergedHolding.newQuantity,
+        oldAveragePrice: holdingBefore.averagePrice,
+        buyPrice: stock.offering_price,
+        newAveragePrice: mergedHolding.averagePrice,
+        oldTotalCostBasis: holdingBefore.totalCostBasis,
+        addedCostBasis: mergedHolding.additionalCostBasis,
+        newTotalCostBasis: mergedHolding.totalCostBasis,
+      };
       if (holding) {
-        const newQuantity = holding.quantity + quantity;
-        const totalCost = (holding.average_price * holding.quantity) + amount;
-        const newAvg = totalCost / newQuantity;
-        db.prepare("UPDATE stock_holdings SET quantity = ?, average_price = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, newAvg, holding.id);
+        db.prepare(`
+          UPDATE stock_holdings
+          SET quantity = ?, average_price = ?, total_cost_basis = ?, total_buy_fees = ?,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE id = ?
+        `).run(mergedHolding.newQuantity, mergedHolding.averagePrice, mergedHolding.totalCostBasis, mergedHolding.totalBuyFees, holding.id);
       } else {
-        db.prepare("INSERT INTO stock_holdings (user_id, stock_id, quantity, average_price) VALUES (?, ?, ?, ?)").run(userId, stockId, quantity, stock.offering_price);
+        db.prepare(`
+          INSERT INTO stock_holdings (user_id, stock_id, quantity, average_price, total_cost_basis, total_buy_fees)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(userId, stockId, mergedHolding.newQuantity, mergedHolding.averagePrice, mergedHolding.totalCostBasis, mergedHolding.totalBuyFees);
       }
 
-      const balanceAfter = user.balance - amount;
+      const balanceAfter = user.balance - totalCost;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
-        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-        VALUES (?, 'stock_ipo_subscribe', ?, ?, ?, ?)
-      `).run(userId, -amount, user.balance, balanceAfter, stockId);
+        INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+        VALUES (?, 'stock_ipo_subscribe', ?, ?, ?, ?, ?)
+      `).run(userId, -totalCost, user.balance, balanceAfter, stockId, JSON.stringify(buyDetail));
 
-      db.prepare(`
-        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
-        VALUES (?, ?, 'ipo_subscribe', ?, ?, ?, 1, ?, ?)
-      `).run(userId, stockId, amount, quantity, stock.offering_price, user.balance, balanceAfter);
+      const trade = db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after, detail_json)
+        VALUES (?, ?, 'ipo_subscribe', ?, ?, ?, 1, ?, ?, ?)
+      `).run(userId, stockId, amount, quantity, stock.offering_price, user.balance, balanceAfter, JSON.stringify(buyDetail));
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.spotTradeCount,
+        sourceType: "stock_trade",
+        sourceId: trade.lastInsertRowid,
+      });
 
-      return { balance: balanceAfter };
+      incrementDailyMissionProgress(db, userId, "stock_buy");
+
+      return {
+        balance: balanceAfter, quantity, tradeValue: amount, buyFee, totalCost,
+        holdingMerge: {
+          oldQuantity: holdingBefore.quantity,
+          buyQuantity: quantity,
+          newQuantity: mergedHolding.newQuantity,
+          oldAveragePrice: holdingBefore.averagePrice,
+          buyPrice: stock.offering_price,
+          newAveragePrice: mergedHolding.averagePrice,
+          oldTotalCostBasis: holdingBefore.totalCostBasis,
+          addedCostBasis: mergedHolding.additionalCostBasis,
+          newTotalCostBasis: mergedHolding.totalCostBasis,
+        },
+      };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -697,54 +1404,126 @@ stocksRouter.post("/sell", (req, res) => {
       if (!holding || holding.quantity <= 0) throw new Error("보유 중인 주식이 없어요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
-      if (!stock || stock.status === 'delisted') {
+      if (!stock) {
         // If delisted, allow selling but at 0 price
         if (stock && stock.status === 'delisted') {
-           db.prepare("UPDATE stock_holdings SET quantity = 0 WHERE id = ?").run(holding.id);
+           db.prepare("UPDATE stock_holdings SET quantity = 0, average_price = 0, total_cost_basis = 0 WHERE id = ?").run(holding.id);
            return { balance: req.user.balance, amountSold: 0 };
         }
         throw new Error("거래할 수 없는 종목입니다.");
       }
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      assertStockTradeAllowed(stock);
+      const sellPrice = stock.status === "delisted" ? 0 : stock.current_price;
+      if (stock.status !== "delisted") assertStockTradeAllowed(stock);
 
       const sellQuantity = holding.quantity * fraction;
-      const grossSellAmount = Math.floor(sellQuantity * stock.current_price);
-      const grossRealizedPnl = Math.floor(sellQuantity * (stock.current_price - holding.average_price));
-      const jackpotContribution = grossRealizedPnl > 0 ? Math.floor(grossRealizedPnl * 0.01) : 0;
-      const sellAmount = Math.max(0, grossSellAmount - jackpotContribution);
-      const realizedPnl = grossRealizedPnl - jackpotContribution;
-      if (jackpotContribution > 0) {
-        addJackpotContribution(db, jackpotContribution);
-      }
+      const settlement = calculateSpotSettlement(db, {
+        userId,
+        holding,
+        sellQuantity,
+        sellPrice,
+      });
+      const {
+        grossSellAmount,
+        sellFee,
+        costBasis,
+        realizedProfitBeforeTax,
+        capitalGainsTax,
+        jackpotContribution,
+        finalProfit,
+        finalReceiveAmount,
+      } = settlement;
+      const realizedPnl = finalProfit;
 
-      const newQuantity = holding.quantity - sellQuantity;
-      db.prepare("UPDATE stock_holdings SET quantity = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(newQuantity, holding.id);
+      const newQuantity = Math.max(0, holding.quantity - sellQuantity);
+      const oldTotalCostBasis = getHoldingTotalCostBasis(holding);
+      const soldCostBasis = settlement.soldCostBasis;
+      const remainingCostBasis = newQuantity <= 0 ? 0 : Math.max(0, oldTotalCostBasis - soldCostBasis);
+      const remainingAveragePrice = newQuantity > 0 ? remainingCostBasis / newQuantity : 0;
+      db.prepare(`
+        UPDATE stock_holdings
+        SET quantity = ?, average_price = ?, total_cost_basis = ?,
+            realized_profit = realized_profit + ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE id = ?
+      `).run(newQuantity, remainingAveragePrice, remainingCostBasis, realizedProfitBeforeTax, holding.id);
 
-      const balanceAfter = user.balance + sellAmount;
+      const balanceAfter = user.balance + finalReceiveAmount;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
+
+      const afterGrossSale = user.balance + grossSellAmount;
+      const afterSellFee = afterGrossSale - sellFee;
+      const afterTax = afterSellFee - capitalGainsTax;
+      const detailJson = JSON.stringify({
+        ...settlement,
+        tradeValue: grossSellAmount,
+        finalReceiveAmount,
+        oldQuantity: holding.quantity,
+        soldQuantity: sellQuantity,
+        newQuantity,
+        oldTotalCostBasis,
+        soldCostBasis,
+        remainingCostBasis,
+        previousCumulativeTaxableProfit: settlement.taxLedger.previousCumulativeTaxableProfit,
+        newCumulativeTaxableProfit: settlement.taxLedger.newCumulativeTaxableProfit,
+      });
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
         VALUES (?, 'stock_sell', ?, ?, ?, ?, ?)
       `).run(
         userId,
-        sellAmount,
+        grossSellAmount,
         user.balance,
-        balanceAfter,
+        afterGrossSale,
         stockId,
-        JSON.stringify({
-          grossSellAmount,
-          grossRealizedPnl,
-          jackpotPoolContribution: jackpotContribution,
-          netRealizedPnl: realizedPnl,
-        }),
+        detailJson,
       );
+      if (sellFee > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'stock_fee', ?, ?, ?, ?, ?)
+        `).run(userId, -sellFee, afterGrossSale, afterSellFee, stockId, detailJson);
+      }
+      if (capitalGainsTax > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'capital_gains_tax', ?, ?, ?, ?, ?)
+        `).run(userId, -capitalGainsTax, afterSellFee, afterTax, stockId, detailJson);
+      }
+      if (realizedPnl > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'stock_realized_profit', ?, ?, ?, ?, ?)
+        `).run(userId, 0, afterTax, afterTax, stockId, detailJson);
+      }
 
-      db.prepare(`
-        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
-        VALUES (?, ?, 'sell', ?, ?, ?, 1, ?, ?, ?)
-      `).run(userId, stockId, sellAmount, sellQuantity, stock.current_price, realizedPnl, user.balance, balanceAfter);
+      const trade = db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after, detail_json)
+        VALUES (?, ?, 'sell', ?, ?, ?, 1, ?, ?, ?, ?)
+      `).run(userId, stockId, grossSellAmount, sellQuantity, sellPrice, realizedPnl, user.balance, balanceAfter, detailJson);
+      const appliedTaxLedger = applySpotSettlementTax(db, userId, settlement);
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.spotTradeCount,
+        sourceType: "stock_trade",
+        sourceId: trade.lastInsertRowid,
+      });
+
+      const appliedJackpotContribution = capitalGainsTax > 0
+        ? addJackpotContribution(db, capitalGainsTax, {
+          sourceType: "stock_capital_gains_tax",
+          sourceId: trade.lastInsertRowid,
+          userId,
+          metadata: {
+            stockId: stock.id,
+            realizedProfitBeforeTax,
+            capitalGainsTax,
+          },
+        })
+        : 0;
+
+      incrementDailyMissionProgress(db, userId, "stock_sell");
 
       if (realizedPnl >= 1000000) {
         createServerNotification(db, {
@@ -759,7 +1538,18 @@ stocksRouter.post("/sell", (req, res) => {
         });
       }
 
-      return { balance: balanceAfter, amountSold: sellAmount, realizedPnl, jackpotPoolContribution: jackpotContribution };
+      return {
+        balance: balanceAfter,
+        amountSold: finalReceiveAmount,
+        realizedPnl,
+        sellFee,
+        costBasis,
+        realizedProfitBeforeTax,
+        capitalGainsTax,
+        jackpotPoolContribution: appliedJackpotContribution,
+        finalReceiveAmount,
+        taxType: settlement.taxType,
+      };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -769,56 +1559,153 @@ stocksRouter.post("/sell", (req, res) => {
 });
 
 stocksRouter.post("/open-position", (req, res) => {
-  const { stockId, margin, leverage, side = "long" } = req.body;
+  const { stockId, margin, budgetAmount, leverage, side = "long" } = req.body;
   const userId = req.user.id;
+  const rawMargin = Math.floor(Number(margin));
+  const requestedLeverage = Number(leverage);
 
-  if (!margin || margin <= 0 || !leverage || leverage <= 1) return res.status(400).json({ message: "증거금 또는 레버리지가 올바르지 않아요." });
-  if (![2, 5, 10, 50, 100].includes(leverage)) return res.status(400).json({ message: "지원하지 않는 레버리지 배율이에요." });
+  if ((!rawMargin || rawMargin <= 0) && (budgetAmount === undefined || budgetAmount === null)) return res.status(400).json({ message: "증거금 또는 레버리지가 올바르지 않아요." });
+  if (![2, 5, 10, 50, 100].includes(requestedLeverage)) return res.status(400).json({ message: "지원하지 않는 레버리지 배율이에요." });
   if (!["long", "short"].includes(side)) return res.status(400).json({ message: "포지션 방향이 올바르지 않아요." });
 
   let result;
   try {
     result = db.transaction(() => {
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
-      if (user.balance < margin) throw new Error("잔액이 부족해요.");
 
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status === 'delisted') throw new Error("거래할 수 없는 종목입니다.");
       
       assertCanOpenNewStockTrade(user, stock);
-      if (stock.is_bluechip === 1 && leverage > 10) throw new Error("우량주는 10배까지만 레버리지가 가능합니다.");
+      assertCanOpenLeveragePosition(stock, requestedLeverage);
 
-      const positionSize = margin * leverage;
+      const requestedMargin = budgetAmount !== undefined && budgetAmount !== null
+        ? getMaxAffordableLeverageMargin({
+          availableBalance: normalizeBuyBudget(budgetAmount, user.balance),
+          leverage: requestedLeverage,
+        })
+        : rawMargin;
+      if (!requestedMargin || requestedMargin <= 0) {
+        throw new Error("현재 잔액으로는 수수료를 포함해 포지션을 열 수 없어요.");
+      }
+
+      const oppositeSide = side === "long" ? "short" : "long";
+      const oppositePosition = db
+        .prepare(
+          "SELECT id FROM stock_positions WHERE user_id = ? AND stock_id = ? AND side = ? AND status = 'open' LIMIT 1",
+        )
+        .get(userId, stockId, oppositeSide);
+      if (oppositePosition) {
+        throw new Error("같은 종목에서 롱과 숏을 동시에 보유할 수 없어요. 기존 포지션을 먼저 정리해 주세요.");
+      }
+
+      const positionSize = requestedMargin * requestedLeverage;
+      const openFee = calculateFee(positionSize, STOCK_FEE_CONFIG.leverageOpenFeeRate);
+      const requiredBalance = requestedMargin + openFee;
+      if (user.balance < requiredBalance) throw new Error("증거금과 수수료를 합친 금액보다 보유 잔액이 부족해요.");
       const quantity = positionSize / stock.current_price;
       const liquidationPrice = side === "short" 
-        ? Math.ceil(stock.current_price * (1 + 1 / leverage))
-        : Math.floor(stock.current_price * (1 - 1 / leverage));
+        ? Math.ceil(stock.current_price * (1 + 1 / requestedLeverage))
+        : Math.floor(stock.current_price * (1 - 1 / requestedLeverage));
+      const detail = {
+        positionSize,
+        openFee,
+        requiredBalance,
+        side,
+        marginAmount: requestedMargin,
+        leverage: requestedLeverage,
+      };
+      const existingBucket = db.prepare(`
+        SELECT * FROM stock_positions
+        WHERE user_id = ? AND stock_id = ? AND side = ? AND leverage = ? AND status = 'open'
+        LIMIT 1
+      `).get(userId, stockId, side, requestedLeverage);
+      let positionId;
+      let positionMerge;
+      if (existingBucket) {
+        const combinedQuantity = Number(existingBucket.quantity) + quantity;
+        const combinedPositionSize = Number(existingBucket.position_size) + positionSize;
+        const combinedMargin = Number(existingBucket.margin_amount) + requestedMargin;
+        const combinedEntryPrice = combinedQuantity > 0
+          ? ((Number(existingBucket.quantity) * Number(existingBucket.entry_price)) + (quantity * Number(stock.current_price))) / combinedQuantity
+          : Number(stock.current_price);
+        const combinedLiquidationPrice = side === "short"
+          ? Math.ceil(combinedEntryPrice * (1 + 1 / requestedLeverage))
+          : Math.floor(combinedEntryPrice * (1 - 1 / requestedLeverage));
+        const combinedDetail = {
+          ...detail,
+          oldQuantity: existingBucket.quantity,
+          additionalQuantity: quantity,
+          combinedQuantity,
+          oldEntryPrice: existingBucket.entry_price,
+          additionalEntryPrice: stock.current_price,
+          combinedEntryPrice,
+          oldMargin: existingBucket.margin_amount,
+          additionalMargin: requestedMargin,
+          combinedMargin,
+          newLiquidationPrice: combinedLiquidationPrice,
+        };
+        db.prepare(`
+          UPDATE stock_positions
+          SET margin_amount = ?, position_size = ?, quantity = ?, entry_price = ?, liquidation_price = ?,
+              total_open_fees = total_open_fees + ?, detail_json = ?
+          WHERE id = ?
+        `).run(combinedMargin, combinedPositionSize, combinedQuantity, combinedEntryPrice, combinedLiquidationPrice, openFee, JSON.stringify(combinedDetail), existingBucket.id);
+        positionId = existingBucket.id;
+        positionMerge = combinedDetail;
+      } else {
+        const positionInsert = db.prepare(`
+          INSERT INTO stock_positions (user_id, stock_id, side, margin_amount, leverage, position_size, quantity, entry_price, liquidation_price, total_open_fees, detail_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(userId, stockId, side, requestedMargin, requestedLeverage, positionSize, quantity, stock.current_price, liquidationPrice, openFee, JSON.stringify(detail));
+        positionId = positionInsert.lastInsertRowid;
+        positionMerge = {
+          oldQuantity: 0,
+          additionalQuantity: quantity,
+          combinedQuantity: quantity,
+          oldEntryPrice: 0,
+          additionalEntryPrice: stock.current_price,
+          combinedEntryPrice: stock.current_price,
+          oldMargin: 0,
+          additionalMargin: requestedMargin,
+          combinedMargin: requestedMargin,
+          newLiquidationPrice: liquidationPrice,
+        };
+      }
 
-      db.prepare(`
-        INSERT INTO stock_positions (user_id, stock_id, side, margin_amount, leverage, position_size, quantity, entry_price, liquidation_price)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, stockId, side, margin, leverage, positionSize, quantity, stock.current_price, liquidationPrice);
-
-      const balanceAfter = user.balance - margin;
+      const afterMargin = user.balance - requestedMargin;
+      const balanceAfter = afterMargin - openFee;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
         VALUES (?, 'stock_position_open', ?, ?, ?, ?)
-      `).run(userId, -margin, user.balance, balanceAfter, stockId);
+      `).run(userId, -requestedMargin, user.balance, afterMargin, stockId);
+      if (openFee > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'stock_fee', ?, ?, ?, ?, ?)
+        `).run(userId, -openFee, afterMargin, balanceAfter, stockId, JSON.stringify(detail));
+      }
 
-      db.prepare(`
-        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, stockId, `open_${side}`, margin, quantity, stock.current_price, leverage, user.balance, balanceAfter);
+      const openTrade = db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after, detail_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, stockId, `open_${side}`, requestedMargin, quantity, stock.current_price, requestedLeverage, user.balance, balanceAfter, JSON.stringify({ ...detail, ...positionMerge, positionId }));
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.leverageOpenCount,
+        sourceType: "leverage_trade_open",
+        sourceId: openTrade.lastInsertRowid,
+      });
 
-      return { balance: balanceAfter };
+      return { balance: balanceAfter, positionId, positionMerge, maxAllowedLeverage: getMaxAllowedLeverage(stock), openFee, requiredBalance };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
   }
 
-  res.json({ message: `${leverage}배 레버리지 포지션을 열었어요.`, ...result });
+  res.json({ message: `${requestedLeverage}배 레버리지 포지션을 열었어요.`, ...result });
 });
 
 stocksRouter.post("/close-position", (req, res) => {
@@ -837,56 +1724,144 @@ stocksRouter.post("/close-position", (req, res) => {
       assertStockTradeAllowed(stock);
       const closePrice = (stock && stock.status !== 'delisted') ? stock.current_price : 0;
 
-      let unrealizedPnl = 0;
-      if (position.side === "short") {
-        unrealizedPnl = (position.entry_price - closePrice) * position.quantity;
-        if (closePrice === 0) { // Delisted cap
-          const maxShortProfit = position.margin_amount * position.leverage * 0.95;
-          unrealizedPnl = Math.min(unrealizedPnl, maxShortProfit);
-        }
-      } else {
-        unrealizedPnl = (closePrice - position.entry_price) * position.quantity;
+      const outcome = calculateLeveragedPositionOutcome(position, stock, closePrice);
+      if (outcome.liquidated) {
+        liquidatePosition(db, position, closePrice, "manual_close_liquidation_check");
+        return {
+          balance: user.balance,
+          payout: 0,
+          realizedPnl: -position.margin_amount,
+          jackpotPoolContribution: 0,
+          liquidated: true,
+        };
       }
 
-      const grossRealizedPnl = Math.floor(unrealizedPnl);
-      const jackpotContribution = grossRealizedPnl > 0 ? Math.floor(grossRealizedPnl * 0.01) : 0;
-      if (jackpotContribution > 0) {
-        addJackpotContribution(db, jackpotContribution);
-      }
-      const payout = Math.floor(position.margin_amount + grossRealizedPnl);
-      const finalPayout = Math.max(0, payout - jackpotContribution); // Cannot lose more than margin if manually closed before liquidation processing
-      const realizedPnl = grossRealizedPnl - jackpotContribution;
+      const grossRealizedPnl = outcome.cappedPnl;
+      const settlement = calculateLeverageSettlement(db, {
+        userId,
+        position,
+        cappedPnl: outcome.cappedPnl,
+      });
+      const {
+        closeFee,
+        realizedPnlBeforeTax,
+        capitalGainsTax,
+        jackpotContribution,
+        finalProfit,
+        finalPayout,
+      } = settlement;
+      const payout = outcome.payoutBeforeTax;
+      const realizedPnl = finalProfit;
+      const detail = {
+        grossPayout: Math.max(0, payout),
+        rawPnl: outcome.rawPnl,
+        cappedPnl: outcome.cappedPnl,
+        grossRealizedPnl,
+        realizedPnlBeforeTax,
+        closeFee,
+        capitalGainsTax,
+        taxBracketsApplied: settlement.bracketsApplied,
+        profitAfterTax: realizedPnlBeforeTax > 0 ? realizedPnlBeforeTax - capitalGainsTax : realizedPnlBeforeTax,
+        jackpotPoolContribution: jackpotContribution,
+        prizeContribution: jackpotContribution,
+        finalProfit,
+        finalPayout,
+        taxType: settlement.taxType,
+        riskLevel: outcome.riskLevel,
+        profitCapApplied: outcome.profitCapApplied,
+        liquidated: false,
+        forceCloseReason: null,
+        side: outcome.side,
+        entryPrice: outcome.entryPrice,
+        closePrice: outcome.closePrice,
+        marginAmount: outcome.marginAmount,
+        positionSize: position.position_size,
+        leverage: outcome.leverage,
+        liquidationPrice: outcome.liquidationPrice,
+        previousCumulativeTaxableProfit: settlement.taxLedger.previousCumulativeTaxableProfit,
+        newCumulativeTaxableProfit: settlement.taxLedger.newCumulativeTaxableProfit,
+      };
 
       db.prepare(`
         UPDATE stock_positions 
-        SET status = 'closed', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), unrealized_pnl = 0, realized_pnl = ?
+        SET status = 'closed',
+            closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            close_price = ?,
+            payout_amount = ?,
+            unrealized_pnl = 0,
+            realized_pnl = ?,
+            detail_json = ?
         WHERE id = ?
-      `).run(realizedPnl, position.id);
+      `).run(closePrice, finalPayout, realizedPnl, JSON.stringify(detail), position.id);
 
       const balanceAfter = user.balance + finalPayout;
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
+
+      const afterGrossPayout = user.balance + Math.max(0, payout);
+      const afterCloseFee = afterGrossPayout - closeFee;
+      const afterTax = afterCloseFee - capitalGainsTax;
 
       db.prepare(`
         INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
         VALUES (?, 'stock_position_close', ?, ?, ?, ?, ?)
       `).run(
         userId,
-        finalPayout,
+        Math.max(0, payout),
         user.balance,
-        balanceAfter,
+        afterGrossPayout,
         stock.id,
-        JSON.stringify({
-          grossPayout: Math.max(0, payout),
-          grossRealizedPnl,
-          jackpotPoolContribution: jackpotContribution,
-          netRealizedPnl: realizedPnl,
-        }),
+        JSON.stringify(detail),
       );
+      if (closeFee > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'stock_fee', ?, ?, ?, ?, ?)
+        `).run(userId, -closeFee, afterGrossPayout, afterCloseFee, stock.id, JSON.stringify(detail));
+      }
+      if (capitalGainsTax > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'capital_gains_tax', ?, ?, ?, ?, ?)
+        `).run(userId, -capitalGainsTax, afterCloseFee, afterTax, stock.id, JSON.stringify(detail));
+      }
+      if (realizedPnl > 0) {
+        db.prepare(`
+          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id, detail_json)
+          VALUES (?, 'stock_realized_profit', ?, ?, ?, ?, ?)
+        `).run(userId, 0, afterTax, afterTax, stock.id, JSON.stringify(detail));
+      }
 
-      db.prepare(`
-        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(userId, stock.id, `close_${position.side || "long"}`, finalPayout, position.quantity, closePrice, position.leverage, realizedPnl, user.balance, balanceAfter);
+      const trade = db.prepare(`
+        INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, realized_pnl, balance_before, balance_after, detail_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(userId, stock.id, `close_${position.side || "long"}`, Math.max(0, payout), position.quantity, closePrice, position.leverage, realizedPnl, user.balance, balanceAfter, JSON.stringify(detail));
+      applyLeverageSettlementTax(db, userId, settlement);
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.leverageCloseCount,
+        sourceType: "leverage_position_close",
+        sourceId: position.id,
+      });
+      incrementUserStockStat(db, {
+        userId,
+        stat: STOCK_STAT_TYPES.leverageRoundTripCount,
+        sourceType: "leverage_round_trip",
+        sourceId: position.id,
+      });
+
+      const appliedJackpotContribution = capitalGainsTax > 0
+        ? addJackpotContribution(db, capitalGainsTax, {
+          sourceType: "stock_position_capital_gains_tax",
+          sourceId: trade.lastInsertRowid,
+          userId,
+          metadata: {
+            stockId: stock.id,
+            positionId: position.id,
+            realizedPnlBeforeTax,
+            capitalGainsTax,
+          },
+        })
+        : 0;
 
       if (position.leverage >= 10 && realizedPnl >= 1000000) {
         createServerNotification(db, {
@@ -901,7 +1876,20 @@ stocksRouter.post("/close-position", (req, res) => {
         });
       }
 
-      return { balance: balanceAfter, payout: finalPayout, realizedPnl, jackpotPoolContribution: jackpotContribution };
+      return {
+        balance: balanceAfter,
+        payout: finalPayout,
+        realizedPnl,
+        rawPnl: outcome.rawPnl,
+        cappedPnl: outcome.cappedPnl,
+        realizedPnlBeforeTax,
+        closeFee,
+        capitalGainsTax,
+        profitCapApplied: outcome.profitCapApplied,
+        riskLevel: outcome.riskLevel,
+        jackpotPoolContribution: appliedJackpotContribution,
+        taxType: settlement.taxType,
+      };
     })();
   } catch (err) {
     return res.status(400).json({ message: err.message });
@@ -936,43 +1924,14 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const existingEtf = db.prepare("SELECT id FROM stocks WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired'").get(userId);
       if (existingEtf) throw new Error("인수자 ETF는 한 개만 보유할 수 있습니다.");
 
-      // Auto-clear existing holdings and positions to prevent owning own ETF
       const holding = db.prepare("SELECT * FROM stock_holdings WHERE user_id = ? AND stock_id = ?").get(userId, id);
-      let clearedAmount = 0;
       if (holding && holding.quantity > 0) {
-        const sellAmount = Math.floor(holding.quantity * stock.current_price);
-        clearedAmount += sellAmount;
-        db.prepare("UPDATE stock_holdings SET quantity = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?").run(holding.id);
-        
-        db.prepare(`
-          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-          VALUES (?, 'stock_auto_sell_acquire', ?, ?, ?, ?)
-        `).run(userId, sellAmount, user.balance, user.balance + sellAmount, id);
-
-        db.prepare(`
-          INSERT INTO stock_trades (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after)
-          VALUES (?, ?, 'sell', ?, ?, ?, 1, ?, ?)
-        `).run(userId, id, sellAmount, holding.quantity, stock.current_price, user.balance, user.balance + sellAmount);
+        throw new Error("Close your own holding before acquiring this company.");
       }
 
-      const positions = db.prepare("SELECT * FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open'").all(userId, id);
-      for (const pos of positions) {
-        const pnl = Math.floor(pos.quantity * (stock.current_price - pos.entry_price));
-        const payout = Math.max(0, pos.margin_amount + pnl);
-        clearedAmount += payout;
-        
-        db.prepare("UPDATE stock_positions SET status = 'closed', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), close_price = ?, realized_pnl = ?, payout_amount = ? WHERE id = ?")
-          .run(stock.current_price, pnl, payout, pos.id);
-
-        db.prepare(`
-          INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_id)
-          VALUES (?, 'stock_auto_close_acquire', ?, ?, ?, ?)
-        `).run(userId, payout, user.balance, user.balance + payout, id);
-      }
-      
-      if (clearedAmount > 0) {
-        user.balance += clearedAmount; // Update local user balance for the next check
-        db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(user.balance, userId);
+      const ownPosition = db.prepare("SELECT id FROM stock_positions WHERE user_id = ? AND stock_id = ? AND status = 'open' LIMIT 1").get(userId, id);
+      if (ownPosition) {
+        throw new Error("Close your own leveraged position before acquiring this company.");
       }
 
       const cost = acquisitionPrice;
@@ -984,10 +1943,7 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       const balanceAfter = user.balance - cost;
       
       db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, userId);
-      const ownerAsset = Math.max(
-        calculateUserTotalEvaluatedAsset(db, userId).totalEvaluatedAsset,
-        1,
-      );
+      const ownerAsset = calculateOwnerEtfTrackingAsset(db, userId, Number(id));
       
       db.prepare(`
         UPDATE stocks 
@@ -995,7 +1951,13 @@ stocksRouter.post("/:id/acquire", (req, res) => {
             owner_user_id = ?, owner_nickname_snapshot = ?,
             etf_base_price = current_price,
             etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
-            etf_acquisition_cost = ?
+            etf_acquisition_cost = ?,
+            etf_delist_reference_price = current_price,
+            etf_delist_reference_set_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            etf_delist_trigger_price = MAX(1, CAST(current_price * 0.15 AS INTEGER)),
+            etf_delist_triggered_at = NULL, etf_delist_reason = NULL,
+            delist_risk_status = 'normal', is_market_cap_warning = 0,
+            caution_tick_count = 0, recovery_tick_count = 0, delist_review_tick_count = 0
         WHERE id = ?
       `).run(userId, user.nickname, ownerAsset, ownerAsset, cost, id);
 
@@ -1051,7 +2013,9 @@ stocksRouter.post("/:id/revert-by-owner", (req, res) => {
         SET status = 'listed', is_etf = 0, etf_tracking_type = NULL, 
             owner_user_id = NULL, owner_nickname_snapshot = NULL,
             etf_base_owner_asset = 0, etf_last_tracked_owner_asset = 0,
-            etf_acquisition_cost = NULL
+            etf_acquisition_cost = NULL,
+            etf_delist_reference_price = NULL, etf_delist_reference_set_at = NULL,
+            etf_delist_trigger_price = NULL, etf_delist_triggered_at = NULL, etf_delist_reason = NULL
         WHERE id = ?
       `).run(id);
 
@@ -1133,6 +2097,10 @@ stocksRouter.post("/:id/update-meta", (req, res) => {
 });
 
 stocksRouter.post("/:id/hostile-takeover", (req, res) => {
+  return res.status(410).json({
+    message: "적대적 M&A는 공개 입찰 방식으로 바뀌었어요. /hostile-takeover/declare를 사용하세요.",
+  });
+
   const { id } = req.params;
   const attackerId = req.user.id;
 
@@ -1168,10 +2136,12 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
 
       const cost = Math.floor(defender.balance * 0.2);
       const requiredBalance = requiredCompanyAcquisitionBalance(cost);
-      if (attacker.balance < requiredBalance) {
-        throw new Error(
-          `적대적 M&A를 하려면 인수 비용의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredBalance)})를 보유해야 해요.`,
-        );
+      const attackerTotalAsset = calculateUserTotalEvaluatedAsset(db, attackerId).totalEvaluatedAsset;
+      if (attackerTotalAsset < requiredBalance) {
+        throw new Error("적대적 M&A 자격에는 인수 비용의 5배 총평가자산이 필요해요.");
+      }
+      if (attacker.balance < cost) {
+        throw new Error("적대적 M&A 비용은 현금 자산으로 보유해야 해요.");
       }
 
       const attackerBalanceAfter = attacker.balance - cost;
@@ -1191,10 +2161,7 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
         VALUES (?, 'hostile_takeover_receive', ?, ?, ?, ?)
       `).run(defender.id, cost, defender.balance, defenderBalanceAfter, id);
 
-      const attackerAsset = Math.max(
-        calculateUserTotalEvaluatedAsset(db, attackerId).totalEvaluatedAsset,
-        1,
-      );
+      const attackerAsset = calculateOwnerEtfTrackingAsset(db, attackerId, Number(id));
 
       // Transfer ETF ownership
       db.prepare(`
@@ -1202,7 +2169,13 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
         SET owner_user_id = ?, owner_nickname_snapshot = ?,
             etf_base_price = current_price,
             etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
-            etf_acquisition_cost = ?
+            etf_acquisition_cost = ?,
+            etf_delist_reference_price = current_price,
+            etf_delist_reference_set_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+            etf_delist_trigger_price = MAX(1, CAST(current_price * 0.15 AS INTEGER)),
+            etf_delist_triggered_at = NULL, etf_delist_reason = NULL,
+            delist_risk_status = 'normal', is_market_cap_warning = 0,
+            caution_tick_count = 0, recovery_tick_count = 0, delist_review_tick_count = 0
         WHERE id = ?
       `).run(attacker.id, attacker.nickname, attackerAsset, attackerAsset, cost, id);
 
@@ -1242,6 +2215,107 @@ stocksRouter.post("/:id/hostile-takeover", (req, res) => {
   res.json({ message: "적대적 M&A에 성공하여 회사를 탈취했습니다!" });
 });
 
+
+stocksRouter.post("/:id/hostile-takeover/declare", (req, res) => {
+  const stockId = Number(req.params.id);
+  const attackerId = req.user.id;
+  try {
+    const declaration = db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+      if (!stock || stock.status !== "acquired" || stock.is_etf !== 1) {
+        throw new Error("인수된 회사만 적대적 M&A 공개 입찰을 시작할 수 있어요.");
+      }
+      if (stock.owner_user_id === attackerId) throw new Error("본인의 회사에는 적대적 M&A를 할 수 없어요.");
+      assertStockTradeAllowed(stock);
+      const existing = db.prepare(`
+        SELECT id FROM hostile_takeover_events
+        WHERE stock_id = ? AND status IN ('declared', 'defended')
+      `).get(stockId);
+      if (existing) throw new Error("이미 진행 중인 적대적 M&A 공개 입찰이 있어요.");
+      const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(attackerId);
+      const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
+      if (!attacker || !defender) throw new Error("공격자 또는 방어자 정보를 찾을 수 없어요.");
+      const cost = Math.max(1_000, Math.floor(Number(defender.balance || 0) * 0.2));
+      const attackerTotalAsset = calculateUserTotalEvaluatedAsset(db, attackerId).totalEvaluatedAsset;
+      if (attackerTotalAsset < requiredCompanyAcquisitionBalance(cost)) {
+        throw new Error("공개 입찰에는 인수 비용의 5배 총평가자산이 필요해요.");
+      }
+      if (Number(attacker.balance) < cost) throw new Error("공개 입찰 자금을 현금으로 보유해야 해요.");
+      const balanceAfter = Number(attacker.balance) - cost;
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, attackerId);
+      const endsAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      const result = db.prepare(`
+        INSERT INTO hostile_takeover_events
+          (stock_id, attacker_user_id, defender_user_id, attack_cash, attacker_asset_snapshot, defender_asset_snapshot, ends_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        stockId, attackerId, defender.id, cost, attackerTotalAsset,
+        calculateUserTotalEvaluatedAsset(db, defender.id).totalEvaluatedAsset, endsAt,
+      );
+      db.prepare(`
+        INSERT INTO asset_events
+          (user_id, event_type, amount, balance_before, balance_after, source_type, source_id, detail_json)
+        VALUES (?, 'hostile_takeover_escrow', ?, ?, ?, 'hostile_takeover', ?, ?)
+      `).run(attackerId, -cost, attacker.balance, balanceAfter, `escrow:${result.lastInsertRowid}`, JSON.stringify({ stockId, endsAt }));
+      db.prepare(`
+        INSERT INTO stock_trades
+          (user_id, stock_id, trade_type, amount, quantity, price, leverage, balance_before, balance_after, detail_json)
+        VALUES (?, ?, 'hostile_takeover_declare', ?, 0, ?, 1, ?, ?, ?)
+      `).run(attackerId, stockId, cost, stock.current_price, attacker.balance, balanceAfter, JSON.stringify({ hostileTakeoverEventId: result.lastInsertRowid, endsAt }));
+      createServerNotification(db, {
+        userId: defender.id,
+        nickname: defender.nickname,
+        type: "hostile_takeover_declared",
+        title: "적대적 M&A 공개 입찰",
+        message: `${attacker.nickname}님이 ${stock.name}의 인수를 선언했어요. 종료 전까지 방어 자금을 투입할 수 있어요.`,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { hostileTakeoverEventId: result.lastInsertRowid, stockId, endsAt },
+      });
+      return { id: Number(result.lastInsertRowid), cost, endsAt };
+    })();
+    return res.json({ message: "적대적 M&A 공개 입찰을 시작했어요. 5분 뒤 공격력과 방어력을 비교합니다.", hostileTakeover: declaration });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+stocksRouter.post("/:id/hostile-takeover/defend", (req, res) => {
+  const stockId = Number(req.params.id);
+  const defenderId = req.user.id;
+  const requestedAmount = Math.floor(Number(req.body?.amount || 0));
+  try {
+    const result = db.transaction(() => {
+      const event = db.prepare(`
+        SELECT * FROM hostile_takeover_events
+        WHERE stock_id = ? AND status IN ('declared', 'defended')
+        ORDER BY id DESC LIMIT 1
+      `).get(stockId);
+      if (!event) throw new Error("방어할 공개 입찰이 없어요.");
+      if (event.defender_user_id !== defenderId) throw new Error("현재 회사 보유자만 방어할 수 있어요.");
+      if (new Date(event.ends_at).getTime() <= Date.now()) throw new Error("공개 입찰 시간이 끝났어요.");
+      const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(defenderId);
+      const amount = requestedAmount > 0 ? requestedAmount : Math.min(Number(defender.balance), Math.max(1_000, Math.floor(event.attack_cash * 0.25)));
+      if (amount <= 0 || amount > Number(defender.balance)) throw new Error("방어 자금이 부족해요.");
+      const balanceAfter = Number(defender.balance) - amount;
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, defenderId);
+      db.prepare(`
+        UPDATE hostile_takeover_events
+        SET defense_cash = defense_cash + ?, status = 'defended'
+        WHERE id = ?
+      `).run(amount, event.id);
+      db.prepare(`
+        INSERT INTO asset_events
+          (user_id, event_type, amount, balance_before, balance_after, source_type, source_id, detail_json)
+        VALUES (?, 'hostile_takeover_defense', ?, ?, ?, 'hostile_takeover', ?, ?)
+      `).run(defenderId, -amount, defender.balance, balanceAfter, `defense:${event.id}:${Date.now()}`, JSON.stringify({ hostileTakeoverEventId: event.id, stockId }));
+      return { amount, endsAt: event.ends_at };
+    })();
+    return res.json({ message: "방어 자금을 투입했어요. 공개 입찰 종료까지 방어력이 유지됩니다.", hostileTakeover: result });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
 
 stocksRouter.post("/:id/delist-by-owner", (req, res) => {
   const { id } = req.params;

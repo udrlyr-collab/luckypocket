@@ -7,6 +7,7 @@ import {
   findUserByNickname,
   validateNickname,
 } from "../services/nicknameService.js";
+import { getUserStockStats } from "../services/stockTradeStatsService.js";
 
 export const profileRouter = Router();
 profileRouter.use(requireAuth);
@@ -220,7 +221,7 @@ profileRouter.get("/game-stats", (req, res) => {
     )
     .all(req.user.id);
   const byType = new Map(rows.map((row) => [row.game_type, row]));
-  const gameTypes = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart"];
+  const gameTypes = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
 
   return res.json({
     stats: gameTypes.map((gameType) => {
@@ -241,4 +242,8 @@ profileRouter.get("/game-stats", (req, res) => {
       };
     }),
   });
+});
+
+profileRouter.get("/stock-stats", (req, res) => {
+  return res.json({ stats: getUserStockStats(db, req.user.id) });
 });

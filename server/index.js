@@ -27,7 +27,9 @@ import {
   tickStockMarket,
 } from "./services/stockService.js";
 import { readClientAssetVersion } from "./services/clientVersionService.js";
-import { runJackpotDraw } from "./services/jackpotService.js";
+import { startJackpotScheduler } from "./services/jackpotService.js";
+import { runDailyUnluckyScheduler } from "./services/dailyUnluckyService.js";
+import { ensureMarketRegime } from "./services/marketDynamicsService.js";
 
 const app = express();
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -155,6 +157,8 @@ const server = app.listen(config.port, "127.0.0.1", () => {
   // Initialize stock market
   try {
     initStockMarket(db);
+    ensureMarketRegime(db);
+    runDailyUnluckyScheduler(db);
     console.table(stockMarketDistributionSnapshot(db));
     setInterval(() => tickStockMarket(db), 10000);
     console.log("주식 시장 틱 타이머(10초)가 시작되었습니다.");
@@ -162,30 +166,8 @@ const server = app.listen(config.port, "127.0.0.1", () => {
     console.error("주식 시장 초기화 실패:", err);
   }
 
-  // Initialize jackpot scheduler
-  function scheduleNextJackpot() {
-    const now = new Date();
-    // next midnight KST
-    // KST is UTC+9, so midnight KST is 15:00 UTC.
-    const kstNow = new Date(now.getTime() + 9 * 60 * 60 * 1000);
-    const nextMidnightKst = new Date(kstNow);
-    nextMidnightKst.setUTCHours(24, 0, 0, 0); // Next day 00:00:00
-    
-    const msUntilMidnight = nextMidnightKst.getTime() - kstNow.getTime();
-    console.log(`다음 잭팟 추첨까지 ${Math.floor(msUntilMidnight / 1000 / 60)}분 남았습니다.`);
-    
-    setTimeout(() => {
-      console.log("자정 잭팟 추첨을 시작합니다...");
-      try {
-        const result = runJackpotDraw(db);
-        console.log("잭팟 추첨 결과:", result);
-      } catch (e) {
-        console.error("잭팟 추첨 오류:", e);
-      }
-      scheduleNextJackpot(); // Schedule the next one
-    }, msUntilMidnight);
-  }
-  scheduleNextJackpot();
+  // Initialize new robust jackpot scheduler
+  startJackpotScheduler(db);
 });
 
 function shutdown() {

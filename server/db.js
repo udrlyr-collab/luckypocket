@@ -85,17 +85,57 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
-  CREATE TABLE IF NOT EXISTS jackpot_entries (
+  CREATE TABLE IF NOT EXISTS jackpot_rounds (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    entry_date TEXT NOT NULL,
-    tickets INTEGER NOT NULL CHECK (tickets > 0),
+    round_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    draw_at TEXT NOT NULL,
+    drawn_at TEXT,
+    total_prize_amount INTEGER NOT NULL DEFAULT 0,
+    total_extra_entries INTEGER NOT NULL DEFAULT 0,
+    total_effective_entries INTEGER NOT NULL DEFAULT 0,
+    winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    winner_nickname_snapshot TEXT,
+    winner_entry_count INTEGER,
+    winner_prize_amount INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    UNIQUE(user_id, entry_date)
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
 
-  CREATE INDEX IF NOT EXISTS idx_jackpot_entries_date
-    ON jackpot_entries(entry_date);
+  CREATE TABLE IF NOT EXISTS jackpot_entries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id INTEGER NOT NULL REFERENCES jackpot_rounds(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    extra_entry_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(round_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_jackpot_notices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    round_id INTEGER NOT NULL REFERENCES jackpot_rounds(id) ON DELETE CASCADE,
+    notice_type TEXT NOT NULL,
+    seen_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS jackpot_contributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id INTEGER NOT NULL REFERENCES jackpot_rounds(id) ON DELETE CASCADE,
+    user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    amount INTEGER NOT NULL CHECK (amount > 0),
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(source_type, source_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_jackpot_contributions_round
+    ON jackpot_contributions(round_id, created_at DESC);
 
   CREATE TABLE IF NOT EXISTS game_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,6 +155,33 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_game_logs_user_created
     ON game_logs(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS cup_game_rounds (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
+    balance_before INTEGER NOT NULL,
+    cup_count INTEGER NOT NULL CHECK (cup_count BETWEEN 3 AND 8),
+    bet_amount INTEGER NOT NULL CHECK (bet_amount >= 1000),
+    winning_cup_index INTEGER NOT NULL,
+    selected_cup_index INTEGER,
+    multiplier INTEGER NOT NULL,
+    won INTEGER,
+    gross_payout INTEGER,
+    gross_profit INTEGER,
+    prize_contribution INTEGER NOT NULL DEFAULT 0,
+    final_payout INTEGER,
+    status TEXT NOT NULL DEFAULT 'awaiting_pick',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    settled_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cup_game_rounds_user_created
+    ON cup_game_rounds(user_id, created_at DESC);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_cup_game_rounds_one_active
+    ON cup_game_rounds(user_id) WHERE status = 'awaiting_pick';
 
   CREATE TABLE IF NOT EXISTS game_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -342,7 +409,8 @@ db.exec(`
     etf_last_tracked_balance INTEGER,
     etf_acquisition_cost REAL,
     description TEXT,
-    listed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    sector TEXT,
+    listed_at TEXT,
     delisted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -393,7 +461,8 @@ db.exec(`
     closed_at TEXT,
     liquidated_at TEXT,
     close_price INTEGER,
-    payout_amount INTEGER
+    payout_amount INTEGER,
+    detail_json TEXT NOT NULL DEFAULT '{}'
   );
 
   CREATE INDEX IF NOT EXISTS idx_stock_positions_user_status
@@ -401,6 +470,30 @@ db.exec(`
   
   CREATE INDEX IF NOT EXISTS idx_stock_positions_stock_status
     ON stock_positions(stock_id, status);
+
+  CREATE TABLE IF NOT EXISTS stock_watchlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, stock_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_watchlists_user
+    ON stock_watchlists(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS stock_price_alerts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    target_price INTEGER NOT NULL CHECK (target_price > 0),
+    direction TEXT NOT NULL CHECK (direction IN ('above', 'below')),
+    triggered_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_price_alerts_active
+    ON stock_price_alerts(stock_id, triggered_at);
 
   CREATE TABLE IF NOT EXISTS stock_trades (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,6 +507,7 @@ db.exec(`
     realized_pnl INTEGER NOT NULL DEFAULT 0,
     balance_before INTEGER NOT NULL,
     balance_after INTEGER NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
     season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
     season_number INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -421,6 +515,20 @@ db.exec(`
 
   CREATE INDEX IF NOT EXISTS idx_stock_trades_user
     ON stock_trades(user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS user_stock_stat_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stat_type TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    amount INTEGER NOT NULL DEFAULT 1 CHECK (amount > 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, stat_type, source_type, source_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_stock_stat_events_user
+    ON user_stock_stat_events(user_id, stat_type, created_at DESC);
 
   CREATE INDEX IF NOT EXISTS idx_stock_trades_stock_user_created
     ON stock_trades(stock_id, user_id, created_at DESC);
@@ -438,10 +546,172 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_stock_events_stock
     ON stock_events(stock_id, created_at DESC);
 
+  CREATE TABLE IF NOT EXISTS sector_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sector TEXT NOT NULL,
+    sentiment TEXT NOT NULL CHECK (sentiment IN ('good', 'bad', 'volatile')),
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    effect_until TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sector_events_active
+    ON sector_events(sector, effect_until DESC);
+
+  CREATE TABLE IF NOT EXISTS economy_audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    admin_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    audit_type TEXT NOT NULL,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    issues_json TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS daily_missions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date_key TEXT NOT NULL,
+    mission_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    target_count INTEGER NOT NULL,
+    reward_type TEXT NOT NULL,
+    reward_amount INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(date_key, mission_type)
+  );
+
+  CREATE TABLE IF NOT EXISTS user_daily_mission_progress (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mission_id INTEGER NOT NULL REFERENCES daily_missions(id) ON DELETE CASCADE,
+    progress_count INTEGER NOT NULL DEFAULT 0,
+    completed_at TEXT,
+    claimed_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, mission_id)
+  );
+
   CREATE TABLE IF NOT EXISTS system_config (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS market_regimes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_regime TEXT NOT NULL CHECK (market_regime IN ('strong_bull', 'bull', 'sideways', 'bear', 'panic')),
+    strength REAL NOT NULL DEFAULT 1,
+    started_at TEXT NOT NULL,
+    ends_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_market_regimes_active
+    ON market_regimes(ends_at DESC);
+
+  CREATE TABLE IF NOT EXISTS stock_corporate_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL CHECK (event_type IN ('earnings_beat', 'earnings_inline', 'earnings_miss', 'dividend', 'share_buyback', 'rights_offering', 'short_squeeze')),
+    status TEXT NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled', 'active', 'recorded', 'paid', 'completed', 'cancelled')),
+    expected_revenue INTEGER,
+    actual_revenue INTEGER,
+    expected_profit INTEGER,
+    actual_profit INTEGER,
+    surprise_rate REAL,
+    dividend_rate REAL,
+    record_at TEXT,
+    pay_at TEXT,
+    starts_at TEXT,
+    ends_at TEXT,
+    applied_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_stock_corporate_events_active
+    ON stock_corporate_events(stock_id, status, ends_at);
+
+  CREATE TABLE IF NOT EXISTS stock_dividend_entitlements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    corporate_event_id INTEGER NOT NULL REFERENCES stock_corporate_events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    quantity REAL NOT NULL,
+    record_price INTEGER NOT NULL,
+    payout_amount INTEGER NOT NULL,
+    paid_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(corporate_event_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS owner_etf_tracking_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    valuation_cycle_id TEXT NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tracking_asset INTEGER NOT NULL,
+    calculated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(valuation_cycle_id, user_id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_owner_etf_tracking_snapshots_user
+    ON owner_etf_tracking_snapshots(user_id, id DESC);
+
+  CREATE TABLE IF NOT EXISTS daily_user_asset_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    date_key TEXT NOT NULL,
+    start_total_asset INTEGER NOT NULL,
+    end_total_asset INTEGER,
+    adjusted_start_asset INTEGER,
+    adjusted_end_asset INTEGER,
+    absolute_loss INTEGER,
+    loss_rate REAL,
+    incoming_transfers INTEGER NOT NULL DEFAULT 0,
+    outgoing_transfers INTEGER NOT NULL DEFAULT 0,
+    admin_adjustments INTEGER NOT NULL DEFAULT 0,
+    bankruptcy_adjustments INTEGER NOT NULL DEFAULT 0,
+    season_adjustments INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    finalized_at TEXT,
+    UNIQUE(user_id, date_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_daily_user_asset_snapshots_date
+    ON daily_user_asset_snapshots(date_key, loss_rate DESC);
+
+  CREATE TABLE IF NOT EXISTS daily_unlucky_awards (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date_key TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    loss_rate REAL NOT NULL,
+    absolute_loss INTEGER NOT NULL,
+    start_total_asset INTEGER NOT NULL,
+    end_total_asset INTEGER NOT NULL,
+    awarded_luck_tickets INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS hostile_takeover_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    attacker_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    defender_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    attack_cash INTEGER NOT NULL,
+    defense_cash INTEGER NOT NULL DEFAULT 0,
+    attacker_asset_snapshot INTEGER NOT NULL,
+    defender_asset_snapshot INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'declared' CHECK (status IN ('declared', 'defended', 'resolved_attack', 'resolved_defense', 'cancelled')),
+    declared_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    ends_at TEXT NOT NULL,
+    resolved_at TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_hostile_takeover_events_one_active
+    ON hostile_takeover_events(stock_id)
+    WHERE status IN ('declared', 'defended');
 `);
 
 function tableColumns(tableName) {
@@ -477,6 +747,7 @@ for (const tableName of [
   "stock_holdings",
   "stock_positions",
   "stock_trades",
+  "cup_game_rounds",
 ]) {
   addColumnIfMissing(tableName, "season_id", "INTEGER REFERENCES seasons(id) ON DELETE SET NULL");
   addColumnIfMissing(tableName, "season_number", "INTEGER");
@@ -500,10 +771,113 @@ for (const tableName of [
 
 addColumnIfMissing("stock_positions", "close_price", "INTEGER");
 addColumnIfMissing("stock_positions", "payout_amount", "INTEGER");
+addColumnIfMissing("stock_positions", "detail_json", "TEXT NOT NULL DEFAULT '{}'");
+addColumnIfMissing("stock_trades", "detail_json", "TEXT NOT NULL DEFAULT '{}'");
+addColumnIfMissing("stock_holdings", "total_cost_basis", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stock_holdings", "total_buy_fees", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stock_holdings", "realized_profit", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stock_positions", "total_open_fees", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stock_positions", "round_trip_counted_at", "TEXT");
+addColumnIfMissing("cup_game_rounds", "initial_winning_cup_id", "TEXT");
+addColumnIfMissing("cup_game_rounds", "selected_cup_id", "TEXT");
+addColumnIfMissing("cup_game_rounds", "shuffle_operations_json", "TEXT NOT NULL DEFAULT '[]'");
+addColumnIfMissing("cup_game_rounds", "cup_order_json", "TEXT NOT NULL DEFAULT '[]'");
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS user_stock_tax_ledgers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    cumulative_realized_profit INTEGER NOT NULL DEFAULT 0,
+    cumulative_realized_loss INTEGER NOT NULL DEFAULT 0,
+    cumulative_net_taxable_profit INTEGER NOT NULL DEFAULT 0,
+    cumulative_tax_assessed INTEGER NOT NULL DEFAULT 0,
+    cumulative_tax_paid INTEGER NOT NULL DEFAULT 0,
+    tax_credit_balance INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, season_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_user_stock_tax_ledgers_user_season
+    ON user_stock_tax_ledgers(user_id, season_id);
+`);
+
+db.exec(`
+  UPDATE stock_holdings
+  SET total_cost_basis = CASE
+        WHEN total_cost_basis IS NULL OR total_cost_basis <= 0
+          THEN MAX(0, CAST(ROUND(quantity * average_price) AS INTEGER))
+        ELSE total_cost_basis
+      END,
+      total_buy_fees = COALESCE(total_buy_fees, 0),
+      realized_profit = COALESCE(realized_profit, 0);
+  UPDATE stock_holdings
+  SET average_price = CASE
+        WHEN quantity > 0 THEN CAST(total_cost_basis AS REAL) / quantity
+        ELSE 0
+      END
+  WHERE quantity > 0;
+`);
+
+// A position bucket is one user + stock + side + leverage. Older releases could
+// leave duplicate open rows behind, so merge those rows before enforcing the
+// invariant with the partial unique index below.
+const duplicatePositionBuckets = db.prepare(`
+  SELECT user_id, stock_id, side, leverage, MIN(id) AS keeper_id
+  FROM stock_positions
+  WHERE status = 'open'
+  GROUP BY user_id, stock_id, side, leverage
+  HAVING COUNT(*) > 1
+`).all();
+for (const bucket of duplicatePositionBuckets) {
+  const rows = db.prepare(`
+    SELECT * FROM stock_positions
+    WHERE user_id = ? AND stock_id = ? AND side = ? AND leverage = ? AND status = 'open'
+    ORDER BY id ASC
+  `).all(bucket.user_id, bucket.stock_id, bucket.side, bucket.leverage);
+  const quantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+  const positionSize = rows.reduce((sum, row) => sum + Number(row.position_size || 0), 0);
+  const marginAmount = rows.reduce((sum, row) => sum + Number(row.margin_amount || 0), 0);
+  const totalOpenFees = rows.reduce((sum, row) => sum + Number(row.total_open_fees || 0), 0);
+  const entryPrice = quantity > 0
+    ? rows.reduce((sum, row) => sum + Number(row.quantity || 0) * Number(row.entry_price || 0), 0) / quantity
+    : Number(rows[0]?.entry_price || 0);
+  const liquidationPrice = bucket.side === "short"
+    ? Math.ceil(entryPrice * (1 + 1 / Number(bucket.leverage || 1)))
+    : Math.floor(entryPrice * (1 - 1 / Number(bucket.leverage || 1)));
+  db.prepare(`
+    UPDATE stock_positions
+    SET quantity = ?, position_size = ?, margin_amount = ?, entry_price = ?, liquidation_price = ?,
+        total_open_fees = ?, detail_json = ?
+    WHERE id = ?
+  `).run(quantity, positionSize, marginAmount, entryPrice, liquidationPrice, totalOpenFees, JSON.stringify({
+    mergedAtStartup: true,
+    mergedPositionIds: rows.map((row) => row.id),
+  }), bucket.keeper_id);
+  if (rows.length > 1) {
+    db.prepare(`
+      UPDATE stock_positions
+      SET status = 'merged', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id IN (${rows.slice(1).map(() => "?").join(",")})
+    `).run(...rows.slice(1).map((row) => row.id));
+  }
+}
+db.exec(`
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_stock_positions_open_bucket
+    ON stock_positions(user_id, stock_id, side, leverage)
+    WHERE status = 'open';
+`);
+
+addColumnIfMissing("season_results", "final_cash_balance", "INTEGER");
+addColumnIfMissing("season_results", "final_gross_stock_value", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("season_results", "final_estimated_stock_tax", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("season_results", "final_stock_net_value", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("season_results", "final_leverage_net_value", "INTEGER NOT NULL DEFAULT 0");
 
 const stockColumns = new Set(
   db.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
 );
+addColumnIfMissing("stocks", "listed_at", "TEXT");
 if (!stockColumns.has("ipo_subscription_started_at")) {
   db.exec("ALTER TABLE stocks ADD COLUMN ipo_subscription_started_at TEXT");
   db.exec("ALTER TABLE stocks ADD COLUMN ipo_subscription_ends_at TEXT");
@@ -559,7 +933,71 @@ addColumnIfMissing("stocks", "admin_price_target_started_at", "TEXT");
 addColumnIfMissing("stocks", "admin_price_target_ended_at", "TEXT");
 addColumnIfMissing("stocks", "admin_price_target_reason", "TEXT");
 addColumnIfMissing("stocks", "admin_price_target_started_by_user_id", "INTEGER");
+addColumnIfMissing("stocks", "sector", "TEXT");
+addColumnIfMissing("stocks", "etf_delist_reference_price", "INTEGER");
+addColumnIfMissing("stocks", "etf_delist_reference_set_at", "TEXT");
+addColumnIfMissing("stocks", "etf_delist_trigger_price", "INTEGER");
+addColumnIfMissing("stocks", "etf_delist_triggered_at", "TEXT");
+addColumnIfMissing("stocks", "etf_delist_reason", "TEXT");
+addColumnIfMissing("stocks", "trend_regime", "TEXT");
+addColumnIfMissing("stocks", "trend_regime_started_at", "TEXT");
+addColumnIfMissing("stocks", "trend_regime_ends_at", "TEXT");
+addColumnIfMissing("stocks", "trend_market_cap_basis", "INTEGER");
+addColumnIfMissing("stocks", "trend_drift_per_tick", "REAL");
+addColumnIfMissing("stocks", "trend_volatility", "REAL");
+addColumnIfMissing("stocks", "market_cap_ema_24h", "INTEGER");
+addColumnIfMissing("stocks", "market_cap_tier_started_at", "TEXT");
+addColumnIfMissing("stocks", "trading_halted_until", "TEXT");
 
+addColumnIfMissing("admin_logs", "target_stock_id", "INTEGER REFERENCES stocks(id) ON DELETE SET NULL");
+addColumnIfMissing("admin_logs", "reason", "TEXT");
+
+db.exec(`
+  UPDATE stocks
+  SET etf_delist_reference_price = COALESCE(etf_delist_reference_price, etf_base_price, current_price),
+      etf_delist_reference_set_at = COALESCE(etf_delist_reference_set_at, listed_at, created_at),
+      etf_delist_trigger_price = COALESCE(
+        etf_delist_trigger_price,
+        MAX(1, CAST(COALESCE(etf_delist_reference_price, etf_base_price, current_price) * 0.15 AS INTEGER))
+      )
+  WHERE is_etf = 1
+    AND etf_tracking_type = 'owner_asset'
+    AND status = 'acquired'
+`);
+
+db.exec(`
+  UPDATE stocks
+  SET market_cap_ema_24h = COALESCE(market_cap_ema_24h, market_cap),
+      trend_market_cap_basis = COALESCE(trend_market_cap_basis, market_cap),
+      trend_volatility = COALESCE(trend_volatility, volatility),
+      market_cap_tier_started_at = COALESCE(market_cap_tier_started_at, updated_at, created_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  WHERE status != 'delisted'
+`);
+
+db.exec(`
+  UPDATE stocks
+  SET listed_at = COALESCE(created_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  WHERE (listed_at IS NULL OR listed_at = '')
+    AND status IN ('listed', 'newly_listed', 'caution', 'delist_review', 'recovery', 'acquired')
+`);
+
+db.exec(`
+  UPDATE stocks
+  SET sector = CASE
+    WHEN name LIKE '%AI%' OR name LIKE '%데이터%' OR name LIKE '%스마트%' OR name LIKE '%로봇%' THEN 'AI'
+    WHEN name LIKE '%보안%' OR name LIKE '%자물쇠%' OR name LIKE '%시큐%' THEN '보안'
+    WHEN name LIKE '%게임%' OR name LIKE '%플레이%' OR name LIKE '%엔터%' THEN '게임'
+    WHEN name LIKE '%식품%' OR name LIKE '%푸드%' OR name LIKE '%우유%' OR name LIKE '%커피%' THEN '식품'
+    WHEN name LIKE '%에너지%' OR name LIKE '%전기%' OR name LIKE '%배터리%' THEN '에너지'
+    WHEN name LIKE '%광업%' OR name LIKE '%다이아%' OR name LIKE '%금광%' OR name LIKE '%마인%' THEN '광업'
+    WHEN name LIKE '%바이오%' OR name LIKE '%헬스%' OR name LIKE '%제약%' THEN '바이오'
+    WHEN name LIKE '%미디어%' OR name LIKE '%방송%' OR name LIKE '%스튜디오%' THEN '미디어'
+    WHEN name LIKE '%운송%' OR name LIKE '%물류%' OR name LIKE '%항공%' THEN '운송'
+    WHEN name LIKE '%금융%' OR name LIKE '%뱅크%' OR name LIKE '%캐피탈%' OR name LIKE '%페이%' THEN '금융'
+    ELSE '소비재'
+  END
+  WHERE sector IS NULL OR sector = ''
+`);
 
 db.exec(`
   UPDATE stocks
@@ -701,6 +1139,24 @@ if (!userColumns.has("last_mined_at")) {
 }
 if (!userColumns.has("jackpot_tickets")) {
   db.exec("ALTER TABLE users ADD COLUMN jackpot_tickets INTEGER NOT NULL DEFAULT 0");
+}
+
+const jackpotEntriesCols = tableColumns("jackpot_entries");
+if (jackpotEntriesCols.has("entry_date")) {
+  console.log("Migrating jackpot_entries to new round_id schema...");
+  db.exec("DROP TABLE jackpot_entries");
+  db.exec(`
+    CREATE TABLE jackpot_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      round_id INTEGER NOT NULL REFERENCES jackpot_rounds(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      extra_entry_count INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      UNIQUE(round_id, user_id)
+    )
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_jackpot_entries_round ON jackpot_entries(round_id)`);
 }
 
 const serverNotificationColumns = new Set(
@@ -921,9 +1377,9 @@ migrateDuplicateStocks();
 // Ensure 3 Blue-chip stocks exist
 const initBlueChips = db.transaction(() => {
   const bluechips = [
-    { symbol: "SHINS", name: "신성에너지" },
-    { symbol: "DATAB", name: "데이터주머니" },
-    { symbol: "STARL", name: "별빛에너지" }
+    { symbol: "SHINS", name: "신성에너지", sector: "에너지" },
+    { symbol: "DATAB", name: "데이터주머니", sector: "AI" },
+    { symbol: "STARL", name: "별빛에너지", sector: "에너지" }
   ];
 
   for (const bc of bluechips) {
@@ -942,9 +1398,9 @@ const initBlueChips = db.transaction(() => {
       const cap = price * shares;
       const volatility = 0.002 + Math.random() * 0.002;
       db.prepare(`
-        INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, is_bluechip)
-        VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?, 1)
-      `).run(bc.symbol, bc.name, price, price, price, shares, cap, volatility);
+        INSERT INTO stocks (symbol, name, status, current_price, previous_price, initial_price, total_shares, market_cap, volatility, is_bluechip, sector, listed_at)
+        VALUES (?, ?, 'listed', ?, ?, ?, ?, ?, ?, 1, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      `).run(bc.symbol, bc.name, price, price, price, shares, cap, volatility, bc.sector);
     }
   }
 });

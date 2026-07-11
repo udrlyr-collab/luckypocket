@@ -35,7 +35,14 @@ import {
   applyLuckTicketPayout,
   prepareLuckTicket,
 } from "../services/economyRtpService.js";
-import { applyJackpotTickets, getJackpotEntryStats, getJackpotPool } from "../services/jackpotService.js";
+import { applyJackpotTickets, getJackpotInfo } from "../services/jackpotService.js";
+import { incrementDailyMissionProgress } from "../services/dailyMissionService.js";
+import {
+  getActiveCupRound,
+  getCupRound,
+  pickCupRound,
+  startCupRound,
+} from "../services/cupGameService.js";
 
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
@@ -157,6 +164,50 @@ gamesRouter.get("/active", (req, res) => {
   return res.json(response);
 });
 
+gamesRouter.post("/cup/start", (req, res, next) => {
+  try {
+    const result = startCupRound(db, {
+      userId: req.user.id,
+      cupCount: req.body?.cupCount,
+      betAmount: req.body?.betAmount,
+    });
+    return res.status(201).json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.post("/cup/pick", (req, res, next) => {
+  try {
+    return res.json(pickCupRound(db, {
+      userId: req.user.id,
+      roundId: req.body?.roundId,
+      selectedCupId: req.body?.selectedCupId,
+      selectedCupIndex: req.body?.selectedCupIndex,
+    }));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.get("/cup/active", (req, res, next) => {
+  try {
+    return res.json({ round: getActiveCupRound(db, { userId: req.user.id }) });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.get("/cup/rounds/:roundId", (req, res, next) => {
+  try {
+    return res.json({
+      round: getCupRound(db, { userId: req.user.id, roundId: req.params.roundId }),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 gamesRouter.get("/risk/payout-preview", (req, res) => {
   const betAmount = Number(req.query.betAmount);
   if (!Number.isFinite(betAmount) || betAmount < 1000) {
@@ -166,21 +217,49 @@ gamesRouter.get("/risk/payout-preview", (req, res) => {
 });
 
 gamesRouter.get("/daily-jackpot", (req, res) => {
-  const date = db.prepare("SELECT date('now', '+9 hours') AS value").get().value;
   const user = db.prepare("SELECT jackpot_tickets FROM users WHERE id = ?").get(req.user.id);
-  const entryRow = db.prepare("SELECT tickets FROM jackpot_entries WHERE user_id = ? AND entry_date = ?").get(req.user.id, date);
-  const stats = getJackpotEntryStats(db, date);
+  const info = getJackpotInfo(db);
+  const entryRow = db.prepare("SELECT extra_entry_count FROM jackpot_entries WHERE user_id = ? AND round_id = ?").get(req.user.id, info.roundId);
   return res.json({
-    jackpotPool: getJackpotPool(db),
+    jackpotPool: info.pool,
     myTickets: user?.jackpot_tickets || 0,
-    appliedTickets: entryRow?.tickets || 0,
-    ...stats,
+    appliedTickets: entryRow?.extra_entry_count || 0,
+    totalAppliedTickets: info.totalExtraEntries,
+    totalParticipants: info.totalEffectiveEntries,
+    drawAt: info.drawAt
   });
+});
+
+gamesRouter.get("/daily-jackpot/notices/unseen", (req, res) => {
+  const notices = db.prepare(`
+    SELECT n.id as noticeId, r.id as roundId, r.winner_nickname_snapshot as winnerNickname, 
+           r.winner_prize_amount as winnerPrizeAmount, r.winner_entry_count as winnerEntryCount,
+           r.total_effective_entries as totalEffectiveEntries, r.winner_user_id as winnerUserId
+    FROM user_jackpot_notices n
+    JOIN jackpot_rounds r ON n.round_id = r.id
+    WHERE n.user_id = ? AND n.seen_at IS NULL
+    ORDER BY n.id ASC
+  `).all(req.user.id);
+
+  const mapped = notices.map(n => ({
+    ...n,
+    isMeWinner: n.winnerUserId === req.user.id
+  }));
+
+  return res.json(mapped);
+});
+
+gamesRouter.post("/daily-jackpot/notices/:noticeId/seen", (req, res) => {
+  db.prepare("UPDATE user_jackpot_notices SET seen_at = ? WHERE id = ? AND user_id = ?")
+    .run(new Date().toISOString(), req.params.noticeId, req.user.id);
+  return res.json({ success: true });
 });
 
 gamesRouter.post("/daily-jackpot/apply", (req, res, next) => {
   try {
-    return res.json(applyJackpotTickets(db, req.user.id));
+    const result = applyJackpotTickets(db, req.user.id);
+    incrementDailyMissionProgress(db, req.user.id, "jackpot_apply");
+    return res.json(result);
   } catch (error) {
     return next(error);
   }

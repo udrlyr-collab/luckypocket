@@ -40,6 +40,13 @@ export function StockRiskBadges({ stock, compact = false }) {
       </span>
     );
   }
+  if (risk === "distress_review") {
+    return (
+      <span className={`badge badge-warning font-bold ${size}`}>
+        부실기업 심사
+      </span>
+    );
+  }
   if (risk === "delist_review" || risk === "unstable") {
     return (
       <>
@@ -91,6 +98,16 @@ export function StockRiskNotice({ stock }) {
         <span>
           <strong className="block">거래주의 · 시가총액 60억원 미만</strong>
           시가총액이 3틱 연속 60억원 미만으로 내려갔어요.
+        </span>
+      </div>
+    );
+  }
+  if (risk === "distress_review") {
+    return (
+      <div className="alert mb-6 rounded-2xl border border-warning/30 bg-warning/10 text-base-content">
+        <span>
+          <strong className="block text-warning">부실기업 심사 중</strong>
+          재무 불안 우려로 변동성이 커졌어요. 시가총액이 50억원 미만이면 상장폐지 심사로 전환됩니다.
         </span>
       </div>
     );

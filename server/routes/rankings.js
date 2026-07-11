@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
+import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
 
 export const rankingsRouter = Router();
 rankingsRouter.use(requireAuth);
@@ -220,10 +221,32 @@ rankingsRouter.get("/", (req, res, next) => {
       )
       .all(bounds.start, bounds.end, bounds.start);
 
+    const evaluatedRows = ranked.map((row) => {
+      const valuation = calculateUserTotalEvaluatedAsset(db, row.id);
+      return { ...row, valuation, total_evaluated_asset: valuation.totalEvaluatedAsset };
+    });
+    const orderedRows = type === "currentBalance"
+      ? evaluatedRows.sort((left, right) => {
+        if (right.total_evaluated_asset !== left.total_evaluated_asset) {
+          return right.total_evaluated_asset - left.total_evaluated_asset;
+        }
+        return left.id - right.id;
+      }).map((row, index, rows) => ({
+        ...row,
+        rank: index > 0 && row.total_evaluated_asset === rows[index - 1].total_evaluated_asset
+          ? rows[index - 1].rank
+          : index + 1,
+      }))
+      : evaluatedRows;
+
     const serialize = (row) => ({
       userId: row.id,
       nickname: row.nickname,
-      balance: row.balance,
+      balance: type === "currentBalance" ? row.total_evaluated_asset : row.balance,
+      cashBalance: row.valuation.cashBalance,
+      stockNetLiquidationValue: row.valuation.stockNetLiquidationValue,
+      leverageNetSettlementValue: row.valuation.leverageNetSettlementValue,
+      totalEvaluatedAsset: row.total_evaluated_asset,
       highestBalance: row.highest_balance,
       totalProfit: row.total_profit,
       todayEarned: row.today_earned,
@@ -238,7 +261,7 @@ rankingsRouter.get("/", (req, res, next) => {
       bankruptcyCount: row.bankruptcy_count,
       rank: row.rank,
     });
-    const mine = ranked.find((row) => row.id === req.user.id);
+    const mine = orderedRows.find((row) => row.id === req.user.id);
     const myStats = mine ? serialize(mine) : null;
 
     return res.json({
@@ -246,7 +269,7 @@ rankingsRouter.get("/", (req, res, next) => {
       period,
       type,
       range: bounds,
-      rankings: ranked.slice(0, 100).map(serialize),
+      rankings: orderedRows.slice(0, 100).map(serialize),
       mine: myStats,
       myRank: myStats?.rank ?? null,
       myStats,

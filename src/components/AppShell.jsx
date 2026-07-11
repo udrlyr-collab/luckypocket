@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import { formatMoney } from "../utils/format";
+import JackpotResultDialog from "./JackpotResultDialog";
 
 const links = [
   { to: "/", label: "홈", icon: "🏠", end: true },
@@ -263,6 +264,7 @@ export default function AppShell() {
           </div>
         </div>
       )}
+      <JackpotResultDialog />
     </div>
   );
 }

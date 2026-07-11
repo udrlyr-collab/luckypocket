@@ -37,6 +37,21 @@ import {
   assertCanTransferAfterBankruptcy,
   getBankruptcyStatus,
 } from "../server/services/bankruptcyService.js";
+import {
+  assertCanOpenLeveragePosition,
+  calculateLeveragedPositionOutcome,
+  getMaxAllowedLeverage,
+} from "../server/services/leverageRiskService.js";
+import {
+  calculateFee,
+  calculateProgressiveCapitalGainsTax,
+  calculateSpotSellSettlement,
+  calculateLeverageCloseSettlement,
+  clampTickMoveRate,
+  getMaxAffordableQuantity,
+  getMaxAffordableTradeValue,
+  STOCK_FEE_CONFIG,
+} from "../server/services/stockFeeService.js";
 
 test("money is displayed with Korean large-number units", () => {
   assert.equal(formatMoney(140_100_000_000), "1,401억원");
@@ -118,6 +133,84 @@ test("stock policy caps ordinary and IPO tick volatility", () => {
   assert.equal(STOCK_MARKET_POLICY.ownerEtfDelistPriceRatio, 0.15);
 });
 
+test("stock fee and progressive capital gains tax apply only to net profit", () => {
+  assert.equal(calculateFee(1_000_000, STOCK_FEE_CONFIG.spotBuyFeeRate), 1_000);
+
+  const tax = calculateProgressiveCapitalGainsTax(1_500_000);
+  assert.equal(tax.tax, 170_000);
+  assert.deepEqual(
+    tax.bracketsApplied.map((bracket) => [bracket.taxableAmount, bracket.rate]),
+    [
+      [100_000, 0.05],
+      [900_000, 0.10],
+      [500_000, 0.15],
+    ],
+  );
+
+  const settlement = calculateSpotSellSettlement({
+    sellQuantity: 100,
+    sellPrice: 15_000,
+    averagePrice: 10_000,
+  });
+  assert.equal(settlement.grossSellAmount, 1_500_000);
+  assert.equal(settlement.sellFee, 1_500);
+  assert.equal(settlement.costBasis, 1_000_000);
+  assert.equal(settlement.realizedProfitBeforeTax, 498_500);
+  assert.ok(settlement.capitalGainsTax > 0);
+  assert.equal(settlement.jackpotContribution, settlement.capitalGainsTax);
+  assert.equal(settlement.finalProfit, settlement.realizedProfitBeforeTax - settlement.capitalGainsTax);
+  assert.equal(settlement.taxType, "progressive");
+
+  const lossSettlement = calculateSpotSellSettlement({
+    sellQuantity: 100,
+    sellPrice: 9_000,
+    averagePrice: 10_000,
+  });
+  assert.equal(lossSettlement.capitalGainsTax, 0);
+  assert.equal(lossSettlement.jackpotContribution, 0);
+});
+
+test("leverage settlement applies close fee before progressive tax and jackpot contribution", () => {
+  const settlement = calculateLeverageCloseSettlement({
+    cappedPnl: 2_000_000,
+    positionSize: 10_000_000,
+    marginAmount: 1_000_000,
+  });
+
+  assert.equal(settlement.closeFee, 5_000);
+  assert.equal(settlement.realizedPnlBeforeTax, 1_995_000);
+  assert.ok(settlement.capitalGainsTax > 0);
+  assert.equal(settlement.jackpotContribution, settlement.capitalGainsTax);
+  assert.equal(settlement.finalProfit, settlement.realizedPnlBeforeTax - settlement.capitalGainsTax);
+  assert.equal(settlement.finalPayout, 1_000_000 + settlement.finalProfit);
+});
+
+test("all-cash buy budget leaves room for the buy fee", () => {
+  const quantity = getMaxAffordableQuantity({
+    availableBalance: 5_000_000,
+    currentPrice: 1_953,
+    buyFeeRate: STOCK_FEE_CONFIG.spotBuyFeeRate,
+  });
+  const tradeValue = quantity * 1_953;
+  const totalCost = tradeValue + calculateFee(tradeValue, STOCK_FEE_CONFIG.spotBuyFeeRate);
+  assert.ok(quantity > 0);
+  assert.ok(totalCost <= 5_000_000);
+  assert.equal(getMaxAffordableTradeValue({ availableBalance: 5_000_000 }), 4_995_005);
+});
+
+test("dynamic stock tick limit clamps ordinary moves but bypasses admin target events", () => {
+  const smallStock = { market_cap: 20_000_000_000, status: "listed" };
+  assert.equal(clampTickMoveRate(smallStock, 0.50), 0.10);
+  assert.equal(clampTickMoveRate(smallStock, -0.50), -0.12);
+
+  const adminTargetStock = {
+    market_cap: 20_000_000_000,
+    status: "listed",
+    admin_price_target_active: 1,
+  };
+  assert.equal(clampTickMoveRate(adminTargetStock, 0.50), 0.50);
+});
+
 test("stock generation tiers use the low market-cap game scale", () => {
   assert.deepEqual(
     STOCK_GENERATION_TIERS.map((tier) => [tier.key, tier.min, tier.max, tier.weight]),
@@ -192,7 +285,7 @@ test("owner ETF delists at an 85% or greater decline from its acquisition price"
   assert.equal(shouldDelistOwnerEtf(0, 0), false);
 });
 
-test("buying stock does not change evaluated total assets at the same price", () => {
+test("stock evaluation reserves the expected sell fee at the same price", () => {
   const database = new Database(":memory:");
   database.exec(`
     CREATE TABLE users (id INTEGER PRIMARY KEY, balance REAL NOT NULL);
@@ -200,6 +293,9 @@ test("buying stock does not change evaluated total assets at the same price", ()
       id INTEGER PRIMARY KEY,
       current_price REAL NOT NULL,
       status TEXT NOT NULL,
+      delist_risk_status TEXT,
+      market_cap REAL DEFAULT 1000000000000,
+      is_bluechip INTEGER NOT NULL DEFAULT 0,
       is_etf INTEGER NOT NULL DEFAULT 0,
       owner_user_id INTEGER
     );
@@ -215,7 +311,8 @@ test("buying stock does not change evaluated total assets at the same price", ()
       status TEXT NOT NULL,
       margin_amount REAL NOT NULL,
       quantity REAL NOT NULL,
-      entry_price REAL NOT NULL
+      entry_price REAL NOT NULL,
+      liquidation_price REAL DEFAULT 0
     );
     INSERT INTO users (id, balance) VALUES (1, 1000000);
     INSERT INTO stocks (id, current_price, status) VALUES (1, 1000, 'listed');
@@ -226,11 +323,11 @@ test("buying stock does not change evaluated total assets at the same price", ()
   database
     .prepare("INSERT INTO stock_holdings (user_id, stock_id, quantity) VALUES (1, 1, 900)")
     .run();
-  assert.equal(calculateUserTotalEvaluatedAsset(database, 1).totalEvaluatedAsset, 1_000_000);
+  assert.equal(calculateUserTotalEvaluatedAsset(database, 1).totalEvaluatedAsset, 999_100);
   database.close();
 });
 
-test("short positions gain value when the stock price falls", () => {
+test("short positions gain value when the stock price falls after close costs and estimated tax", () => {
   const database = new Database(":memory:");
   database.exec(`
     CREATE TABLE users (id INTEGER PRIMARY KEY, balance REAL NOT NULL);
@@ -238,6 +335,9 @@ test("short positions gain value when the stock price falls", () => {
       id INTEGER PRIMARY KEY,
       current_price REAL NOT NULL,
       status TEXT NOT NULL,
+      delist_risk_status TEXT,
+      market_cap REAL DEFAULT 1000000000000,
+      is_bluechip INTEGER NOT NULL DEFAULT 0,
       is_etf INTEGER NOT NULL DEFAULT 0,
       owner_user_id INTEGER
     );
@@ -253,20 +353,47 @@ test("short positions gain value when the stock price falls", () => {
       status TEXT NOT NULL,
       margin_amount REAL NOT NULL,
       quantity REAL NOT NULL,
-      entry_price REAL NOT NULL
+      entry_price REAL NOT NULL,
+      liquidation_price REAL NOT NULL
     );
     INSERT INTO users (id, balance) VALUES (1, 100000);
     INSERT INTO stocks (id, current_price, status) VALUES (1, 800, 'listed');
     INSERT INTO stock_positions
-      (user_id, stock_id, side, status, margin_amount, quantity, entry_price)
-      VALUES (1, 1, 'short', 'open', 100000, 100, 1000);
+      (user_id, stock_id, side, status, margin_amount, quantity, entry_price, liquidation_price)
+      VALUES (1, 1, 'short', 'open', 100000, 100, 1000, 1010);
   `);
 
   const valuation = calculateUserTotalEvaluatedAsset(database, 1);
-  assert.equal(valuation.unrealizedPnl, 20_000);
-  assert.equal(valuation.positionValue, 120_000);
-  assert.equal(valuation.totalEvaluatedAsset, 220_000);
+  assert.equal(valuation.unrealizedPnl, 19_950);
+  assert.equal(valuation.positionValue, 118_953);
+  assert.equal(valuation.totalEvaluatedAsset, 218_953);
   database.close();
+});
+
+test("leverage policy blocks risk stocks and caps extreme short profit", () => {
+  assert.throws(
+    () => assertCanOpenLeveragePosition({ status: "listed", delist_risk_status: "delist_review", market_cap: 10_000_000_000 }, 2),
+    /레버리지 포지션을 열 수 없어요/,
+  );
+  assert.equal(getMaxAllowedLeverage({ status: "listed", market_cap: 8_000_000_000, is_bluechip: 0 }), 1);
+  assert.equal(getMaxAllowedLeverage({ status: "listed", market_cap: 2_000_000_000_000, is_bluechip: 0 }), 50);
+  assert.equal(getMaxAllowedLeverage({ status: "listed", market_cap: 8_000_000_000, is_bluechip: 1 }), 100);
+
+  const outcome = calculateLeveragedPositionOutcome(
+    {
+      side: "short",
+      entry_price: 1000,
+      quantity: 1000,
+      margin_amount: 100_000,
+      leverage: 100,
+      liquidation_price: 1010,
+    },
+    { status: "listed", delist_risk_status: "delist_review", current_price: 100, market_cap: 5_000_000_000 },
+    100,
+  );
+  assert.equal(outcome.rawPnl, 900_000);
+  assert.equal(outcome.cappedPnl, 150_000);
+  assert.equal(outcome.profitCapApplied, true);
 });
 
 test("recent outgoing transfers are counted against bankruptcy eligibility", () => {
@@ -287,6 +414,9 @@ test("recent outgoing transfers are counted against bankruptcy eligibility", () 
       id INTEGER PRIMARY KEY,
       current_price REAL NOT NULL,
       status TEXT NOT NULL,
+      delist_risk_status TEXT,
+      market_cap REAL DEFAULT 1000000000000,
+      is_bluechip INTEGER NOT NULL DEFAULT 0,
       is_etf INTEGER NOT NULL DEFAULT 0,
       owner_user_id INTEGER
     );
@@ -302,7 +432,8 @@ test("recent outgoing transfers are counted against bankruptcy eligibility", () 
       status TEXT NOT NULL,
       margin_amount REAL NOT NULL,
       quantity REAL NOT NULL,
-      entry_price REAL NOT NULL
+      entry_price REAL NOT NULL,
+      liquidation_price REAL DEFAULT 0
     );
     CREATE TABLE abuse_logs (
       user_id INTEGER,

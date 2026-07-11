@@ -1,5 +1,6 @@
 import { createServerNotification } from "./serverNotificationService.js";
 import { formatWon } from "../utils/formatWon.js";
+import { ensureActiveJackpotRound } from "./jackpotService.js";
 
 export const RTP_POLICY = {
   repeatableMaxRtp: 0.992,
@@ -209,6 +210,9 @@ function estimateLoggedRtp(gameType, detail) {
     };
     return Number(chanceByTarget[detail.target] || 0) * Number(detail.multiplier);
   }
+  if (gameType === "cup" && detail?.cupCount && detail?.multiplier) {
+    return Number(detail.multiplier) / Number(detail.cupCount);
+  }
   if (gameType === "slot" && detail?.outcome === "777") return null;
   return null;
 }
@@ -257,15 +261,36 @@ export function buildRtpDetail(database, { userId, gameType, bet, detail }) {
   };
 }
 
-export function addJackpotContribution(database, amount) {
+export function addJackpotContribution(database, amount, options = {}) {
   const contribution = Math.max(0, Math.floor(Number(amount) || 0));
   if (contribution <= 0) return 0;
-  const current = systemConfigNumber(database, "jackpot_pool_amount", 0);
-  setSystemConfigNumber(database, "jackpot_pool_amount", current + contribution);
+  const round = ensureActiveJackpotRound(database);
+
+  if (options.sourceType && options.sourceId !== undefined && options.sourceId !== null) {
+    const insert = database.prepare(`
+      INSERT OR IGNORE INTO jackpot_contributions
+        (round_id, user_id, amount, source_type, source_id, metadata_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      round.id,
+      options.userId ?? null,
+      contribution,
+      options.sourceType,
+      String(options.sourceId),
+      JSON.stringify(options.metadata || {}),
+    );
+    if (insert.changes === 0) return 0;
+  }
+
+  database.prepare(`
+    UPDATE jackpot_rounds
+    SET total_prize_amount = total_prize_amount + ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id = ?
+  `).run(contribution, round.id);
   return contribution;
 }
 
 export function getJackpotPool(database) {
-  return systemConfigNumber(database, "jackpot_pool_amount", 0);
+  return Number(ensureActiveJackpotRound(database).total_prize_amount || 0);
 }
-

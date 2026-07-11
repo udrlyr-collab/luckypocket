@@ -6,6 +6,7 @@ export const GAME_NAMES = {
   "bomb-dodge": "폭탄 숫자 피하기",
   "slot": "슬롯머신",
   "dart": "다트 던지기",
+  "cup": "컵 속 행운",
   "mine": "탄광",
   "bonus_code": "행운코드",
   "achievement": "업적",
@@ -85,6 +86,16 @@ export function createGameNotification(database, {
       type: "high_multiplier",
       title: "폭탄 피하기 대기록",
       message: `${user.nickname}님이 폭탄 숫자 피하기에서 안전 칸 ${detail.safeCount}개를 열고 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
+    };
+  } else if (gameType === "cup" && (
+    Number(detail.cupCount) === 8 ||
+    Number(detail.finalPayout || payout) >= 1_000_000 ||
+    Number(detail.cupWinStreak) >= 5
+  )) {
+    notification = {
+      type: "high_multiplier",
+      title: "컵 속 행운 8배 당첨",
+      message: `${user.nickname}님이 컵 속 행운 8개 도전에 성공해 8배 당첨금을 획득했어요!`,
     };
   } else if (multiplier >= 10) {
     notification = {

@@ -2,6 +2,7 @@ import express from "express";
 import { db } from "../db.js";
 import { requireAuth } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
+import { incrementDailyMissionProgress } from "../services/dailyMissionService.js";
 import { formatSignedWon, formatWon } from "../utils/formatWon.js";
 
 export const mineRouter = express.Router();
@@ -81,6 +82,8 @@ mineRouter.post("/click", (req, res) => {
       INSERT INTO asset_events (user_id, event_type, amount, balance_before, balance_after, source_type, source_id, detail_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(userId, 'mine_reward', actualReward, user.balance, balanceAfter, 'mine_log', String(logId), JSON.stringify({ label: item.label, result_type: item.type }));
+
+    incrementDailyMissionProgress(db, userId, "mine_click");
 
     if (item.type === "gold" || item.type === "diamond" || actualReward >= 10000) {
       createServerNotification(db, {

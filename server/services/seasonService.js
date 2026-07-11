@@ -1,5 +1,14 @@
 import { createServerNotification } from "./serverNotificationService.js";
 import { ACHIEVEMENTS } from "./achievementService.js";
+import { calculateLeveragedPositionOutcome } from "./leverageRiskService.js";
+import { calculateUserTotalEvaluatedAsset } from "./portfolioValuationService.js";
+import {
+  applyLeverageSettlementTax,
+  applySpotSettlementTax,
+  calculateLeverageSettlement,
+  calculateSpotSettlement,
+} from "./stockSettlementService.js";
+import { applyStockTaxLedgerImpact } from "./stockTaxLedgerService.js";
 
 export const SEASON_STARTING_BALANCE = 1_000_000;
 export const SEASON_TOP_BONUSES = new Map([
@@ -16,11 +25,6 @@ export function getActiveSeason(database) {
 
 export function getStartingBalanceForRank(rank) {
   return SEASON_TOP_BONUSES.get(Number(rank)) || SEASON_STARTING_BALANCE;
-}
-
-function unrealizedForPosition(position, currentPrice) {
-  const direction = position.side === "short" ? -1 : 1;
-  return Math.floor(position.quantity * (currentPrice - position.entry_price) * direction);
 }
 
 function insertAssetEvent(database, {
@@ -63,9 +67,13 @@ function settleHoldings(database, season) {
     .all();
 
   for (const holding of holdings) {
-    const amount = holding.status === "delisted"
-      ? 0
-      : Math.floor(holding.quantity * holding.current_price);
+    const settlement = calculateSpotSettlement(database, {
+      userId: holding.user_id,
+      holding,
+      sellQuantity: holding.quantity,
+      sellPrice: holding.status === "delisted" ? 0 : holding.current_price,
+    });
+    const amount = settlement.finalReceiveAmount;
     const user = database.prepare("SELECT * FROM users WHERE id = ?").get(holding.user_id);
     if (!user) continue;
     const balanceAfter = user.balance + amount;
@@ -86,7 +94,7 @@ function settleHoldings(database, season) {
         amount,
         holding.quantity,
         holding.current_price,
-        Math.floor(amount - holding.quantity * holding.average_price),
+        settlement.finalProfit,
         user.balance,
         balanceAfter,
       );
@@ -103,15 +111,17 @@ function settleHoldings(database, season) {
         stockId: holding.stock_id,
         quantity: holding.quantity,
         price: holding.current_price,
+        settlement,
       },
     });
+    applySpotSettlementTax(database, user.id, settlement);
   }
 }
 
 function settlePositions(database, season) {
   const positions = database
     .prepare(
-      `SELECT p.*, s.current_price, s.status
+      `SELECT p.*, s.current_price, s.status, s.delist_risk_status, s.market_cap, s.is_bluechip
        FROM stock_positions p
        JOIN stocks s ON s.id = p.stock_id
        WHERE p.status = 'open'`,
@@ -120,8 +130,16 @@ function settlePositions(database, season) {
 
   for (const position of positions) {
     const currentPrice = position.status === "delisted" ? 0 : position.current_price;
-    const pnl = unrealizedForPosition(position, currentPrice);
-    const payout = Math.max(0, Math.floor(position.margin_amount + pnl));
+    const outcome = calculateLeveragedPositionOutcome(position, position, currentPrice);
+    const settlement = outcome.liquidated
+      ? null
+      : calculateLeverageSettlement(database, {
+        userId: position.user_id,
+        position,
+        cappedPnl: outcome.cappedPnl,
+      });
+    const pnl = settlement ? settlement.finalProfit : -position.margin_amount;
+    const payout = settlement ? settlement.finalPayout : 0;
     const user = database.prepare("SELECT * FROM users WHERE id = ?").get(position.user_id);
     if (!user) continue;
     const balanceAfter = user.balance + payout;
@@ -173,8 +191,16 @@ function settlePositions(database, season) {
         leverage: position.leverage,
         closePrice: currentPrice,
         realizedPnl: pnl,
+        rawPnl: outcome.rawPnl,
+        cappedPnl: outcome.cappedPnl,
+        riskLevel: outcome.riskLevel,
+        profitCapApplied: outcome.profitCapApplied,
+        liquidated: outcome.liquidated,
+        settlement,
       },
     });
+    if (settlement) applyLeverageSettlementTax(database, user.id, settlement);
+    else applyStockTaxLedgerImpact(database, user.id, -Math.floor(position.margin_amount || 0));
   }
 }
 
@@ -193,13 +219,20 @@ function rankSeasonUsers(database, season) {
   );
 
   const sorted = users
-    .map((user) => ({
-      ...user,
-      finalBalance: Math.floor(user.balance),
-      finalStockValue: 0,
-      finalTotalEvaluatedAsset: Math.floor(user.balance),
-      totalGames: gameCounts.get(user.id) || 0,
-    }))
+    .map((user) => {
+      const valuation = calculateUserTotalEvaluatedAsset(database, user.id);
+      return {
+        ...user,
+        valuation,
+        finalBalance: Math.floor(valuation.cashBalance),
+        finalGrossStockValue: Math.floor(valuation.grossStockMarketValue),
+        finalEstimatedStockTax: Math.floor(valuation.estimatedStockTaxes),
+        finalStockValue: Math.floor(valuation.stockNetLiquidationValue),
+        finalLeverageNetValue: Math.floor(valuation.leverageNetSettlementValue),
+        finalTotalEvaluatedAsset: Math.floor(valuation.totalEvaluatedAsset),
+        totalGames: gameCounts.get(user.id) || 0,
+      };
+    })
     .sort((a, b) => {
       if (b.finalTotalEvaluatedAsset !== a.finalTotalEvaluatedAsset) {
         return b.finalTotalEvaluatedAsset - a.finalTotalEvaluatedAsset;
@@ -226,6 +259,8 @@ export function endCurrentSeason(database, adminUser) {
       throw new Error("진행 중인 시즌이 없어요.");
     }
 
+    const ranked = rankSeasonUsers(database, season);
+
     settleHoldings(database, season);
     settlePositions(database, season);
 
@@ -233,13 +268,14 @@ export function endCurrentSeason(database, adminUser) {
     database.prepare("DELETE FROM stock_positions").run();
     database.prepare("DELETE FROM game_sessions").run();
 
-    const ranked = rankSeasonUsers(database, season);
     const insertResult = database.prepare(
       `INSERT OR REPLACE INTO season_results
        (season_id, season_number, user_id, username, nickname_snapshot, rank,
         final_balance, final_stock_value, final_total_evaluated_asset,
+        final_cash_balance, final_gross_stock_value, final_estimated_stock_tax,
+        final_stock_net_value, final_leverage_net_value,
         total_profit, total_games, starting_bonus_for_next_season)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const user of ranked) {
       insertResult.run(
@@ -252,6 +288,11 @@ export function endCurrentSeason(database, adminUser) {
         user.finalBalance,
         user.finalStockValue,
         user.finalTotalEvaluatedAsset,
+        user.finalBalance,
+        user.finalGrossStockValue,
+        user.finalEstimatedStockTax,
+        user.finalStockValue,
+        user.finalLeverageNetValue,
         user.total_profit || 0,
         user.totalGames,
         user.startingBonusForNextSeason,
@@ -290,6 +331,8 @@ export function endCurrentSeason(database, adminUser) {
       }
 
       const startingBalance = user.startingBonusForNextSeason + extraReward;
+      const settledUser = database.prepare("SELECT balance FROM users WHERE id = ?").get(user.id);
+      const balanceBeforeReset = Math.floor(Number(settledUser?.balance || 0));
       
       database
         .prepare(
@@ -309,8 +352,8 @@ export function endCurrentSeason(database, adminUser) {
       insertAssetEvent(database, {
         userId: user.id,
         eventType: "season_start_bonus",
-        amount: startingBalance - user.finalBalance,
-        balanceBefore: user.finalBalance,
+        amount: startingBalance - balanceBeforeReset,
+        balanceBefore: balanceBeforeReset,
         balanceAfter: startingBalance,
         sourceType: "season",
         sourceId: `${newSeasonId}:${user.id}`,

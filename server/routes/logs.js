@@ -6,7 +6,7 @@ export const logsRouter = Router();
 logsRouter.use(requireAuth);
 
 logsRouter.get("/", (req, res) => {
-  const allowed = new Set(["risk-button", "card-draw", "bomb-dodge", "slot", "dart"]);
+const allowed = new Set(["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"]);
   const allowedEvents = new Set([
     "transfer_out",
     "transfer_in",

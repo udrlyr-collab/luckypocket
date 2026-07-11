@@ -1,0 +1,458 @@
+기존 행운주머니 프로젝트에 주식시장, 경제 안정성, 관리자 페이지, 홈 UX를 한 번에 개선하는 패키지를 적용해줘.
+
+이번 작업의 목표:
+
+1. 주식시장을 더 살아있는 느낌으로 만들기
+2. 경제 인플레이션과 돈 복사 가능성을 감지하기
+3. 관리자 페이지에서 전체 상태를 쉽게 확인하기
+4. 유저가 매일 접속할 이유를 만들기
+5. 기존 기능과 충돌하지 않게 서버 검증 중심으로 구현하기
+
+---
+
+# 1. 오늘의 급등주 / 급락주 추가
+
+주식 페이지와 홈 일부 영역에 오늘의 급등주/급락주를 표시해줘.
+
+기준:
+
+* 오늘 00:00 기준 가격 또는 today_open_price 기준
+* 현재가와 비교한 등락률
+* 상장폐지 종목 제외
+* 공모 청약 중 종목 제외
+
+API:
+
+```text
+GET /api/stocks/market-movers
+```
+
+응답 예:
+
+```json
+{
+  "topGainers": [
+    {
+      "stockId": 1,
+      "name": "행운AI",
+      "currentPrice": 15200,
+      "changeRate": 0.423,
+      "changeAmount": 4530
+    }
+  ],
+  "topLosers": [
+    {
+      "stockId": 2,
+      "name": "폭탄산업",
+      "currentPrice": 820,
+      "changeRate": -0.384,
+      "changeAmount": -510
+    }
+  ]
+}
+```
+
+UI 표시:
+
+```text
+오늘의 급등주
+행운AI +42.3%
+
+오늘의 급락주
+폭탄산업 -38.4%
+```
+
+---
+
+# 2. 거래량 TOP 5 추가
+
+각 종목별 오늘 거래량과 거래대금을 계산해줘.
+
+기준:
+
+* stock_trades 기준
+* 오늘 날짜 기준
+* 매수/매도 체결 수량 합산
+* 거래대금 합산
+
+API:
+
+```text
+GET /api/stocks/trade-volume-rankings
+```
+
+표시:
+
+```text
+오늘 거래량 TOP 5
+토마토소프트 12,420주
+행운AI 8,200주
+```
+
+종목 상세 페이지에도 표시:
+
+```text
+오늘 거래량 12,420주
+오늘 거래대금 3억 4,200만원
+```
+
+---
+
+# 3. 관심종목 기능 추가
+
+유저가 관심종목을 등록/해제할 수 있게 해줘.
+
+DB:
+
+```text
+stock_watchlists
+- id
+- user_id
+- stock_id
+- created_at
+```
+
+API:
+
+```text
+POST /api/stocks/:stockId/watch
+DELETE /api/stocks/:stockId/watch
+GET /api/stocks/watchlist
+```
+
+UI:
+
+```text
+☆ 관심
+★ 관심종목
+```
+
+주식 목록에서 관심종목 먼저 보기 옵션을 추가한다.
+
+---
+
+# 4. 가격 알림 기능 추가
+
+유저가 특정 가격 도달 알림을 설정할 수 있게 해줘.
+
+DB:
+
+```text
+stock_price_alerts
+- id
+- user_id
+- stock_id
+- target_price
+- direction above/below
+- triggered_at
+- created_at
+```
+
+API:
+
+```text
+POST /api/stocks/:stockId/price-alerts
+GET /api/stocks/price-alerts
+DELETE /api/stocks/price-alerts/:alertId
+```
+
+tick마다 확인:
+
+```js
+if (direction === "above" && currentPrice >= targetPrice) triggerAlert();
+if (direction === "below" && currentPrice <= targetPrice) triggerAlert();
+```
+
+알림 예:
+
+```text
+행운AI가 목표가 10,000원 이상에 도달했어요.
+```
+
+---
+
+# 5. 섹터 시스템 추가
+
+종목마다 sector를 부여해줘.
+
+추천 섹터:
+
+```text
+AI
+보안
+게임
+식품
+에너지
+광업
+바이오
+미디어
+운송
+금융
+소비재
+```
+
+종목 생성 시 sector를 랜덤 또는 회사명 기반으로 배정한다.
+
+예:
+
+```text
+행운AI → AI
+자물쇠보안 → 보안
+다이아광업 → 광업
+주머니식품 → 식품
+```
+
+주식 목록/상세에 sector badge 표시:
+
+```text
+[AI] [중소형주] [우량주]
+```
+
+---
+
+# 6. 섹터 이벤트 추가
+
+일정 확률로 섹터 전체 이벤트를 발생시켜줘.
+
+예:
+
+```text
+AI 섹터 호재 발생
+AI 관련 종목들의 상승 확률이 5분간 증가합니다.
+
+광업 섹터 악재 발생
+광업 관련 종목들의 변동성이 증가합니다.
+```
+
+DB:
+
+```text
+sector_events
+- id
+- sector
+- sentiment good/bad/volatile
+- title
+- content
+- effect_until
+- created_at
+```
+
+tick 로직:
+
+* sector_event가 active면 해당 sector 종목의 변동 확률에 보정 적용
+* 호재는 상승 확률 증가
+* 악재는 하락 확률 증가
+* volatile은 상승/하락폭 증가
+
+---
+
+# 7. 경제 안정성 검사 기능 추가
+
+관리자 페이지에 “경제 안정성 검사” 버튼을 추가해줘.
+
+검사 항목:
+
+```text
+- 10분 내 자산 10배 이상 증가한 유저
+- 1시간 내 자산 100배 이상 증가한 유저
+- 파산 직전/직후 송금 반복 유저
+- 같은 종목 레버리지 반복 정산 유저
+- 잭팟 중복 수령 의심
+- 관리자 조작 직후 비정상 수익 발생
+- 상장폐지 종목에서 과도한 레버리지 수익 발생
+```
+
+API:
+
+```text
+GET /api/admin/economy/audit
+POST /api/admin/economy/audit/run
+```
+
+응답 예:
+
+```json
+{
+  "suspiciousUsers": [
+    {
+      "userId": 1,
+      "nickname": "홍성민",
+      "reason": "10분 내 자산 25배 증가",
+      "beforeAsset": 1000000,
+      "afterAsset": 25000000
+    }
+  ],
+  "summary": {
+    "checkedUsers": 42,
+    "suspiciousCount": 3
+  }
+}
+```
+
+결과는 admin_logs 또는 economy_audit_logs에 기록한다.
+
+---
+
+# 8. 자산 정합성 검사 추가
+
+관리자 페이지에 “자산 정합성 검사” 기능을 추가해줘.
+
+목표:
+
+* 유저 balance가 음수인지 확인
+* 포지션 손익이 비정상적으로 큰지 확인
+* 보유 주식 수량이 음수인지 확인
+* stock_holdings와 stock_trades가 심하게 불일치하는지 확인
+* 잭팟 지급이 중복됐는지 확인
+
+API:
+
+```text
+POST /api/admin/economy/consistency-check
+```
+
+결과:
+
+```text
+정상
+주의 필요
+수정 필요
+```
+
+자동 수정은 하지 말고, 우선 발견 및 보고만 한다.
+
+---
+
+# 9. 관리자 대시보드 요약 카드 추가
+
+관리자 페이지 상단에 경제 상태 요약 카드를 추가해줘.
+
+표시:
+
+```text
+총 유저 수
+총 현금 자산
+총 주식 평가액
+오늘 생성된 자산
+오늘 회수된 자산
+오늘 잭팟 적립액
+목표주가 이벤트 진행 종목
+우량주 급등 진행 종목
+상장폐지 심사 종목
+의심 계정 수
+```
+
+API:
+
+```text
+GET /api/admin/dashboard/summary
+```
+
+---
+
+# 10. 오늘의 미션 추가
+
+유저가 매일 접속할 이유를 만들기 위해 오늘의 미션을 추가해줘.
+
+예시 미션:
+
+```text
+폭탄 숫자 피하기 3회 플레이
+카드 뽑기 3회 플레이
+탄광 10회 캐기
+주식 1회 매수
+주식 1회 매도
+행운권 1장 응모
+```
+
+보상:
+
+* 행운권 1~3장
+* 소액 자산 보상
+* 잭팟 추가 응모권
+
+DB:
+
+```text
+daily_missions
+- id
+- date_key
+- mission_type
+- target_count
+- reward_type
+- reward_amount
+
+user_daily_mission_progress
+- id
+- user_id
+- mission_id
+- progress_count
+- completed_at
+- claimed_at
+```
+
+주의:
+
+* 업적 보상과 구분
+* 보상 수령 중복 방지
+* 보상 지급은 서버에서 처리
+
+---
+
+# 11. 내 행운 통계 추가
+
+내 정보 페이지에 개인 통계를 추가해줘.
+
+표시:
+
+```text
+가장 많이 플레이한 게임
+가장 많이 번 게임
+가장 많이 잃은 게임
+최고 단일 수익
+최고 단일 손실
+주식 최고 수익 종목
+주식 최고 손실 종목
+잭팟 응모 횟수
+잭팟 당첨 횟수
+```
+
+API:
+
+```text
+GET /api/me/luck-stats
+```
+
+---
+
+# 12. UI 정리
+
+추가 기능이 많아져도 화면이 복잡해지지 않게 한다.
+
+원칙:
+
+* 홈에는 핵심 3~4개만 노출
+* 주식 페이지는 탭 또는 접이식 섹션 사용
+* 관리자 페이지는 섹션별 카드로 정리
+* 일반 유저에게 관리자 내부 정보가 보이지 않게 유지
+
+---
+
+# 13. 최종 완료 조건
+
+아래 조건을 모두 만족해야 한다.
+
+* 오늘의 급등주/급락주가 표시됨
+* 거래량 TOP 5 또는 종목별 거래량이 표시됨
+* 관심종목 기능이 작동함
+* 가격 알림 기능이 작동함
+* 종목별 sector가 표시됨
+* 섹터 이벤트가 발생하고 tick 로직에 영향을 줌
+* 관리자 경제 안정성 검사가 가능함
+* 관리자 자산 정합성 검사가 가능함
+* 관리자 대시보드에 경제 요약 카드가 표시됨
+* 오늘의 미션이 생성되고 보상 수령이 가능함
+* 내 정보 페이지에 개인 행운 통계가 표시됨
+* 모든 보상/자산 변경은 서버에서 처리됨
+* 모든 주요 이벤트는 로그에 기록됨
+* 일반 유저에게 관리자 내부 정보가 노출되지 않음

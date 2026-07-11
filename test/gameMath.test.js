@@ -11,6 +11,17 @@ import {
   isDartWin,
   payoutFor,
 } from "../server/services/gameMath.js";
+import { CUP_GAME_CONFIG } from "../server/services/cupGameService.js";
+
+test("cup game keeps a theoretical 100% gross RTP for every allowed cup count", () => {
+  for (const [cupCountText, spec] of Object.entries(CUP_GAME_CONFIG)) {
+    const cupCount = Number(cupCountText);
+    assert.ok(cupCount >= 3 && cupCount <= 8);
+    assert.equal(spec.winProbability, 1 / cupCount);
+    assert.equal(spec.multiplier, cupCount);
+    assert.equal(spec.winProbability * spec.multiplier, 1);
+  }
+});
 
 test("repeatable configured games stay below 100% RTP except the rare slot jackpot", () => {
   for (const stage of RISK_STAGES) {

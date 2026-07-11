@@ -50,6 +50,8 @@ export default function ProfilePage() {
   const [summary, setSummary] = useState(null);
   const [gameStats, setGameStats] = useState([]);
   const [seasonResults, setSeasonResults] = useState([]);
+  const [luckStats, setLuckStats] = useState(null);
+  const [stockStats, setStockStats] = useState(null);
   const [range, setRange] = useState("day");
   const [scaleMode, setScaleMode] = useState("zoom");
   const [history, setHistory] = useState(null);
@@ -66,14 +68,18 @@ export default function ProfilePage() {
   const achievements = user.achievements || [];
 
   const loadProfile = async () => {
-    const [summaryData, statsData, seasonData] = await Promise.all([
+    const [summaryData, statsData, seasonData, luckData, stockStatsData] = await Promise.all([
       api("/profile/summary"),
       api("/profile/game-stats"),
       api("/me/season-results"),
+      api("/me/luck-stats"),
+      api("/profile/stock-stats"),
     ]);
     setSummary(summaryData.summary);
     setGameStats(statsData.stats);
     setSeasonResults(seasonData.results || []);
+    setLuckStats(luckData.luckStats || null);
+    setStockStats(stockStatsData.stats || null);
   };
 
   useEffect(() => {
@@ -227,6 +233,66 @@ export default function ProfilePage() {
           </div>
         </BaseCard>
       </section>
+
+      {luckStats && (
+        <section className="mb-8">
+          <SectionHeader title="나의 행운 통계" eyebrow="LUCK STATS" />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              label="가장 많이 한 게임"
+              value={luckStats.mostPlayedGame ? `${luckStats.mostPlayedGame.label} ${safeNumber(luckStats.mostPlayedGame.count).toLocaleString("ko-KR")}판` : "-"}
+            />
+            <StatCard
+              label="가장 잘 번 게임"
+              value={luckStats.mostEarnedGame ? `${luckStats.mostEarnedGame.label} · ${formatMoney(luckStats.mostEarnedGame.amount)}` : "-"}
+              valueClassName="text-success"
+            />
+            <StatCard
+              label="최고 단일 수익"
+              value={luckStats.bestSingleProfit ? `${luckStats.bestSingleProfit.label} · ${formatSignedMoney(luckStats.bestSingleProfit.amount)}` : "-"}
+              valueClassName="text-success"
+            />
+            <StatCard
+              label="최고 주식 수익"
+              value={luckStats.bestStockProfit ? `${luckStats.bestStockProfit.name} · ${formatSignedMoney(luckStats.bestStockProfit.amount)}` : "-"}
+              valueClassName="text-success"
+            />
+            <StatCard
+              label="가장 많이 잃은 게임"
+              value={luckStats.mostLostGame ? `${luckStats.mostLostGame.label} · ${formatMoney(luckStats.mostLostGame.amount)}` : "-"}
+              valueClassName="text-error"
+            />
+            <StatCard
+              label="최대 단일 손실"
+              value={luckStats.worstSingleLoss ? `${luckStats.worstSingleLoss.label} · ${formatSignedMoney(luckStats.worstSingleLoss.amount)}` : "-"}
+              valueClassName="text-error"
+            />
+            <StatCard
+              label="최대 주식 손실"
+              value={luckStats.worstStockLoss ? `${luckStats.worstStockLoss.name} · ${formatSignedMoney(luckStats.worstStockLoss.amount)}` : "-"}
+              valueClassName="text-error"
+            />
+            <StatCard
+              label="잭팟 응모 / 당첨"
+              value={`${safeNumber(luckStats.jackpotEntries).toLocaleString("ko-KR")}장 / ${safeNumber(luckStats.jackpotWins).toLocaleString("ko-KR")}회`}
+            />
+          </div>
+        </section>
+      )}
+
+      {stockStats && (
+        <section className="mb-8">
+          <SectionHeader title="주식 거래 통계" eyebrow="STOCK STATS" />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+            <StatCard label="현물 거래" value={`${safeNumber(stockStats.spotTradeCount).toLocaleString("ko-KR")}회`} />
+            <StatCard label="레버리지 진입" value={`${safeNumber(stockStats.leverageOpenCount).toLocaleString("ko-KR")}회`} />
+            <StatCard label="레버리지 직접 청산" value={`${safeNumber(stockStats.leverageCloseCount).toLocaleString("ko-KR")}회`} />
+            <StatCard label="강제 청산" value={`${safeNumber(stockStats.leverageLiquidationCount).toLocaleString("ko-KR")}회`} />
+            <StatCard label="완료 포지션" value={`${safeNumber(stockStats.leverageRoundTripCount).toLocaleString("ko-KR")}회`} />
+            <StatCard label="총 주식 거래 행동" value={`${safeNumber(stockStats.totalStockTradeActions).toLocaleString("ko-KR")}회`} valueClassName="text-primary" />
+          </div>
+        </section>
+      )}
 
       <section className="mb-8">
         <SectionHeader title="이전 시즌 기록" eyebrow="SEASON" />

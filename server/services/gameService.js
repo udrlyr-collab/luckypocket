@@ -7,6 +7,7 @@ import {
   buildRtpDetail,
   recordLuckTicketUse,
 } from "./economyRtpService.js";
+import { incrementDailyMissionProgress } from "./dailyMissionService.js";
 import { formatWon } from "../utils/formatWon.js";
 
 export class GameError extends Error {
@@ -124,6 +125,7 @@ export function finishInstantGame({
       luckTicket: finalDetail.luckTicket,
     });
   }
+  incrementDailyMissionProgress(db, user.id, `${gameType}_play`);
 
   const achievements = awardAchievements(db, user.id, {
     gameType,
@@ -227,6 +229,7 @@ export function finishReservedGame({
       luckTicket: finalDetail.luckTicket,
     });
   }
+  incrementDailyMissionProgress(db, userId, `${gameType}_play`);
 
   const achievements = awardAchievements(db, userId, {
     gameType,

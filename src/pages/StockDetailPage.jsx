@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import { Fragment, useEffect, useState, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -6,9 +6,62 @@ import { formatMoney, formatSignedMoney, formatCompactMoney } from "../utils/for
 import { useEnterConfirm } from "../hooks/useEnterConfirm";
 import { useMarketClock } from "../hooks/useMarketClock";
 import AnimatedMoney from "../components/AnimatedMoney";
-import { StockTierBadge } from "../components/StockRiskStatus";
+import { StockRiskBadges, StockRiskNotice, StockTierBadge } from "../components/StockRiskStatus";
 import AdminStockControlPanel from "../components/AdminStockControlPanel";
+import StockActionErrorDialog from "../components/StockActionErrorDialog";
 import { PageContainer, SectionHeader, BaseCard, ConfirmModal } from "../components/ui";
+
+function corporateEventLabel(eventType) {
+  return {
+    earnings_beat: "어닝 서프라이즈",
+    earnings_inline: "실적 발표",
+    earnings_miss: "실적 부진",
+    dividend: "배당 예정",
+    share_buyback: "자사주 매입",
+    rights_offering: "유상증자",
+    short_squeeze: "숏스퀴즈",
+  }[eventType] || "회사 이벤트";
+}
+
+function corporateEventStatus(status) {
+  return {
+    scheduled: "예정",
+    active: "진행 중",
+    recorded: "기준일 확정",
+    paid: "지급 완료",
+    completed: "종료",
+    cancelled: "취소",
+  }[status] || "확인 중";
+}
+
+function formatTradeResultMessage(message, result) {
+  const parts = [];
+  const fee = result.buyFee ?? result.sellFee ?? result.openFee ?? result.closeFee;
+  if (fee > 0) parts.push(`수수료 ${formatMoney(fee)}`);
+  if (result.capitalGainsTax > 0) parts.push(`양도소득세 ${formatMoney(result.capitalGainsTax)}`);
+  if (result.jackpotPoolContribution > 0) parts.push(`잭팟 적립 ${formatMoney(result.jackpotPoolContribution)}`);
+  const finalAmount = result.finalReceiveAmount ?? result.finalPayout;
+  if (finalAmount > 0) parts.push(`최종 수령 ${formatMoney(finalAmount)}`);
+  return parts.length ? `${message} (${parts.join(" · ")})` : message;
+}
+
+function StockBuyPreview({ preview }) {
+  if (!preview) return null;
+  if (!preview.quantity || preview.quantity <= 0) {
+    return <p className="mt-3 text-sm font-bold text-error">{preview.error || "수수료를 포함해 매수 가능한 주식이 없어요."}</p>;
+  }
+
+  return (
+    <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 rounded-2xl bg-base-200/55 px-4 py-3 text-xs font-bold tabular-nums">
+      <span className="text-base-content/55">입력한 예산</span><span className="text-right">{formatMoney(preview.budgetAmount)}</span>
+      <span className="text-base-content/55">매수 가능 수량</span><span className="text-right">{Number(preview.quantity).toLocaleString("ko-KR", { maximumFractionDigits: 4 })}주</span>
+      <span className="text-base-content/55">주식 매수금액</span><span className="text-right">{formatMoney(preview.tradeValue)}</span>
+      <span className="text-base-content/55">거래 수수료</span><span className="text-right">{formatMoney(preview.buyFee)}</span>
+      <span className="text-base-content/55">예상 총 차감액</span><span className="text-right">{formatMoney(preview.totalCost)}</span>
+      <span className="text-base-content/55">매수 후 잔액</span><span className="text-right">{formatMoney(preview.remainingBalance)}</span>
+    </div>
+  );
+}
 
 export default function StockDetailPage() {
   const { id } = useParams();
@@ -35,7 +88,10 @@ export default function StockDetailPage() {
   
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [actionError, setActionError] = useState(null);
+  const [buyPreview, setBuyPreview] = useState(null);
+  const [sellPreview, setSellPreview] = useState(null);
   const [showLeverageWarning, setShowLeverageWarning] = useState(false);
   const [showAcquireConfirm, setShowAcquireConfirm] = useState(false);
   const [showDelistConfirm, setShowDelistConfirm] = useState(false);
@@ -43,6 +99,25 @@ export default function StockDetailPage() {
   const [editName, setEditName] = useState("");
   const [editSymbol, setEditSymbol] = useState("");
   const [editDescription, setEditDescription] = useState("");
+  const [alertTargetPrice, setAlertTargetPrice] = useState("");
+  const [alertDirection, setAlertDirection] = useState("above");
+
+  const showActionError = (title, error) => {
+    setActionError({
+      title,
+      message: error?.message || String(error || "잠시 후 다시 시도해 주세요."),
+    });
+  };
+
+  // Keeps legacy stock action handlers on the current page while they are
+  // progressively migrated to use a more specific dialog title.
+  const setError = (message) => {
+    if (!message) {
+      setActionError(null);
+      return;
+    }
+    showActionError("거래를 완료하지 못했어요", message);
+  };
 
 
   const fetchStock = async () => {
@@ -53,10 +128,11 @@ export default function StockDetailPage() {
         api(`/stocks/${id}/top-positions?limit=5`),
       ]);
       setData(res);
+      setLoadError("");
       setTopHolders(holdersData.holders || []);
       setTopPositions(positionsData.positions || []);
     } catch (e) {
-      setError(e.message);
+      setLoadError(e.message);
     }
   };
 
@@ -78,10 +154,63 @@ export default function StockDetailPage() {
     fetchStock();
   }, [serverNow, data?.stock?.status, data?.stock?.ipoSubscriptionEndsAt, data?.stock?.ipo_subscription_ends_at]);
 
-  if (error) {
+  useEffect(() => {
+    const stock = data?.stock;
+    const budgetAmount = Math.floor(Number(amountInput) || 0);
+    if (!stock || leverage !== 1 || budgetAmount <= 0) {
+      setBuyPreview(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const preview = await api(`/stocks/${stock.id}/buy-preview`, {
+          method: "POST",
+          body: JSON.stringify({ budgetAmount }),
+        });
+        if (!cancelled) setBuyPreview(preview);
+      } catch (error) {
+        if (!cancelled) setBuyPreview({ quantity: 0, error: error.message });
+      }
+    }, 180);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [data?.stock?.id, data?.stock?.status, data?.stock?.current_price, amountInput, leverage]);
+
+  useEffect(() => {
+    const stock = data?.stock;
+    if (!stock || !data?.holding?.quantity || stock.status === "delisted") {
+      setSellPreview(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const preview = await api(`/stocks/${stock.id}/sell-preview`, {
+          method: "POST",
+          body: JSON.stringify({ fraction: sellFraction }),
+        });
+        if (!cancelled) setSellPreview(preview);
+      } catch {
+        if (!cancelled) setSellPreview(null);
+      }
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [data?.stock?.id, data?.stock?.status, data?.stock?.current_price, data?.holding?.quantity, sellFraction]);
+
+  if (loadError && !data) {
     return (
       <div className="page-content text-center py-20">
-        <p className="text-error font-bold">{error}</p>
+        <p className="text-error font-bold">{loadError}</p>
         <button className="btn btn-outline mt-4" onClick={() => navigate("/stocks")}>시장으로 돌아가기</button>
       </div>
     );
@@ -96,7 +225,18 @@ export default function StockDetailPage() {
     );
   }
 
-  const { stock, history, holding, positions, trades = [], events = [], marketOpen } = data;
+  const {
+    stock,
+    history,
+    holding,
+    positions,
+    trades = [],
+    events = [],
+    corporateEvents = [],
+    shortInterestRatio = 0,
+    priceAlerts = [],
+    marketOpen,
+  } = data;
   const isDelisted = stock.status === 'delisted';
   const isOwnerAssetEtf = Boolean(stock.is_etf) && stock.etf_tracking_type === "owner_asset";
   const isAcquired = stock.status === 'acquired' || isOwnerAssetEtf;
@@ -111,10 +251,14 @@ export default function StockDetailPage() {
   const acquisitionEstimatedCash = Number(acquisitionInfo.estimatedCashAfterAutoClear || acquisitionUserCashBalance);
   const canAcquireCompany = acquisitionInfo.canAcquire !== false;
   const hostileCost = Number(data.hostileTakeover?.cost || 0);
-  const hostileRequiredBalance = Number(data.hostileTakeover?.requiredBalance || hostileCost);
+  const hostileRequiredBalance = Number(data.hostileTakeover?.requiredTotalAsset || data.hostileTakeover?.requiredBalance || hostileCost);
   const isAdmin = user && (user.isAdmin || user.username === 'admin');
+  const isPrimaryAdmin = user?.username === "admin";
   const isTradingSuspended = stock.is_trading_suspended === 1;
   const isTradeBlocked = !marketOpen || isTradingSuspended;
+  const maxAllowedLeverage = getClientMaxAllowedLeverage(stock);
+  const isLeverageBlocked = maxAllowedLeverage <= 1 || isClientLeverageBlocked(stock);
+  const isSelectedLeverageBlocked = leverage > 1 && (isLeverageBlocked || leverage > maxAllowedLeverage);
   const ipoTimeRemaining = stock.status === "ipo_subscription"
     ? remainingSecondsUntil(stock.ipoSubscriptionEndsAt || stock.ipo_subscription_ends_at)
     : null;
@@ -124,12 +268,16 @@ export default function StockDetailPage() {
       : ipoTimeRemaining === 0
         ? "상장 처리 중..."
         : `상장까지 ${Math.floor(ipoTimeRemaining / 60) > 0 ? `${Math.floor(ipoTimeRemaining / 60)}분 ` : ""}${ipoTimeRemaining % 60}초`;
+  const listingInfoText =
+    stock.status === "ipo_subscription"
+      ? `상장 전 · ${ipoCountdownText}`
+      : `상장일 ${stock.listedDateText || "상장일 미정"} · ${stock.listedAgeText || "상장일 미정"}`;
 
   const executeAdminAction = async (endpoint) => {
     if (!window.confirm("정말 실행하시겠습니까?")) return;
     setBusy(true);
     setMessage("");
-    setError("");
+    setActionError(null);
     try {
       const res = await api(`/admin/stocks/${stock.id}${endpoint}`, { method: "POST" });
       setMessage(res.message);
@@ -191,13 +339,13 @@ export default function StockDetailPage() {
         setShowLeverageWarning(true);
         return;
       }
-      return executeTrade("/stocks/open-position", { stockId: stock.id, margin: Number(amountInput), leverage, side: positionSide });
+      return executeTrade("/stocks/open-position", { stockId: stock.id, budgetAmount: Number(amountInput), leverage, side: positionSide });
     }
-    return executeTrade("/stocks/buy", { stockId: stock.id, quantity: Number(amountInput) });
+    return executeTrade("/stocks/buy", { stockId: stock.id, budgetAmount: Number(amountInput) });
   };
 
   const handleBuyIpo = async () => {
-    return executeTrade("/stocks/buy-ipo", { stockId: stock.id, amount: Number(amountInput) });
+    return executeTrade("/stocks/buy-ipo", { stockId: stock.id, budgetAmount: Number(amountInput) });
   };
 
   const handleSell = async () => {
@@ -214,7 +362,7 @@ export default function StockDetailPage() {
         method: "POST",
         body: JSON.stringify(body)
       });
-      setMessage(res.message);
+      setMessage(formatTradeResultMessage(res.message, res));
       setAmountInput("");
       await refreshUser();
       await fetchStock();
@@ -234,7 +382,7 @@ export default function StockDetailPage() {
         method: "POST",
         body: JSON.stringify({ positionId })
       });
-      setMessage(res.message);
+      setMessage(formatTradeResultMessage(res.message, res));
       await refreshUser();
       await fetchStock();
     } catch (e) {
@@ -295,6 +443,86 @@ export default function StockDetailPage() {
     }
   };
 
+  const handleHostileDefense = async () => {
+    const input = window.prompt("투입할 방어 자금을 입력하세요.", "100000");
+    if (input === null) return;
+    const amount = Number(String(input).replace(/,/g, ""));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setError("방어 자금을 올바르게 입력해주세요.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/${stock.id}/hostile-takeover/defend`, {
+        method: "POST",
+        body: JSON.stringify({ amount }),
+      });
+      setMessage(res.message);
+      await refreshUser();
+      await fetchStock();
+    } catch (error) {
+      setError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleToggleWatchlist = async () => {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/${stock.id}/watchlist`, {
+        method: stock.isWatched ? "DELETE" : "POST",
+      });
+      setMessage(res.message);
+      await fetchStock();
+    } catch (e) {
+      showActionError("관심종목 설정을 변경하지 못했어요", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreatePriceAlert = async () => {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/${stock.id}/alerts`, {
+        method: "POST",
+        body: JSON.stringify({
+          targetPrice: Number(alertTargetPrice),
+          direction: alertDirection,
+        }),
+      });
+      setMessage(res.message);
+      setAlertTargetPrice("");
+      await fetchStock();
+    } catch (e) {
+      showActionError("가격 알림을 설정하지 못했어요", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDeletePriceAlert = async (alertId) => {
+    setBusy(true);
+    setMessage("");
+    setError("");
+    try {
+      const res = await api(`/stocks/alerts/${alertId}`, { method: "DELETE" });
+      setMessage(res.message);
+      await fetchStock();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const addValue = (val) => {
     const cur = Number(amountInput) || 0;
     setAmountInput(String(cur + val));
@@ -302,11 +530,7 @@ export default function StockDetailPage() {
 
   const setPercent = (pct) => {
     const budget = Math.floor(user.balance * pct);
-    if (stock.status === 'ipo_subscription' || leverage > 1) {
-      setAmountInput(String(budget));
-    } else {
-      setAmountInput(String(Math.floor(budget / stock.current_price)));
-    }
+    setAmountInput(String(budget));
   };
 
   const todayRate = ((stock.current_price - stock.initial_price) / stock.initial_price) * 100;
@@ -332,14 +556,25 @@ export default function StockDetailPage() {
           <div className="flex items-center gap-2 mb-2 flex-wrap">
             <h1 className="text-3xl font-black">{stock.name}</h1>
             <span className="text-sm font-bold text-base-content/50">{stock.symbol}</span>
+            <button
+              type="button"
+              className={`btn btn-xs rounded-full ${stock.isWatched ? "btn-warning" : "btn-outline"}`}
+              disabled={busy}
+              onClick={handleToggleWatchlist}
+            >
+              {stock.isWatched ? "★ 관심종목" : "☆ 관심"}
+            </button>
           </div>
           <div className="flex gap-2 mb-2 flex-wrap">
             {stock.is_bluechip === 1 && <span className="badge badge-info font-bold">우량주</span>}
             {stock.blueChipRampActive && <span className="badge badge-error font-bold text-white">목표주가 진행 중</span>}
             {stock.adminPriceTargetActive && <span className="badge badge-warning font-bold">목표주가 진행 중</span>}
             <StockTierBadge stock={stock} />
+            <StockRiskBadges stock={stock} />
+            {stock.sector && <span className="badge badge-outline font-bold">{stock.sector}</span>}
             {stock.status === 'ipo_subscription' && <span className="badge badge-warning font-bold">공모주</span>}
             {stock.status === 'newly_listed' && <span className="badge badge-warning font-bold">신규 상장</span>}
+            {stock.volatilityBadge && <span className="badge badge-ghost font-bold">{stock.volatilityBadge}</span>}
             {isIpoLimitNear && <span className="badge badge-error font-bold">상한 근접</span>}
             {!isIpoLimitNear && isIpoOverheated && <span className="badge badge-warning font-bold">공모주 과열</span>}
             {isAcquired && <span className="badge badge-primary font-bold">인수됨</span>}
@@ -354,6 +589,10 @@ export default function StockDetailPage() {
             ) : (
               <span>시가총액 {formatMoney(stock.market_cap)}</span>
             )}
+          </p>
+          <p className="mt-1 text-sm font-black text-primary">{listingInfoText}</p>
+          <p className="mt-1 text-xs font-bold text-base-content/50">
+            오늘 거래량 {Number(stock.todayTradeVolume || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}주 · 오늘 거래대금 {formatMoney(stock.todayTradeValue || 0)}
           </p>
           {stock.description && (
             <p className="text-xs font-semibold text-base-content/50 mt-1 max-w-xl break-all">
@@ -416,6 +655,66 @@ export default function StockDetailPage() {
           )}
         </div>
       </header>
+
+      <StockRiskNotice stock={stock} />
+
+      <BaseCard className="mb-6 rounded-3xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-black tracking-widest text-primary">MARKET DYNAMICS</p>
+            <h2 className="section-title text-xl mt-1">추세와 시장 이벤트</h2>
+            <p className="mt-2 text-sm font-bold text-base-content/60">
+              현재 추세는 일정 시간 유지되며, 매 틱마다 다시 추첨되지 않아요.
+            </p>
+          </div>
+          {stock.tradingHaltedUntil && new Date(stock.tradingHaltedUntil).getTime() > serverNow && (
+            <span className="badge badge-error badge-lg rounded-2xl font-black">변동성 완화장치 발동</span>
+          )}
+        </div>
+        <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
+            <p className="text-xs font-bold text-base-content/50">현재 추세</p>
+            <p className={`mt-1 font-black ${stock.trendRegime === "bull" ? "text-success" : stock.trendRegime === "bear" ? "text-error" : "text-base-content"}`}>
+              {stock.trendRegime === "bull" ? "상승 추세" : stock.trendRegime === "bear" ? "하락 추세" : "횡보 추세"}
+            </p>
+          </div>
+          <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
+            <p className="text-xs font-bold text-base-content/50">추세 기준 시가총액</p>
+            <p className="mt-1 font-black tabular-nums">{formatMoney(stock.trendMarketCapBasis || stock.market_cap)}</p>
+          </div>
+          <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
+            <p className="text-xs font-bold text-base-content/50">숏 비중</p>
+            <p className="mt-1 font-black tabular-nums">{(Number(shortInterestRatio || 0) * 100).toFixed(2)}%</p>
+          </div>
+          <div className="rounded-2xl border border-base-300 bg-base-200/40 p-4">
+            <p className="text-xs font-bold text-base-content/50">거래 상태</p>
+            <p className={`mt-1 font-black ${stock.tradingHaltedUntil && new Date(stock.tradingHaltedUntil).getTime() > serverNow ? "text-error" : "text-success"}`}>
+              {stock.tradingHaltedUntil && new Date(stock.tradingHaltedUntil).getTime() > serverNow ? "거래 정지 중" : "정상 거래"}
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 grid gap-3 lg:grid-cols-2">
+          {corporateEvents.slice(0, 4).map((event) => (
+            <div key={event.id} className="rounded-2xl border border-base-300 bg-base-100 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-black">{corporateEventLabel(event.eventType)}</p>
+                <span className="badge badge-outline rounded-xl font-bold">{corporateEventStatus(event.status)}</span>
+              </div>
+              {event.eventType.startsWith("earnings_") && (
+                <p className="mt-2 text-sm font-bold text-base-content/60 tabular-nums">
+                  예상 {formatMoney(event.expectedProfit || 0)} · 실제 {formatMoney(event.actualProfit || 0)} · {(Number(event.surpriseRate || 0) * 100).toFixed(1)}%
+                </p>
+              )}
+              {event.eventType === "dividend" && (
+                <p className="mt-2 text-sm font-bold text-base-content/60 tabular-nums">예상 배당률 {(Number(event.dividendRate || 0) * 100).toFixed(2)}% · 기준일 {event.recordAt ? new Date(event.recordAt).toLocaleString("ko-KR") : "미정"}</p>
+              )}
+            </div>
+          ))}
+          {corporateEvents.length === 0 && (
+            <p className="text-sm font-bold text-base-content/45">진행 중이거나 최근 발생한 회사 이벤트가 없어요.</p>
+          )}
+        </div>
+      </BaseCard>
 
       {/* CHART */}
       <BaseCard className="mb-6 p-4">
@@ -532,6 +831,7 @@ export default function StockDetailPage() {
           <AdminStockControlPanel
             stock={stock}
             compact
+            canEditCompanyProfile={isPrimaryAdmin}
             onActionComplete={async () => {
               await fetchStock();
               await refreshUser();
@@ -539,6 +839,74 @@ export default function StockDetailPage() {
           />
         </div>
       )}
+
+      <BaseCard className="mb-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-black tracking-widest text-primary mb-1">PRICE ALERT</p>
+            <h2 className="section-title text-xl mb-2">가격 알림</h2>
+            <p className="text-sm font-bold text-base-content/55">
+              현재가가 목표 가격 이상 또는 이하에 도달하면 알림에 기록됩니다.
+            </p>
+          </div>
+          <div className="grid w-full gap-2 sm:grid-cols-[1fr_120px_96px] lg:max-w-xl">
+            <input
+              type="number"
+              className="input input-bordered h-12 rounded-2xl"
+              placeholder="목표 가격"
+              value={alertTargetPrice}
+              onChange={(event) => setAlertTargetPrice(event.target.value)}
+            />
+            <select
+              className="select select-bordered h-12 rounded-2xl"
+              value={alertDirection}
+              onChange={(event) => setAlertDirection(event.target.value)}
+            >
+              <option value="above">이상</option>
+              <option value="below">이하</option>
+            </select>
+            <button
+              type="button"
+              className="btn btn-primary h-12 rounded-2xl whitespace-nowrap"
+              disabled={busy || !alertTargetPrice || Number(alertTargetPrice) <= 0}
+              onClick={handleCreatePriceAlert}
+            >
+              추가
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-2">
+          {priceAlerts.length === 0 ? (
+            <p className="rounded-2xl bg-base-200/60 p-4 text-center text-sm font-bold text-base-content/45">
+              설정한 가격 알림이 없습니다.
+            </p>
+          ) : (
+            priceAlerts.map((alert) => (
+              <div key={alert.id} className="flex items-center justify-between gap-3 rounded-2xl border border-base-300 bg-base-100 p-3">
+                <div className="min-w-0">
+                  <p className="font-black tabular-nums">
+                    {formatMoney(alert.targetPrice)} {alert.direction === "above" ? "이상" : "이하"}
+                  </p>
+                  <p className={`text-xs font-bold ${alert.triggeredAt ? "text-success" : "text-base-content/45"}`}>
+                    {alert.triggeredAt
+                      ? `도달 ${new Date(alert.triggeredAt).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
+                      : "대기 중"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost rounded-xl"
+                  disabled={busy}
+                  onClick={() => handleDeletePriceAlert(alert.id)}
+                >
+                  삭제
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+      </BaseCard>
 
       {/* TRADE FORMS */}
       <div className="grid gap-6 md:grid-cols-2">
@@ -568,7 +936,7 @@ export default function StockDetailPage() {
               
               <div className="mb-4">
                 <label className="text-xs font-bold text-base-content/50 mb-2 flex justify-between items-end gap-2">
-                  <span>청약 금액 (금액 입력 시 수량 자동 계산)</span>
+                  <span>청약 예산 (수수료 포함)</span>
                   <span>보유 잔액: {formatMoney(user.balance)}</span>
                 </label>
                 <div className="flex flex-col gap-1">
@@ -582,10 +950,10 @@ export default function StockDetailPage() {
                     />
                     <button 
                       className="btn btn-warning rounded-2xl px-6 shrink-0" 
-                      disabled={busy || !amountInput || Number(amountInput) <= 0}
+                      disabled={busy || !amountInput || Number(amountInput) <= 0 || !buyPreview || buyPreview.quantity <= 0}
                       onClick={handleBuyIpo}
                     >
-                      {busy ? <span className="loading loading-spinner loading-sm"/> : "공모가로 청약"}
+                      {busy ? <span className="loading loading-spinner loading-sm"/> : buyPreview?.quantity > 0 ? `${Number(buyPreview.quantity).toLocaleString("ko-KR", { maximumFractionDigits: 2 })}주 청약` : "공모가로 청약"}
                     </button>
                   </div>
                   {amountInput && Number(amountInput) > 0 && (
@@ -594,21 +962,34 @@ export default function StockDetailPage() {
                     </div>
                   )}
                 </div>
+                <StockBuyPreview preview={buyPreview} />
                 <div className="flex flex-wrap gap-1 mt-2">
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(10000)}>+1만</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(100000)}>+10만</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(1000000)}>+100만</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 ml-auto" onClick={() => setPercent(0.1)}>10%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.25)}>25%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.5)}>50%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(1)}>100%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 font-bold text-warning" onClick={() => setPercent(1)}>전재산</button>
                   <button className="btn btn-xs rounded-lg btn-ghost" onClick={() => setAmountInput("")}>초기화</button>
                 </div>
               </div>
-              {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
             </div>
           ) : isOwnOwnerEtf ? (
             <div className="bg-warning/10 border-2 border-warning/20 p-6 rounded-2xl text-center">
+              {data.hostileTakeoverEvent && (
+                <div className="mb-4 rounded-2xl border border-error/20 bg-error/5 p-4 text-left">
+                  <p className="font-black text-error">적대적 M&A 공개 입찰 진행 중</p>
+                  <p className="mt-1 text-sm font-bold text-base-content/65 tabular-nums">
+                    공격 자금 {formatMoney(data.hostileTakeoverEvent.attackCash)} · 현재 방어 {formatMoney(data.hostileTakeoverEvent.defenseCash)}
+                  </p>
+                  <button className="btn btn-error btn-sm mt-3 w-full rounded-2xl" disabled={busy} onClick={handleHostileDefense}>
+                    방어 자금 투입
+                  </button>
+                </div>
+              )}
               <h3 className="font-black text-warning text-lg mb-2">본인이 인수한 ETF는 거래할 수 없어요</h3>
               <p className="text-sm font-bold text-base-content/70">
                 이 ETF는 인수자의 자산을 따라 움직이기 때문에, 자산 순환을 막기 위한 제한이에요.
@@ -625,10 +1006,10 @@ export default function StockDetailPage() {
                   {data.hostileTakeover && (
                     <button
                       className="btn btn-outline btn-error mt-3 min-h-11 w-full rounded-2xl"
-                      disabled={busy || user.balance < hostileRequiredBalance}
-                      onClick={() => executeAction('/hostile-takeover', '적대적 M&A')}
+                      disabled={busy || !data.hostileTakeover.meetsAssetRequirement || !data.hostileTakeover.hasEnoughCash}
+                      onClick={() => executeAction('/hostile-takeover/declare', '적대적 M&A 공개 입찰')}
                     >
-                      적대적 M&A · 비용 {formatMoney(hostileCost)} · 필요 보유액 {formatMoney(hostileRequiredBalance)}
+                      적대적 M&A 공개 입찰 · 공격 자금 {formatMoney(hostileCost)} · 필요 보유액 {formatMoney(hostileRequiredBalance)}
                     </button>
                   )}
                 </div>
@@ -641,6 +1022,7 @@ export default function StockDetailPage() {
                     <button 
                       key={x} 
                       className={`join-item btn btn-sm flex-1 ${leverage === x ? (x >= 50 ? "btn-error" : "btn-primary") : "bg-base-200"}`}
+                      disabled={x > 1 && (isLeverageBlocked || x > maxAllowedLeverage)}
                       onClick={() => { setLeverage(x); setShowLeverageWarning(false); }}
                     >
                       {x}x
@@ -648,13 +1030,19 @@ export default function StockDetailPage() {
                   ))}
                 </div>
                 <p className="text-[10px] mt-1 text-base-content/50 text-right">
-                  {leverage === 1 ? "일반 현물 거래" : leverage <= 5 ? "손익이 더 크게 움직여요." : leverage <= 10 ? "높은 변동성에 주의하세요." : leverage === 50 ? "작은 하락에도 청산될 수 있어요." : "매우 위험해요. 1% 하락에도 청산될 수 있어요."}
+                  {leverage === 1
+                    ? "일반 현물 거래"
+                    : isLeverageBlocked
+                      ? "상장폐지 위험 종목은 레버리지 거래를 할 수 없어요."
+                      : leverage > maxAllowedLeverage
+                        ? `이 종목은 최대 ${maxAllowedLeverage}배까지만 가능해요.`
+                        : leverage <= 5 ? "손익이 더 크게 움직여요." : leverage <= 10 ? "높은 변동성에 주의하세요." : leverage === 50 ? "작은 하락에도 청산될 수 있어요." : "매우 위험해요. 1% 하락에도 청산될 수 있어요."}
                 </p>
               </div>
 
               <div className="mb-4">
                 <label className="text-xs font-bold text-base-content/50 mb-2 flex justify-between items-end gap-2">
-                  <span>{leverage === 1 ? "매수 수량(주)" : "증거금(금액)"}</span>
+                  <span>{leverage === 1 ? "매수 예산 (수수료 포함)" : "포지션 예산 (수수료 포함)"}</span>
                   <span>보유 잔액: {formatMoney(user.balance)}</span>
                 </label>
                 <div className="flex flex-col gap-1">
@@ -684,28 +1072,31 @@ export default function StockDetailPage() {
                     />
                     <button 
                       className={`btn rounded-2xl px-6 shrink-0 ${leverage >= 50 ? "btn-error" : leverage > 1 ? (positionSide === 'long' ? "btn-success" : "btn-error") : "btn-primary"}`} 
-                      disabled={busy || !amountInput || Number(amountInput) <= 0 || isTradeBlocked}
+                      disabled={busy || !amountInput || Number(amountInput) <= 0 || isTradeBlocked || isSelectedLeverageBlocked || (leverage === 1 && (!buyPreview || buyPreview.quantity <= 0))}
                       onClick={handleBuy}
                     >
-                      {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? "매수" : `${positionSide === 'long' ? 'LONG' : 'SHORT'} 오픈`)}
+                      {busy ? <span className="loading loading-spinner loading-sm"/> : (leverage === 1 ? (buyPreview?.quantity > 0 ? `${Number(buyPreview.quantity).toLocaleString("ko-KR")}주 매수` : "매수") : `${positionSide === 'long' ? 'LONG' : 'SHORT'} 오픈`)}
                     </button>
                   </div>
                   {amountInput && Number(amountInput) > 0 && (
                     <div className="text-right text-xs mt-1 font-bold text-primary pr-2">
-                      {leverage === 1 ? `총 매수 금액: ${formatCompactMoney(Math.floor(Number(amountInput) * stock.current_price))}` : formatCompactMoney(amountInput)}
+                      {leverage === 1 ? `입력 예산: ${formatCompactMoney(amountInput)}` : formatCompactMoney(amountInput)}
                     </div>
                   )}
                 </div>
 
                 <div className="flex flex-wrap gap-1 mt-2">
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 1 : 10000)}>{leverage === 1 ? "+1주" : "+1만"}</button>
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 10 : 100000)}>{leverage === 1 ? "+10주" : "+10만"}</button>
-                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(leverage === 1 ? 100 : 1000000)}>{leverage === 1 ? "+100주" : "+100만"}</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(10000)}>+1만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(100000)}>+10만</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => addValue(1000000)}>+100만</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 ml-auto" onClick={() => setPercent(0.1)}>10%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.25)}>25%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(0.5)}>50%</button>
+                  <button className="btn btn-xs rounded-lg bg-base-200" onClick={() => setPercent(1)}>100%</button>
                   <button className="btn btn-xs rounded-lg bg-base-200 font-bold text-primary" onClick={() => setPercent(1)}>전재산</button>
                   <button className="btn btn-xs rounded-lg btn-ghost" onClick={() => setAmountInput("")}>초기화</button>
                 </div>
+                {leverage === 1 && <StockBuyPreview preview={buyPreview} />}
               </div>
 
               {showLeverageWarning && (
@@ -718,7 +1109,6 @@ export default function StockDetailPage() {
                 </div>
               )}
 
-              {error && <p className="text-error text-sm font-bold mt-2">{error}</p>}
               {message && <p className="text-success text-sm font-bold mt-2">{message}</p>}
             </div>
           )}
@@ -745,6 +1135,7 @@ export default function StockDetailPage() {
                 </div>
                 
                 {!isDelisted && (
+                  <>
                   <div className="flex gap-2">
                     <div className="join flex-1">
                       {[0.25, 0.5, 0.75, 1].map(frac => (
@@ -765,6 +1156,19 @@ export default function StockDetailPage() {
                       {busy ? <span className="loading loading-spinner loading-xs"/> : "매도"}
                     </button>
                   </div>
+                  {sellPreview && (
+                    <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1 rounded-xl bg-base-100/70 px-3 py-2 text-[11px] font-bold tabular-nums text-base-content/65">
+                      <span>총 매도금액</span><span className="text-right">{formatMoney(sellPreview.grossSellAmount)}</span>
+                      <span>매도 수수료</span><span className="text-right">{formatMoney(sellPreview.sellFee)}</span>
+                      <span>매수 원가</span><span className="text-right">{formatMoney(sellPreview.costBasis)}</span>
+                      <span>세전 실현수익</span><span className="text-right">{formatSignedMoney(sellPreview.realizedProfitBeforeTax)}</span>
+                      <span>누진 양도소득세</span><span className="text-right">{formatMoney(sellPreview.capitalGainsTax)}</span>
+                      <span>세후 순수익</span><span className="text-right">{formatSignedMoney(sellPreview.finalProfit)}</span>
+                      <span>최종 수령액</span><span className="text-right">{formatMoney(sellPreview.finalReceiveAmount)}</span>
+                      {sellPreview.capitalGainsTax > 0 && <span className="col-span-2 text-primary">양도소득세 전액이 오늘의 잭팟에 적립됩니다.</span>}
+                    </div>
+                  )}
+                  </>
                 )}
               </div>
             )}
@@ -777,8 +1181,15 @@ export default function StockDetailPage() {
             ) : (
               <div className="space-y-2">
                 {positions.map(p => {
-                  const unrealized = (stock.current_price - p.entry_price) * p.quantity;
-                  const danger = stock.current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
+                  const rawUnrealized = p.side === "short"
+                    ? (p.entry_price - stock.current_price) * p.quantity
+                    : (stock.current_price - p.entry_price) * p.quantity;
+                  const unrealized = Number.isFinite(Number(p.live_unrealized_pnl))
+                    ? Number(p.live_unrealized_pnl)
+                    : Math.floor(rawUnrealized);
+                  const danger = p.side === "short"
+                    ? stock.current_price >= p.entry_price + (p.liquidation_price - p.entry_price) * 0.8
+                    : stock.current_price <= p.entry_price - (p.entry_price - p.liquidation_price) * 0.8;
                   
                   return (
                     <div key={p.id} className={`bg-base-200/50 p-4 rounded-2xl border ${danger ? "border-error/50" : "border-transparent"}`}>
@@ -797,6 +1208,11 @@ export default function StockDetailPage() {
                         <span>증거금: {formatMoney(p.margin_amount)}</span>
                         <span>청산가: <span className="font-bold text-error">{formatMoney(p.liquidation_price)}</span></span>
                       </div>
+                      {p.profit_cap_applied && (
+                        <p className="mb-3 rounded-xl bg-warning/15 px-3 py-2 text-[11px] font-bold text-warning">
+                          급등락 위험으로 수익 상한이 적용되었어요.
+                        </p>
+                      )}
                       <button 
                         className="btn btn-sm btn-outline btn-error w-full rounded-xl"
                         disabled={busy || isDelisted}
@@ -853,37 +1269,59 @@ export default function StockDetailPage() {
                   const realizedPnl = Number(trade.realizedPnl || 0);
                   const hasPnl = realizedPnl !== 0;
                   const profitRate = Number(trade.profitRate);
+                  const detail = trade.detail || {};
+                  const feeAmount = Number(detail.buyFee || detail.sellFee || detail.openFee || detail.closeFee || 0);
+                  const taxAmount = Number(detail.capitalGainsTax || 0);
+                  const prizeContribution = Number(detail.prizeContribution || detail.jackpotPoolContribution || 0);
+                  const finalReceiveAmount = Number(detail.finalReceiveAmount || detail.finalPayout || 0);
                   return (
-                    <tr key={trade.id} className="text-xs font-bold">
-                      <td className="whitespace-nowrap text-base-content/50">
-                        {new Date(trade.createdAt).toLocaleString("ko-KR", {
-                          month: "numeric",
-                          day: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </td>
-                      <td className="whitespace-nowrap">
-                        <span className="badge badge-outline badge-sm font-black">
-                          {formatTradeType(trade.tradeType, trade.leverage)}
-                        </span>
-                      </td>
-                      <td className="text-right tabular-nums">
-                        {Number(trade.quantity || 0).toLocaleString("ko-KR", {
-                          maximumFractionDigits: 4,
-                        })}
-                      </td>
-                      <td className="text-right tabular-nums">{formatMoney(trade.price)}</td>
-                      <td className="text-right tabular-nums">{formatMoney(trade.amount)}</td>
-                      <td className={`text-right tabular-nums ${hasPnl ? (realizedPnl > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
-                        {hasPnl ? formatSignedMoney(realizedPnl) : "-"}
-                      </td>
-                      <td className={`text-right tabular-nums ${hasPnl ? (profitRate > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
-                        {hasPnl && Number.isFinite(profitRate)
-                          ? formatRate(profitRate)
-                          : "-"}
-                      </td>
-                    </tr>
+                    <Fragment key={trade.id}>
+                      <tr className="text-xs font-bold">
+                        <td className="whitespace-nowrap text-base-content/50">
+                          {new Date(trade.createdAt).toLocaleString("ko-KR", {
+                            month: "numeric",
+                            day: "numeric",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </td>
+                        <td className="whitespace-nowrap">
+                          <span className="badge badge-outline badge-sm font-black">
+                            {formatTradeType(trade.tradeType, trade.leverage)}
+                          </span>
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {Number(trade.quantity || 0).toLocaleString("ko-KR", {
+                            maximumFractionDigits: 4,
+                          })}
+                        </td>
+                        <td className="text-right tabular-nums">{formatMoney(trade.price)}</td>
+                        <td className="text-right tabular-nums">{formatMoney(trade.amount)}</td>
+                        <td className={`text-right tabular-nums ${hasPnl ? (realizedPnl > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
+                          {hasPnl ? formatSignedMoney(realizedPnl) : "-"}
+                        </td>
+                        <td className={`text-right tabular-nums ${hasPnl ? (profitRate > 0 ? "text-success" : "text-error") : "text-base-content/35"}`}>
+                          {hasPnl && Number.isFinite(profitRate)
+                            ? formatRate(profitRate)
+                            : "-"}
+                        </td>
+                      </tr>
+                      {(feeAmount > 0 || taxAmount > 0 || prizeContribution > 0 || finalReceiveAmount > 0) && (
+                        <tr className="border-b border-base-200/70">
+                          <td colSpan={7} className="pb-3 pt-0">
+                            <div className="flex flex-wrap gap-2 rounded-xl bg-base-200/45 px-3 py-2 text-[11px] font-bold text-base-content/60">
+                              {feeAmount > 0 && <span>거래 수수료 {formatMoney(feeAmount)}</span>}
+                              {detail.realizedProfitBeforeTax !== undefined && <span>세전 수익 {formatSignedMoney(detail.realizedProfitBeforeTax)}</span>}
+                              {detail.realizedPnlBeforeTax !== undefined && <span>세전 손익 {formatSignedMoney(detail.realizedPnlBeforeTax)}</span>}
+                              {taxAmount > 0 && <span>누진 양도소득세 {formatMoney(taxAmount)}</span>}
+                              {prizeContribution > 0 && <span>잭팟 적립 {formatMoney(prizeContribution)}</span>}
+                              {finalReceiveAmount > 0 && <span>최종 수령 {formatMoney(finalReceiveAmount)}</span>}
+                              {detail.taxType === "progressive" && <span className="text-primary">순수익 구간별 누진세</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -916,10 +1354,10 @@ export default function StockDetailPage() {
                 } else if (ev.event_type === "admin_price_target_started") {
                   if (ev.sentiment === "bad") {
                     badgeColor = "bg-error/20 text-error";
-                    badgeText = "목표주가 하향";
+                    badgeText = "악재";
                   } else {
                     badgeColor = "bg-success/20 text-success";
-                    badgeText = "목표주가 상향";
+                    badgeText = "호재";
                   }
                 } else if (ev.event_type === "admin_stock_manual_adjust") {
                   badgeColor = "bg-base-300 text-base-content";
@@ -1117,6 +1555,12 @@ export default function StockDetailPage() {
         </div>
       )}
 
+      <StockActionErrorDialog
+        open={Boolean(actionError)}
+        title={actionError?.title}
+        message={actionError?.message}
+        onClose={() => setActionError(null)}
+      />
 
     </PageContainer>
   );
@@ -1128,6 +1572,39 @@ function formatRate(rate) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   })}%`;
+}
+
+const EOK = 100_000_000;
+const JO = 1_000_000_000_000;
+const LEVERAGE_BLOCKED_STATUSES = new Set([
+  "caution",
+  "distress_review",
+  "delist_review",
+  "recovery",
+  "final_crash",
+  "delisted",
+  "ipo_subscription",
+]);
+
+function isClientLeverageBlocked(stock) {
+  return (
+    LEVERAGE_BLOCKED_STATUSES.has(stock.status) ||
+    LEVERAGE_BLOCKED_STATUSES.has(stock.delist_risk_status) ||
+    Number(stock.market_cap || 0) < 60 * EOK ||
+    stock.market_cap_tier === "danger_micro"
+  );
+}
+
+function getClientMaxAllowedLeverage(stock) {
+  if (isClientLeverageBlocked(stock)) return 1;
+  if (stock.is_bluechip === 1 || stock.isBlueChip === true || stock.is_blue_chip === 1) return 100;
+  const marketCap = Number(stock.market_cap || 0);
+  if (marketCap >= 1 * JO) return 50;
+  if (marketCap >= 5_000 * EOK) return 20;
+  if (marketCap >= 1_000 * EOK) return 10;
+  if (marketCap >= 300 * EOK) return 5;
+  if (marketCap >= 100 * EOK) return 2;
+  return 1;
 }
 
 function formatTradeType(type, leverage = 1) {
