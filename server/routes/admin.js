@@ -1058,6 +1058,54 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
   if (stock.status === 'acquired' || stock.is_etf === 1) {
     return res.status(400).json({ message: "인수된 ETF 종목은 목표주가를 설정할 수 없습니다." });
   }
+  
+  return res.json({ message: "해당 종목을 우량주로 선정하고 목표주가 급등 이벤트를 시작했습니다." });
+});
+
+adminRouter.delete("/stocks/:id/blue-chip", (req, res) => {
+  const stockId = Number(req.params.id);
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+  
+  db.prepare(`
+    UPDATE stocks 
+    SET is_bluechip = 0, 
+        blue_chip_ramp_active = 0,
+        blue_chip_cancelled_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') 
+    WHERE id = ?
+  `).run(stockId);
+
+  db.prepare(`
+    INSERT INTO stock_events (stock_id, event_type, title, message)
+    VALUES (?, ?, ?, ?)
+  `).run(
+    stockId,
+    "blue_chip_cancelled",
+    "우량주 취소",
+    `${stock.name}의 우량주 지정이 취소됐어요.`,
+  );
+  
+  return res.json({ message: "해당 종목의 우량주 지정을 취소했습니다." });
+});
+
+adminRouter.post("/stocks/:id/target-price", (req, res) => {
+  if (req.user.username !== "admin") {
+    return res.status(403).json({ message: "관리자만 사용할 수 있어요." });
+  }
+  const stockId = Number(req.params.id);
+  const targetPrice = Number(req.body?.targetPrice);
+  const percentPerTick = Number(req.body?.percentPerTick);
+  const reason = String(req.body?.reason || "").trim().slice(0, 120);
+  const newsTitle = req.body?.newsTitle;
+  const newsContent = req.body?.newsContent;
+  const publishNews = req.body?.publishNews !== undefined ? Boolean(req.body.publishNews) : true;
+
+  const stock = db.prepare("SELECT * FROM stocks WHERE id = ? AND status != 'delisted'").get(stockId);
+  if (!stock) return res.status(404).json({ message: "해당 주식을 찾을 수 없거나 상장폐지되었습니다." });
+
+  if (stock.status === 'acquired' || stock.is_etf === 1) {
+    return res.status(400).json({ message: "인수된 ETF 종목은 목표주가를 설정할 수 없습니다." });
+  }
 
   if (!Number.isSafeInteger(targetPrice) || targetPrice <= 0) {
     return res.status(400).json({ message: "목표가는 0보다 큰 정수로 입력해 주세요." });
@@ -1083,47 +1131,6 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
       : `${stock.name} 가격 조정이 시작되었어요.`;
   }
 
-  const startTarget = db.transaction(() => {
-    db.prepare(`
-      UPDATE stocks
-      SET admin_price_target_active = 1,
-          admin_price_target = ?,
-          admin_price_target_direction = ?,
-          admin_price_target_percent_per_tick = ?,
-          admin_price_target_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-          admin_price_target_ended_at = NULL,
-          admin_price_target_reason = ?,
-          admin_price_target_started_by_user_id = ?,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE id = ?
-    `).run(targetPrice, direction, percentPerTick, reason, req.user.id, stockId);
-
-    db.prepare(`
-      INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
-      VALUES (?, ?, 'admin_stock_target_price_started', ?, ?)
-    `).run(
-      req.user.id,
-      req.user.id,
-      String(stock.current_price),
-      JSON.stringify({
-        stockId,
-        stockName: stock.name,
-        targetPrice,
-        direction,
-        percentPerTick,
-        reason,
-        newsTitle,
-        newsContent,
-        publishNews,
-        oldPrice: stock.current_price,
-        newPrice: stock.current_price,
-        sentiment: direction === "up" ? "good" : "bad",
-      })
-    );
-
-    const eventType = publishNews ? "admin_price_target_started" : "admin_stock_manual_adjust";
-    const sentiment = direction === "up" ? "good" : "bad";
-
     db.prepare(`
       INSERT INTO stock_events (
         stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
@@ -1135,6 +1142,13 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
       stockId, stock.name, stock.symbol, eventType, sentiment,
       finalTitle, finalContent, stock.current_price, stock.current_price,
       targetPrice, percentPerTick, req.user.id, JSON.stringify({ reason })
+    );
+  })();
+
+  return res.json({ message: "목표주가 이벤트를 시작했습니다." });
+});
+
+/*
     db.prepare(`
       UPDATE stocks
       SET admin_price_target_active = 1,
@@ -1193,6 +1207,7 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
 
   return res.json({ message: "목표주가 이벤트를 시작했습니다." });
 });
+*/
 
 adminRouter.get("/games/status", (req, res) => {
   const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
