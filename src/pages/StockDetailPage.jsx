@@ -1606,8 +1606,6 @@ const LEVERAGE_BLOCKED_STATUSES = new Set([
 
 function isClientLeverageBlocked(stock) {
   return (
-    stock.is_etf === 1 ||
-    stock.isEtf === true ||
     LEVERAGE_BLOCKED_STATUSES.has(stock.status) ||
     LEVERAGE_BLOCKED_STATUSES.has(stock.delist_risk_status) ||
     Number(stock.market_cap || 0) < 60 * EOK ||
