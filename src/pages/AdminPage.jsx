@@ -1545,7 +1545,7 @@ export default function AdminPage() {
             <h3 className="text-sm font-black mb-3">모드별 밸런스 설정 튜닝</h3>
             
             <div className="flex gap-2 mb-4">
-              {[10, 20, 30, 45, 60].map((m) => (
+              {[5, 10, 15, 20, 30, 45, 60].map((m) => (
                 <button
                   key={m}
                   type="button"

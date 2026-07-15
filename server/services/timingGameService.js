@@ -8,6 +8,18 @@ import { createGameNotification } from "./serverNotificationService.js";
 
 // 기본 밸런스 값
 export const TIMING_GAME_MODES_DEFAULT = {
+  5: {
+    nominalSeconds: 5,
+    targetMinSeconds: 3,
+    targetMaxSeconds: 7,
+    failWindowSeconds: 0.50,
+    maxMultiplier: 1.80,
+    curvePower: 3.5,
+    maxBetCashRate: 0.35,
+    fadeStartMinSeconds: 1.8,
+    fadeStartMaxSeconds: 2.2,
+    fadeDurationSeconds: 0.60
+  },
   10: {
     nominalSeconds: 10,
     targetMinSeconds: 8,
@@ -16,6 +28,18 @@ export const TIMING_GAME_MODES_DEFAULT = {
     maxMultiplier: 2.20,
     curvePower: 4.0,
     maxBetCashRate: 0.30,
+    fadeStartMinSeconds: 2.2,
+    fadeStartMaxSeconds: 2.8,
+    fadeDurationSeconds: 0.75
+  },
+  15: {
+    nominalSeconds: 15,
+    targetMinSeconds: 13,
+    targetMaxSeconds: 17,
+    failWindowSeconds: 0.75,
+    maxMultiplier: 2.70,
+    curvePower: 4.4,
+    maxBetCashRate: 0.28,
     fadeStartMinSeconds: 2.2,
     fadeStartMaxSeconds: 2.8,
     fadeDurationSeconds: 0.75
@@ -74,7 +98,11 @@ export function getTimingGameConfig(database) {
   const row = database.prepare("SELECT value FROM system_config WHERE key = 'timing_game_config'").get();
   if (row) {
     try {
-      return JSON.parse(row.value);
+      const parsed = JSON.parse(row.value);
+      return {
+        ...TIMING_GAME_MODES_DEFAULT,
+        ...parsed
+      };
     } catch (e) {
       // 파싱 실패시 기본값 반환
     }
@@ -354,7 +382,7 @@ export function stopTimingRound(database, { userId, roundId, clientElapsedMs, cl
   
   return database.transaction(() => {
     let round = database.prepare(
-      "SELECT * FROM timing_game_rounds WHERE id = ? AND user_id = ? FOR UPDATE"
+      "SELECT * FROM timing_game_rounds WHERE id = ? AND user_id = ?"
     ).get(roundId, userId);
 
     if (!round) throw new GameError("게임 기록을 찾을 수 없어요.", 404);
@@ -625,7 +653,7 @@ export function getTimingGameStats(database) {
     : 0;
 
   // 모드별 통계
-  const modes = [10, 20, 30, 45, 60];
+  const modes = [5, 10, 15, 20, 30, 45, 60];
   const modeStats = {};
 
   for (const m of modes) {

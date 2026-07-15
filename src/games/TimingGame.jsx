@@ -8,6 +8,15 @@ import { useAuth } from "../context/AuthContext";
 import { formatMoney } from "../utils/format";
 
 const TIMING_GAME_MODES = {
+  5: {
+    nominalSeconds: 5,
+    targetMinSeconds: 3,
+    targetMaxSeconds: 7,
+    failWindowSeconds: 0.50,
+    maxMultiplier: 1.80,
+    curvePower: 3.5,
+    maxBetCashRate: 0.35
+  },
   10: {
     nominalSeconds: 10,
     targetMinSeconds: 8,
@@ -16,6 +25,15 @@ const TIMING_GAME_MODES = {
     maxMultiplier: 2.20,
     curvePower: 4.0,
     maxBetCashRate: 0.30
+  },
+  15: {
+    nominalSeconds: 15,
+    targetMinSeconds: 13,
+    targetMaxSeconds: 17,
+    failWindowSeconds: 0.75,
+    maxMultiplier: 2.70,
+    curvePower: 4.4,
+    maxBetCashRate: 0.28
   },
   20: {
     nominalSeconds: 20,
