@@ -81,6 +81,10 @@ db.exec(`
     total_win INTEGER NOT NULL DEFAULT 0,
     total_loss INTEGER NOT NULL DEFAULT 0,
     jackpot_tickets INTEGER NOT NULL DEFAULT 0,
+    suspended_access_until TEXT,
+    suspended_access_reason TEXT,
+    suspended_action_until TEXT,
+    suspended_action_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
@@ -888,6 +892,11 @@ addColumnIfMissing("cup_game_rounds", "initial_winning_cup_id", "TEXT");
 addColumnIfMissing("cup_game_rounds", "selected_cup_id", "TEXT");
 addColumnIfMissing("cup_game_rounds", "shuffle_operations_json", "TEXT NOT NULL DEFAULT '[]'");
 addColumnIfMissing("cup_game_rounds", "cup_order_json", "TEXT NOT NULL DEFAULT '[]'");
+
+addColumnIfMissing("users", "suspended_access_until", "TEXT");
+addColumnIfMissing("users", "suspended_access_reason", "TEXT");
+addColumnIfMissing("users", "suspended_action_until", "TEXT");
+addColumnIfMissing("users", "suspended_action_reason", "TEXT");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS user_stock_tax_ledgers (
@@ -1790,5 +1799,9 @@ export function publicUser(user) {
     mineTotalEarned: user.mine_total_earned || 0,
     lastMinedAt: user.last_mined_at || null,
     jackpotTickets: user.jackpot_tickets || 0,
+    suspendedAccessUntil: user.suspended_access_until || null,
+    suspendedAccessReason: user.suspended_access_reason || null,
+    suspendedActionUntil: user.suspended_action_until || null,
+    suspendedActionReason: user.suspended_action_reason || null,
   };
 }

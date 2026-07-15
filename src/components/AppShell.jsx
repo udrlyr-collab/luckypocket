@@ -21,7 +21,7 @@ function linkClass({ isActive }) {
 }
 
 export default function AppShell() {
-  const { user, logout, refreshUser } = useAuth();
+  const { user, logout, refreshUser, isActionSuspended } = useAuth();
   const navigate = useNavigate();
   const [bankruptcyOpen, setBankruptcyOpen] = useState(false);
   const [bankruptcyBusy, setBankruptcyBusy] = useState(false);
@@ -98,6 +98,19 @@ export default function AppShell() {
   return (
     <div className="app-layout bg-grid">
       <div className="virtual-banner">🍀 현금 결제·충전·출금이 없는 숫자 게임입니다</div>
+      {isActionSuspended && (
+        <div className="bg-amber-950/50 border-b border-amber-500/25 py-2 px-4 text-center text-xs font-black text-amber-300 flex items-center justify-center gap-2 z-40 Outfit">
+          <span>⚠️</span>
+          <span>
+            재산 정지 상태입니다. 신규 매수 및 미니게임 이용이 불가합니다. (만료: {new Date(user.suspendedActionUntil).toLocaleString("ko-KR")})
+          </span>
+          {user.suspendedActionReason && (
+            <span className="opacity-75 font-bold border-l border-amber-500/30 pl-2">
+              사유: {user.suspendedActionReason}
+            </span>
+          )}
+        </div>
+      )}
       <header className="sticky top-0 z-30 border-b border-base-300/55 bg-base-100/92 backdrop-blur-xl">
         <div className="shell-container flex h-[4.5rem] items-center justify-between gap-3">
           <NavLink to="/" className="flex items-center gap-2">

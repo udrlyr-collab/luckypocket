@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, checkUserActionSuspended } from "../middleware/auth.js";
 import {
   CARD_BETS,
   DART_BETS,
@@ -46,6 +46,7 @@ import {
 
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
+gamesRouter.use(checkUserActionSuspended);
 
 const GAME_TYPE_MAPPING = {
   "/cup/": "cup",

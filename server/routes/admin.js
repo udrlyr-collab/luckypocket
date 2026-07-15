@@ -1192,3 +1192,78 @@ adminRouter.post("/games/:gameType/resume", (req, res) => {
 
   return res.json({ message: `${gameType} 게임의 정지를 해제했습니다.` });
 });
+
+adminRouter.post("/users/:userId/suspend", (req, res) => {
+  const userId = Number(req.params.userId);
+  const { type, until, reason } = req.body; // type: 'access' | 'action', until: ISOString, reason: string
+  
+  if (!["access", "action"].includes(type)) {
+    return res.status(400).json({ message: "올바르지 않은 정지 유형입니다." });
+  }
+
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user) {
+    return res.status(404).json({ message: "사용자를 찾을 수 없습니다." });
+  }
+  if (user.username === "admin") {
+    return res.status(400).json({ message: "관리자 계정은 정지할 수 없습니다." });
+  }
+
+  const columnPrefix = type === "access" ? "suspended_access" : "suspended_action";
+  db.prepare(`
+    UPDATE users
+    SET ${columnPrefix}_until = ?,
+        ${columnPrefix}_reason = ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id = ?
+  `).run(until || null, reason || null, userId);
+
+  db.prepare(`
+    INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(
+    req.user.id,
+    userId,
+    `user_suspend_${type}`,
+    JSON.stringify({ until: user[`${columnPrefix}_until`], reason: user[`${columnPrefix}_reason`] }),
+    JSON.stringify({ until, reason })
+  );
+
+  return res.json({ message: `사용자에게 ${type === 'access' ? '접근 금지' : '재산'} 정지를 적용했습니다.` });
+});
+
+adminRouter.post("/users/:userId/resume", (req, res) => {
+  const userId = Number(req.params.userId);
+  const { type } = req.body; // type: 'access' | 'action' | 'all'
+
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId);
+  if (!user) {
+    return res.status(404).json({ message: "사용자를 찾을 수 없습니다." });
+  }
+
+  if (type === "access" || type === "all") {
+    db.prepare(`
+      UPDATE users
+      SET suspended_access_until = NULL,
+          suspended_access_reason = NULL,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(userId);
+  }
+  if (type === "action" || type === "all") {
+    db.prepare(`
+      UPDATE users
+      SET suspended_action_until = NULL,
+          suspended_action_reason = NULL,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(userId);
+  }
+
+  db.prepare(`
+    INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+    VALUES (?, ?, ?, 'suspended', 'active')
+  `).run(req.user.id, userId, `user_resume_${type}`, null);
+
+  return res.json({ message: "사용자 정지를 해제했습니다." });
+});

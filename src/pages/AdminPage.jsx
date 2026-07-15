@@ -114,6 +114,10 @@ export default function AdminPage() {
   const [resetTargets, setResetTargets] = useState(() => [
     ...allAdminResetTargets,
   ]);
+  
+  const [suspendType, setSuspendType] = useState("access"); // "access" | "action"
+  const [suspendDuration, setSuspendDuration] = useState("1d"); // "1h", "1d", "7d", "30d", "permanent"
+  const [suspendReason, setSuspendReason] = useState("");
 
   const loadUsers = async () => {
     setBusy(true);
@@ -129,6 +133,57 @@ export default function AdminPage() {
       }
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyUserSuspend = async () => {
+    if (!activeUser) return;
+    if (!window.confirm("선택한 유저에게 정지 처리를 적용하시겠습니까?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      const now = new Date();
+      let untilDate = new Date();
+      if (suspendDuration === "1h") untilDate.setHours(now.getHours() + 1);
+      else if (suspendDuration === "1d") untilDate.setDate(now.getDate() + 1);
+      else if (suspendDuration === "7d") untilDate.setDate(now.getDate() + 7);
+      else if (suspendDuration === "30d") untilDate.setDate(now.getDate() + 30);
+      else if (suspendDuration === "permanent") untilDate = new Date("9999-12-31T23:59:59.000Z");
+
+      const res = await api(`/admin/users/${activeUser.id}/suspend`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: suspendType,
+          until: untilDate.toISOString(),
+          reason: suspendReason.trim() || "운영정책 위반",
+        }),
+      });
+      alert(res.message);
+      await loadUsers();
+      setSuspendReason("");
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyUserResume = async (type) => {
+    if (!activeUser) return;
+    if (!window.confirm("정지 처리를 해제하시겠습니까?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api(`/admin/users/${activeUser.id}/resume`, {
+        method: "POST",
+        body: JSON.stringify({ type }),
+      });
+      alert(res.message);
+      await loadUsers();
+    } catch (e) {
+      setError(e.message);
     } finally {
       setBusy(false);
     }
@@ -1170,10 +1225,105 @@ export default function AdminPage() {
             >
               개인 강제 설정 저장
             </button>
+
+            <div className="divider my-6" />
+            
+            <div className="rounded-[1.5rem] border border-warning/20 bg-warning/5 p-5 mb-2">
+              <h3 className="text-sm font-black text-warning flex items-center gap-1.5 mb-3">
+                <span>⚠️</span> 플레이어 이용 제한 제어
+              </h3>
+
+              <div className="grid gap-2 mb-4 text-xs font-bold">
+                <div className="flex items-center justify-between rounded-xl bg-base-950 p-3">
+                  <span>접근 제한 정지</span>
+                  {activeUser.suspendedAccessUntil && new Date(activeUser.suspendedAccessUntil) > new Date() ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-error">제한 중 (만료: {new Date(activeUser.suspendedAccessUntil).toLocaleString("ko-KR")} | 사유: {activeUser.suspendedAccessReason || "없음"})</span>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-error rounded-lg font-black"
+                        onClick={() => applyUserResume("access")}
+                      >
+                        해제
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-success">정상</span>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between rounded-xl bg-base-950 p-3">
+                  <span>재산 제한 정지</span>
+                  {activeUser.suspendedActionUntil && new Date(activeUser.suspendedActionUntil) > new Date() ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-warning">제한 중 (만료: {new Date(activeUser.suspendedActionUntil).toLocaleString("ko-KR")} | 사유: {activeUser.suspendedActionReason || "없음"})</span>
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-warning rounded-lg font-black"
+                        onClick={() => applyUserResume("action")}
+                      >
+                        해제
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-success">정상</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold">제한 유형</span>
+                  <select
+                    className="select select-bordered w-full h-12 rounded-2xl"
+                    value={suspendType}
+                    onChange={(e) => setSuspendType(e.target.value)}
+                  >
+                    <option value="access">접근 금지 (전체 차단)</option>
+                    <option value="action">재산 정지 (매수/게임 금지)</option>
+                  </select>
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold">제한 기간</span>
+                  <select
+                    className="select select-bordered w-full h-12 rounded-2xl"
+                    value={suspendDuration}
+                    onChange={(e) => setSuspendDuration(e.target.value)}
+                  >
+                    <option value="1h">1시간</option>
+                    <option value="1d">1일</option>
+                    <option value="7d">7일</option>
+                    <option value="30d">30일</option>
+                    <option value="permanent">영구 정지</option>
+                  </select>
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold">제한 사유</span>
+                  <input
+                    className="input input-bordered w-full h-12 rounded-2xl"
+                    type="text"
+                    value={suspendReason}
+                    onChange={(e) => setSuspendReason(e.target.value)}
+                    placeholder="예: 비정상 플레이 감지"
+                  />
+                </label>
+              </div>
+
+              <button
+                type="button"
+                className="btn btn-warning mt-4 h-12 w-full rounded-2xl font-black"
+                disabled={busy}
+                onClick={applyUserSuspend}
+              >
+                이용 제한(정지) 조치 적용
+              </button>
+            </div>
           </>
         ) : (
           <p className="mt-4 rounded-2xl bg-base-200 p-5 text-center text-sm font-bold text-base-content/50">
-            위 목록 또는 선택창에서 유저를 고르면 닉네임, 자산, 행운권 보유량을 바로 설정할 수 있습니다.
+            위 목록 또는 선택창에서 유저를 고르면 닉네임, 자산, 행운권 보유량 및 이용 제한 상태를 제어할 수 있습니다.
           </p>
         )}
       </BaseCard>

@@ -37,6 +37,9 @@ export function getLeverageRiskLevel(stock = {}) {
 }
 
 export function getMaxAllowedLeverage(stock = {}) {
+  if (stock.is_etf === 1) {
+    return 1;
+  }
   if (LEVERAGE_BLOCKED_STATUSES.has(stock.status) || LEVERAGE_BLOCKED_STATUSES.has(stock.delist_risk_status)) {
     return 1;
   }
@@ -54,6 +57,9 @@ export function getMaxAllowedLeverage(stock = {}) {
 }
 
 export function assertCanOpenLeveragePosition(stock, requestedLeverage) {
+  if (stock.is_etf === 1) {
+    throw new Error("ETF 종목은 레버리지 거래를 이용할 수 없어요.");
+  }
   if (LEVERAGE_BLOCKED_STATUSES.has(stock.status) || LEVERAGE_BLOCKED_STATUSES.has(stock.delist_risk_status)) {
     throw new Error("상장폐지 위험 종목은 레버리지 포지션을 열 수 없어요. 현물 거래만 이용해 주세요.");
   }

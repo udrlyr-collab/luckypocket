@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../db.js";
-import { requireAuth } from "../middleware/auth.js";
+import { requireAuth, checkUserActionSuspended } from "../middleware/auth.js";
 import { createServerNotification } from "../services/serverNotificationService.js";
 import {
   ACTIVE_TRADABLE_STOCK_STATUSES,
@@ -1180,7 +1180,7 @@ stocksRouter.post("/:stockId/sell-preview", (req, res) => {
   }
 });
 
-stocksRouter.post("/buy", (req, res) => {
+stocksRouter.post("/buy", checkUserActionSuspended, (req, res) => {
   const { stockId, quantity: requestedQuantity, budgetAmount } = req.body;
   const userId = req.user.id;
 
@@ -1290,7 +1290,7 @@ stocksRouter.post("/buy", (req, res) => {
   res.json({ message: "매수 주문이 체결되었어요.", ...result });
 });
 
-stocksRouter.post("/buy-ipo", (req, res) => {
+stocksRouter.post("/buy-ipo", checkUserActionSuspended, (req, res) => {
   const { stockId, amount: requestedAmount, budgetAmount } = req.body;
   const userId = req.user.id;
 
@@ -1575,7 +1575,7 @@ stocksRouter.post("/sell", (req, res) => {
   res.json({ message: "매도 주문이 체결되었어요.", ...result });
 });
 
-stocksRouter.post("/open-position", (req, res) => {
+stocksRouter.post("/open-position", checkUserActionSuspended, (req, res) => {
   const { stockId, margin, budgetAmount, leverage, side = "long" } = req.body;
   const userId = req.user.id;
   const rawMargin = Math.floor(Number(margin));

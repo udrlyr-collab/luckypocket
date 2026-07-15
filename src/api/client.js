@@ -24,7 +24,12 @@ export async function api(path, options = {}) {
     window.dispatchEvent(new Event("lucky-pocket-auth-expired"));
   }
   if (!response.ok) {
-    throw new Error(data.message || "요청을 처리하지 못했어요.");
+    const error = new Error(data.message || "요청을 처리하지 못했어요.");
+    error.status = response.status;
+    error.code = data.code;
+    error.until = data.until;
+    error.reason = data.reason;
+    throw error;
   }
   return data;
 }
