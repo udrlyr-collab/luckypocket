@@ -1268,7 +1268,7 @@ adminRouter.post("/users/:userId/resume", (req, res) => {
   db.prepare(`
     INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
     VALUES (?, ?, ?, 'suspended', 'active')
-  `).run(req.user.id, userId, `user_resume_${type}`, null);
+  `).run(req.user.id, userId, `user_resume_${type}`);
 
   return res.json({ message: "사용자 정지를 해제했습니다." });
 });
