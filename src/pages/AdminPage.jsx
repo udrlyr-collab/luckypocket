@@ -105,6 +105,10 @@ export default function AdminPage() {
   const [consistencyResult, setConsistencyResult] = useState(null);
   const [stockFeeConfig, setStockFeeConfig] = useState(null);
   const [suspendedGames, setSuspendedGames] = useState({});
+  const [timingStats, setTimingStats] = useState(null);
+  const [timingConfig, setTimingConfig] = useState(null);
+  const [timingDraftConfig, setTimingDraftConfig] = useState(null);
+  const [timingConfigSelectedMode, setTimingConfigSelectedMode] = useState(10);
   const [showAllSuspicious, setShowAllSuspicious] = useState(false);
   const [showAllConsistencyIssues, setShowAllConsistencyIssues] = useState(false);
   const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
@@ -226,16 +230,21 @@ export default function AdminPage() {
 
   const loadAdminInsights = async () => {
     try {
-      const [summary, audit, feeConfig, gameStatus] = await Promise.all([
+      const [summary, audit, feeConfig, gameStatus, tStats, tConfig] = await Promise.all([
         api("/admin/dashboard/summary"),
         api("/admin/economy/audit"),
         api("/stocks/fees/config"),
         api("/admin/games/status"),
+        api("/admin/games/timing/stats").catch(() => null),
+        api("/admin/games/timing/settings").catch(() => null),
       ]);
       setDashboardSummary(summary);
       setEconomyAudit(audit);
       setStockFeeConfig(feeConfig);
       setSuspendedGames(gameStatus.suspended || {});
+      setTimingStats(tStats);
+      setTimingConfig(tConfig);
+      setTimingDraftConfig(tConfig);
     } catch (requestError) {
       setError(requestError.message);
     }
@@ -255,6 +264,27 @@ export default function AdminPage() {
       }));
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveTimingConfig = async (e) => {
+    e.preventDefault();
+    if (!window.confirm("시간 감각 게임의 밸런스 설정을 업데이트하시겠습니까?")) return;
+    setBusy(true);
+    setError("");
+    try {
+      const res = await api("/admin/games/timing/settings", {
+        method: "POST",
+        body: JSON.stringify(timingDraftConfig),
+      });
+      alert(res.message);
+      setTimingConfig(res.config);
+      setTimingDraftConfig(res.config);
+      await loadAdminInsights();
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -1403,7 +1433,8 @@ export default function AdminPage() {
                 { key: "bomb-dodge", name: "폭탄 숫자 피하기 💣" },
                 { key: "slot", name: "3자리 슬롯 🎰" },
                 { key: "dart", name: "다트 던지기 🎯" },
-                { key: "cup", name: "컵 속 행운 🥤" }
+                { key: "cup", name: "컵 속 행운 🥤" },
+                { key: "timing", name: "시간 감각 ⏱️" }
               ].map((g) => {
                 const isSuspended = suspendedGames[g.key] === true;
                 return (
@@ -1430,6 +1461,279 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+      </BaseCard>
+
+      {/* 시간 감각 게임 통계 및 밸런스 제어 */}
+      <BaseCard className="mt-6 border-2 border-teal-500/25">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <SectionHeader title="시간 감각 모니터링 & 설정" eyebrow="TIMING GAME BALANCE" className="mb-1" />
+            <p className="text-xs font-bold text-base-content/50">
+              시간 감각 게임의 실시간 통계를 모니터링하고 모드별 밸런스를 조정합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="btn btn-xs btn-outline btn-primary rounded-lg font-black"
+            onClick={loadAdminInsights}
+            disabled={busy}
+          >
+            통계 갱신
+          </button>
+        </div>
+
+        {timingStats && (
+          <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="rounded-xl border border-base-200 bg-base-100/50 p-4">
+              <span className="text-[10px] font-black text-base-content/40 block">총 플레이 수</span>
+              <strong className="text-lg font-black tabular-nums">{timingStats.totalPlay.toLocaleString("ko-KR")}회</strong>
+            </div>
+            <div className="rounded-xl border border-base-200 bg-base-100/50 p-4">
+              <span className="text-[10px] font-black text-base-content/40 block">총 베팅 / 지급액</span>
+              <strong className="text-sm font-black tabular-nums block text-base-content/75">{formatMoney(timingStats.totalBet)}</strong>
+              <strong className="text-sm font-black tabular-nums block text-success">{formatMoney(timingStats.totalPayout)}</strong>
+            </div>
+            <div className="rounded-xl border border-base-200 bg-base-100/50 p-4">
+              <span className="text-[10px] font-black text-base-content/40 block">24시간 지급률</span>
+              <strong className={`text-lg font-black tabular-nums ${timingStats.payoutRate24h > 100 ? "text-error" : "text-success"}`}>
+                {timingStats.payoutRate24h}%
+              </strong>
+            </div>
+            <div className="rounded-xl border border-base-200 bg-base-100/50 p-4">
+              <span className="text-[10px] font-black text-base-content/40 block">완벽 성공 / 보안 이상</span>
+              <strong className="text-sm font-black tabular-nums block text-teal-600">0.02초 완벽: {timingStats.perfectCount}회</strong>
+              <strong className="text-sm font-black tabular-nums block text-error">보안 감지: {timingStats.abuseCount}건</strong>
+            </div>
+          </div>
+        )}
+
+        {timingStats && (
+          <div className="mt-4 overflow-x-auto rounded-xl border border-base-200">
+            <table className="table w-full text-xs">
+              <thead>
+                <tr className="bg-base-200/50 text-base-content/70">
+                  <th className="font-bold">모드</th>
+                  <th className="font-bold text-center">플레이 횟수</th>
+                  <th className="font-bold text-right">총 베팅액</th>
+                  <th className="font-bold text-right">총 지급액</th>
+                  <th className="font-bold text-center">평균 배수</th>
+                  <th className="font-bold text-center">평균 오차</th>
+                  <th className="font-bold text-right">플랫 손실률</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(timingStats.modeStats || {}).map(([mSec, data]) => (
+                  <tr key={mSec} className="hover:bg-base-200/20">
+                    <td className="font-bold font-mono">{mSec}초</td>
+                    <td className="text-center font-mono">{data.playCount}회</td>
+                    <td className="text-right font-mono">{formatMoney(data.totalBet)}</td>
+                    <td className="text-right font-mono text-success">{formatMoney(data.totalPayout)}</td>
+                    <td className="text-center font-mono">{data.avgMultiplier}배</td>
+                    <td className="text-center font-mono text-teal-600">{(data.avgErrorMs / 1000).toFixed(2)}초</td>
+                    <td className={`text-right font-mono font-bold ${data.lossRate < 0 ? "text-error" : "text-base-content/75"}`}>
+                      {data.lossRate}%
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {timingDraftConfig && (
+          <form onSubmit={handleSaveTimingConfig} className="mt-6 border-t border-base-300 pt-6">
+            <h3 className="text-sm font-black mb-3">모드별 밸런스 설정 튜닝</h3>
+            
+            <div className="flex gap-2 mb-4">
+              {[10, 20, 30, 45, 60].map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`btn btn-sm rounded-xl font-bold font-mono ${timingConfigSelectedMode === m ? "btn-primary" : "btn-outline"}`}
+                  onClick={() => setTimingConfigSelectedMode(m)}
+                >
+                  {m}초
+                </button>
+              ))}
+            </div>
+
+            {timingDraftConfig[timingConfigSelectedMode] && (
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">최대 배수 (maxMultiplier)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="1.0"
+                    max="100.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].maxMultiplier}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 1;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          maxMultiplier: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">실패 허용 오차 (failWindowSeconds)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.1"
+                    max="5.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].failWindowSeconds}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0.1;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          failWindowSeconds: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">난이도 지수 (curvePower)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="1.0"
+                    max="20.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].curvePower}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 1.0;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          curvePower: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">최대 베팅 비율 (maxBetCashRate)</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max="1.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].maxBetCashRate}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0.01;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          maxBetCashRate: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">페이드 시작 시간(최소)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].fadeStartMinSeconds || 2.2}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 2.2;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          fadeStartMinSeconds: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">페이드 시작 시간(최대)</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="10.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].fadeStartMaxSeconds || 2.8}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 2.8;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          fadeStartMaxSeconds: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label className="form-control">
+                  <span className="label-text mb-1 block font-bold text-xs text-base-content/60">페이드 전환 지속 시간(초)</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0.1"
+                    max="5.0"
+                    className="input input-bordered input-sm rounded-xl font-bold font-mono"
+                    value={timingDraftConfig[timingConfigSelectedMode].fadeDurationSeconds || 0.75}
+                    onChange={(e) => {
+                      const val = parseFloat(e.target.value) || 0.75;
+                      setTimingDraftConfig((prev) => ({
+                        ...prev,
+                        [timingConfigSelectedMode]: {
+                          ...prev[timingConfigSelectedMode],
+                          fadeDurationSeconds: val
+                        }
+                      }));
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost rounded-xl font-bold"
+                onClick={() => setTimingDraftConfig(timingConfig)}
+                disabled={busy}
+              >
+                변경 취소
+              </button>
+              <button
+                type="submit"
+                className="btn btn-sm btn-primary rounded-xl font-bold"
+                disabled={busy}
+              >
+                설정 업데이트 저장
+              </button>
+            </div>
+          </form>
+        )}
       </BaseCard>
 
       <BaseCard className="mt-6 border-2 border-info/25">

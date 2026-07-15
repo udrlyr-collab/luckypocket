@@ -1,0 +1,1 @@
+import ResourcePage from"../../components/ResourcePage";export default function Page(){return <ResourcePage title="종목" eyebrow="STOCKS" endpoint="/api/stocks?page=1&pageSize=100" description="120개 가상 종목을 페이지 단위로 조회합니다."/>}

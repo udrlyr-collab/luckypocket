@@ -1,0 +1,1 @@
+import ResourcePage from"../../components/ResourcePage";export default function Page(){return <ResourcePage title="기업" eyebrow="CORPORATIONS" endpoint="/api/companies" description="재무, 성장성, 지배 주주와 기업가치를 확인합니다."/>}

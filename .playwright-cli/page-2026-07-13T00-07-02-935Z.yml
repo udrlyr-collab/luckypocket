@@ -1,0 +1,105 @@
+- generic [active] [ref=f2e1]:
+  - generic [ref=f2e2]:
+    - banner [ref=f2e3]:
+      - link "MARKET DOMINION 마켓 도미니언" [ref=f2e4] [cursor=pointer]:
+        - /url: /
+        - generic [ref=f2e5]: MARKET DOMINION
+        - text: 마켓 도미니언
+      - navigation [ref=f2e6]:
+        - link "시장" [ref=f2e7] [cursor=pointer]:
+          - /url: /market
+        - link "종목" [ref=f2e8] [cursor=pointer]:
+          - /url: /stocks
+        - link "포트폴리오" [ref=f2e9] [cursor=pointer]:
+          - /url: /portfolio
+        - link "주문" [ref=f2e10] [cursor=pointer]:
+          - /url: /orders
+        - link "레버리지" [ref=f2e11] [cursor=pointer]:
+          - /url: /leverage
+        - link "전략" [ref=f2e12] [cursor=pointer]:
+          - /url: /strategies
+        - link "기업" [ref=f2e13] [cursor=pointer]:
+          - /url: /companies
+        - link "M&A" [ref=f2e14] [cursor=pointer]:
+          - /url: /mna
+        - link "IPO" [ref=f2e15] [cursor=pointer]:
+          - /url: /ipos
+        - link "뉴스" [ref=f2e16] [cursor=pointer]:
+          - /url: /news
+        - link "리더보드" [ref=f2e17] [cursor=pointer]:
+          - /url: /leaderboard
+        - link "관리자" [ref=f2e18] [cursor=pointer]:
+          - /url: /admin
+      - generic [ref=f2e19]:
+        - link "관리자" [ref=f2e20] [cursor=pointer]:
+          - /url: /profile
+        - button "로그아웃" [ref=f2e21] [cursor=pointer]
+    - generic [ref=f2e22]:
+      - generic [ref=f2e24]:
+        - text: ADMIN ONLY
+        - heading "관리자 대시보드" [level=1] [ref=f2e25]
+        - paragraph [ref=f2e26]: 모든 변경은 관리자 ID·대상·메타데이터와 함께 감사 로그에 기록됩니다.
+      - generic [ref=f2e27]:
+        - article [ref=f2e28]:
+          - text: 열린 주문
+          - strong [ref=f2e29]: —
+        - article [ref=f2e30]:
+          - text: 최근 5분 체결
+          - strong [ref=f2e31]: —
+        - article [ref=f2e32]:
+          - text: 실패 작업
+          - strong [ref=f2e33]: —
+        - article [ref=f2e34]:
+          - text: WebSocket
+          - strong [ref=f2e35]: —
+        - generic [ref=f2e36]:
+          - heading "자산 조정" [level=2] [ref=f2e37]
+          - generic [ref=f2e38]:
+            - generic [ref=f2e39]:
+              - text: 사용자 ID
+              - textbox "사용자 ID" [ref=f2e40]
+            - generic [ref=f2e41]:
+              - generic [ref=f2e42]:
+                - text: 증감액
+                - textbox "증감액" [ref=f2e43]
+              - generic [ref=f2e44]:
+                - text: 사유
+                - textbox "사유" [ref=f2e45]
+            - button "감사 기록 후 조정" [ref=f2e46] [cursor=pointer]
+        - generic [ref=f2e47]:
+          - heading "종목 생성" [level=2] [ref=f2e48]
+          - generic [ref=f2e49]:
+            - generic [ref=f2e50]:
+              - text: 기업 ID
+              - textbox "기업 ID" [ref=f2e51]
+            - generic [ref=f2e52]:
+              - generic [ref=f2e53]:
+                - text: Symbol
+                - textbox "Symbol" [ref=f2e54]
+              - generic [ref=f2e55]:
+                - text: 현재가
+                - textbox "현재가" [ref=f2e56]
+            - generic [ref=f2e57]:
+              - generic [ref=f2e58]:
+                - text: 총주식
+                - textbox "총주식" [ref=f2e59]
+              - generic [ref=f2e60]:
+                - text: 유통주식
+                - textbox "유통주식" [ref=f2e61]
+            - generic [ref=f2e62]:
+              - text: 틱
+              - textbox "틱" [ref=f2e63]: "1"
+            - button "종목 생성" [ref=f2e64] [cursor=pointer]
+        - generic [ref=f2e65]:
+          - heading "사용자" [level=2] [ref=f2e66]
+          - table [ref=f2e67]:
+            - rowgroup [ref=f2e68]:
+              - row [ref=f2e69]:
+                - columnheader "사용자" [ref=f2e70]
+                - columnheader "이메일" [ref=f2e71]
+                - columnheader "현금" [ref=f2e72]
+                - columnheader "상태" [ref=f2e73]
+                - columnheader "제어" [ref=f2e74]
+            - rowgroup
+        - heading "의심 거래·보안 이벤트" [level=2] [ref=f2e76]
+  - alert [ref=f2e77]

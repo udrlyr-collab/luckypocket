@@ -106,7 +106,7 @@ export default function HomePage() {
   const todayProfit = Number(user.todayProfit || 0);
   const isLowBalance = user.assetValuationComplete !== false && user.totalEvaluatedAsset < 500000;
   const latestNewsItems = notifications.slice(0, 2);
-  const quickGameEntries = ["risk-button", "bomb-dodge", "slot", "cup"]
+  const quickGameEntries = ["risk-button", "bomb-dodge", "slot", "cup", "timing"]
     .map((key) => [key, gameMeta[key]])
     .filter(([, game]) => Boolean(game));
   const completedMissionCount = dailyMissions.filter((mission) => mission.completed).length;

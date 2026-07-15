@@ -1,0 +1,41 @@
+- generic [active] [ref=f1e1]:
+  - alert [ref=f1e45]
+  - generic [ref=f1e56]:
+    - banner [ref=f1e57]:
+      - link "MARKET DOMINION 마켓 도미니언" [ref=f1e58] [cursor=pointer]:
+        - /url: /
+        - generic [ref=f1e59]: MARKET DOMINION
+        - text: 마켓 도미니언
+      - navigation [ref=f1e60]:
+        - link "시장" [ref=f1e61] [cursor=pointer]:
+          - /url: /market
+        - link "종목" [ref=f1e62] [cursor=pointer]:
+          - /url: /stocks
+        - link "포트폴리오" [ref=f1e63] [cursor=pointer]:
+          - /url: /portfolio
+        - link "주문" [ref=f1e64] [cursor=pointer]:
+          - /url: /orders
+        - link "레버리지" [ref=f1e65] [cursor=pointer]:
+          - /url: /leverage
+        - link "전략" [ref=f1e66] [cursor=pointer]:
+          - /url: /strategies
+        - link "기업" [ref=f1e67] [cursor=pointer]:
+          - /url: /companies
+        - link "M&A" [ref=f1e68] [cursor=pointer]:
+          - /url: /mna
+        - link "IPO" [ref=f1e69] [cursor=pointer]:
+          - /url: /ipos
+        - link "뉴스" [ref=f1e70] [cursor=pointer]:
+          - /url: /news
+        - link "리더보드" [ref=f1e71] [cursor=pointer]:
+          - /url: /leaderboard
+      - generic [ref=f1e72]:
+        - link "스모크유저" [ref=f1e73] [cursor=pointer]:
+          - /url: /profile
+        - button "로그아웃" [ref=f1e74] [cursor=pointer]
+    - generic [ref=f1e75]:
+      - generic [ref=f1e77]:
+        - text: STOCKS
+        - heading "종목" [level=1] [ref=f1e78]
+        - paragraph [ref=f1e79]: 120개 가상 종목의 실제 체결 가격입니다.
+      - generic [ref=f1e80]: pagination 값이 올바르지 않습니다.

@@ -1,0 +1,1 @@
+import ResourcePage from"../../components/ResourcePage";export default function Page(){return <ResourcePage title="시장 뉴스" eyebrow="NEWSWIRE" endpoint="/api/news" description="기업 이벤트와 시장에 반영되는 공시입니다."/>}

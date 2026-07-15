@@ -187,6 +187,44 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_cup_game_rounds_one_active
     ON cup_game_rounds(user_id) WHERE status = 'awaiting_pick';
 
+  CREATE TABLE IF NOT EXISTS timing_game_rounds (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    season_id INTEGER REFERENCES seasons(id) ON DELETE SET NULL,
+    season_number INTEGER,
+    mode_seconds INTEGER NOT NULL,
+    target_time_ms INTEGER NOT NULL,
+    fail_window_ms INTEGER NOT NULL,
+    max_multiplier REAL NOT NULL,
+    curve_power REAL NOT NULL,
+    bet_amount INTEGER NOT NULL CHECK (bet_amount >= 1000),
+    starts_at TEXT NOT NULL,
+    stop_received_at TEXT,
+    latency_compensation_ms INTEGER,
+    client_elapsed_ms INTEGER,
+    server_elapsed_ms INTEGER,
+    absolute_error_ms INTEGER,
+    multiplier REAL,
+    gross_payout INTEGER,
+    gross_profit INTEGER,
+    prize_contribution INTEGER NOT NULL DEFAULT 0,
+    final_payout INTEGER,
+    status TEXT NOT NULL DEFAULT 'waiting_start' CHECK (status IN ('waiting_start', 'running', 'stopping', 'settled', 'expired', 'cancelled')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    settled_at TEXT,
+    expired_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_timing_game_rounds_user_created
+    ON timing_game_rounds(user_id, created_at DESC);
+
+  CREATE INDEX IF NOT EXISTS idx_timing_game_rounds_season
+    ON timing_game_rounds(season_id, status);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_timing_game_rounds_one_active
+    ON timing_game_rounds(user_id) 
+    WHERE status IN ('waiting_start', 'running', 'stopping');
+
   CREATE TABLE IF NOT EXISTS game_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

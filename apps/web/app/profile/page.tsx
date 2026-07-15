@@ -1,0 +1,1 @@
+import JsonPage from"../../components/JsonPage";export default function Page(){return <JsonPage title="프로필과 통계" eyebrow="PLAYER" endpoint="/api/profile" description="완료 valuation snapshot과 활동 통계입니다."/>}

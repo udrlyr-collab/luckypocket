@@ -42,12 +42,17 @@ export const ACHIEVEMENTS = [
   { key: "all_games_10", title: "균형 잡힌 플레이어", description: "6개 게임을 모두 10회 이상 플레이", reward: 2000000 },
   { key: "loss_recovery", title: "손실 복구왕", description: "누적 손실 1,000,000원 이후 게임 순수익 플러스 전환", reward: 1500000 },
   { key: "daily_play", title: "오늘도 출석", description: "오늘 첫 게임 플레이", reward: 50000, repeatable: true },
+  { key: "timing_first", title: "첫 번째 감각", description: "시간 감각을 처음 플레이", reward: 50000 },
+  { key: "timing_accuracy_10", title: "백분의 감각", description: "오차 0.10초 이하 성공", reward: 250000 },
+  { key: "timing_accuracy_02", title: "찰나의 달인", description: "오차 0.02초 이하 성공", reward: 2000000 },
+  { key: "timing_mode_60_clear", title: "긴 기다림", description: "60초 모드 성공", reward: 500000 },
+  { key: "timing_mode_60_4x", title: "시간을 지배한 자", description: "60초 모드에서 4배 이상 획득", reward: 3000000 },
 ];
 
 const ONE_TIME_KEYS = new Set(
   ACHIEVEMENTS.filter((achievement) => !achievement.repeatable).map((achievement) => achievement.key),
 );
-const GAME_TYPES = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+const GAME_TYPES = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup", "timing"];
 
 function getSeoulDate(database) {
   return database.prepare("SELECT date('now', '+9 hours') AS value").get().value;
@@ -158,6 +163,11 @@ function qualifies(key, { database, userId, user, stats, context, totalEvaluated
     case "all_games_10": return GAME_TYPES.every((gameType) => gameCount(gameType) >= 10);
     case "loss_recovery": return stats.total_loss >= 1000000 && stats.net_profit > 0;
     case "daily_play": return context.gameCompleted === true;
+    case "timing_first": return gameCount("timing") >= 1;
+    case "timing_accuracy_10": return context.gameType === "timing" && context.won && context.absoluteErrorMs <= 100;
+    case "timing_accuracy_02": return context.gameType === "timing" && context.won && context.absoluteErrorMs <= 20;
+    case "timing_mode_60_clear": return context.gameType === "timing" && context.won && context.modeSeconds === 60;
+    case "timing_mode_60_4x": return context.gameType === "timing" && context.won && context.modeSeconds === 60 && context.multiplier >= 4.0;
     default:
       return false;
   }

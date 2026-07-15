@@ -41,6 +41,13 @@ export const gameMeta = {
     summary: "컵 하나를 골라 숨은 행운의 공을 찾아요.",
     color: "bg-primary/10",
   },
+  timing: {
+    path: "/games/timing",
+    icon: "⏱️",
+    title: "시간 감각",
+    summary: "타이머가 사라진 뒤 감각만으로 목표 시간을 맞춰보세요.",
+    color: "bg-teal-100",
+  },
 };
 
 export const riskStages = [

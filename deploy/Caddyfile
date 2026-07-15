@@ -1,0 +1,68 @@
+{$DOMAIN:market.wondering.kr} {
+  encode zstd gzip
+
+  @api_health path /api/health /api/health/*
+  handle @api_health {
+    uri strip_prefix /api
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  @api {
+    path /api/*
+    not path /api/health /api/health/*
+  }
+  handle @api {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  @health path /health /health/*
+  handle @health {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  @websocket path /socket.io/* /market/*
+  handle @websocket {
+    reverse_proxy 127.0.0.1:4000
+  }
+
+  handle {
+    reverse_proxy 127.0.0.1:3000
+  }
+
+  header {
+    X-Content-Type-Options nosniff
+    Referrer-Policy strict-origin-when-cross-origin
+    X-Frame-Options SAMEORIGIN
+    Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    -Server
+  }
+
+  log {
+    output stdout
+    format json
+  }
+}
+
+gamble.wondering.kr {
+  reverse_proxy 127.0.0.1:3001
+  log {
+    output stdout
+    format json
+  }
+}
+
+letters.wondering.kr {
+  reverse_proxy 127.0.0.1:5175
+  log {
+    output stdout
+    format json
+  }
+}
+
+wondering.kr, www.wondering.kr, admin.wondering.kr {
+  reverse_proxy 127.0.0.1:5174
+  log {
+    output stdout
+    format json
+  }
+}

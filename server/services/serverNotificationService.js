@@ -10,6 +10,7 @@ export const GAME_NAMES = {
   "mine": "탄광",
   "bonus_code": "행운코드",
   "achievement": "업적",
+  "timing": "시간 감각",
 };
 
 export function createServerNotification(database, {
@@ -97,6 +98,51 @@ export function createGameNotification(database, {
       title: "컵 속 행운 8배 당첨",
       message: `${user.nickname}님이 컵 속 행운 8개 도전에 성공해 8배 당첨금을 획득했어요!`,
     };
+  } else if (gameType === "timing") {
+    const errorSec = detail.absoluteErrorMs / 1000;
+    if (detail.absoluteErrorMs <= 20) {
+      notification = {
+        type: "jackpot",
+        title: "완벽한 감각",
+        message: `${user.nickname}님이 시간 감각 ${detail.modeSeconds}초 모드에서 ${errorSec.toFixed(2)}초 오차로 완벽한 기록을 세웠어요!`,
+      };
+    } else if (detail.modeSeconds === 60 && multiplier >= 4) {
+      notification = {
+        type: "high_multiplier",
+        title: "시간 지배자",
+        message: `${user.nickname}님이 시간 감각 60초 모드에서 ${Number(multiplier.toFixed(2))}배 보상을 획득해 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
+      };
+    } else {
+      // 3회 연속 오차 0.10초 이하 판정
+      const prior = database.prepare(
+        "SELECT detail_json FROM game_logs WHERE user_id = ? AND game_type = 'timing' ORDER BY id DESC LIMIT 2"
+      ).all(user.id);
+      
+      let isStreak3 = false;
+      if (detail.absoluteErrorMs <= 100 && prior.length === 2) {
+        try {
+          const p0 = JSON.parse(prior[0].detail_json);
+          const p1 = JSON.parse(prior[1].detail_json);
+          if (p0.absoluteErrorMs <= 100 && p1.absoluteErrorMs <= 100) {
+            isStreak3 = true;
+          }
+        } catch {}
+      }
+
+      if (isStreak3) {
+        notification = {
+          type: "high_multiplier",
+          title: "초인적인 감각",
+          message: `${user.nickname}님이 시간 감각에서 3회 연속 오차 0.10초 이하를 기록해 대단한 능력을 보여줬어요!`,
+        };
+      } else if (profit >= 1000000) {
+        notification = {
+          type: "big_win",
+          title: "큰 행운 도착",
+          message: `${user.nickname}님이 시간 감각에서 순수익 ${formatWon(profit)}을(를) 획득했어요!`,
+        };
+      }
+    }
   } else if (multiplier >= 10) {
     notification = {
       type: "high_multiplier",

@@ -1,0 +1,1 @@
+import ResourcePage from"../../components/ResourcePage";export default function Page(){return <ResourcePage title="리더보드" eyebrow="RANKING" endpoint="/api/leaderboard" description="완료된 valuation snapshot 기준 총평가자산 순위입니다."/>}

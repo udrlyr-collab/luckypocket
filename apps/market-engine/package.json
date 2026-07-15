@@ -1,0 +1,30 @@
+{
+  "name": "@market-dominion/market-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@market-dominion/database": "workspace:*",
+    "@market-dominion/domain": "workspace:*",
+    "bullmq": "5.80.2",
+    "ioredis": "5.11.1",
+    "pg": "8.22.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.4",
+    "@types/node": "24.10.1",
+    "@types/pg": "8.20.0",
+    "pglite-server": "0.1.5",
+    "tsx": "4.23.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

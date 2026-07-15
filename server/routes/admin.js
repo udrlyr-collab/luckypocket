@@ -6,6 +6,11 @@ import { findUserByNickname, validateNickname } from "../services/nicknameServic
 import { delistStock, manuallyAdjustStockPrice } from "../services/stockService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
 import { achievementCount } from "../services/achievementService.js";
+import {
+  getTimingGameStats,
+  getTimingGameConfig,
+  updateTimingGameConfig,
+} from "../services/timingGameService.js";
 import { parseAdminResetTargets } from "../services/adminResetPolicy.js";
 import {
   parseAdminUserIds,
@@ -1144,7 +1149,7 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
 });
 
 adminRouter.get("/games/status", (req, res) => {
-  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup", "timing"];
   const suspended = {};
   for (const game of games) {
     const row = db.prepare("SELECT value FROM system_config WHERE key = ?").get(`game_suspended_${game}`);
@@ -1155,7 +1160,7 @@ adminRouter.get("/games/status", (req, res) => {
 
 adminRouter.post("/games/:gameType/suspend", (req, res) => {
   const { gameType } = req.params;
-  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup", "timing"];
   if (!games.includes(gameType)) {
     return res.status(400).json({ message: "올바르지 않은 게임 유형입니다." });
   }
@@ -1175,7 +1180,7 @@ adminRouter.post("/games/:gameType/suspend", (req, res) => {
 
 adminRouter.post("/games/:gameType/resume", (req, res) => {
   const { gameType } = req.params;
-  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup", "timing"];
   if (!games.includes(gameType)) {
     return res.status(400).json({ message: "올바르지 않은 게임 유형입니다." });
   }
@@ -1267,3 +1272,32 @@ adminRouter.post("/users/:userId/resume", (req, res) => {
 
   return res.json({ message: "사용자 정지를 해제했습니다." });
 });
+
+// === 시간 감각 관리자 통계 및 설정 API ===
+adminRouter.get("/games/timing/stats", (req, res, next) => {
+  try {
+    const stats = getTimingGameStats(db);
+    return res.json(stats);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/games/timing/settings", (req, res, next) => {
+  try {
+    const config = getTimingGameConfig(db);
+    return res.json(config);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/games/timing/settings", (req, res, next) => {
+  try {
+    const updated = updateTimingGameConfig(db, req.user.id, req.body);
+    return res.json({ message: "시간 감각 게임 설정을 업데이트했습니다.", config: updated });
+  } catch (error) {
+    return next(error);
+  }
+});
+

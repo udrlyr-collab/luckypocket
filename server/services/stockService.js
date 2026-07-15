@@ -1487,20 +1487,21 @@ export function resolveDueHostileTakeovers(db, nowMs = Date.now()) {
 export function tickStockMarket(db) {
   try {
     nextTickAt = Date.now() + STOCK_TICK_INTERVAL_MS;
-    db.transaction(() => {
+    // Phase 1: Price tick — keep this in one transaction
+    const stocks = db.transaction(() => {
       const now = Date.now();
       runDailyUnluckyScheduler(db, now);
       resolveDueHostileTakeovers(db, now);
-      if (!isStockMarketOpen(db)) return;
+      if (!isStockMarketOpen(db)) return [];
       const marketRegime = ensureMarketRegime(db, now);
       releaseExpiredTradingHalts(db, now);
       processCorporateEvents(db, now);
       maybeCreateSectorEvent(db, now);
-      const stocks = db
+      const allStocks = db
         .prepare("SELECT * FROM stocks WHERE status != 'delisted' ORDER BY id ASC")
         .all();
       const usedSymbols = new Set();
-      for (const stock of stocks) {
+      for (const stock of allStocks) {
         if (stock.is_trading_suspended) continue;
         if (isOwnerAssetEtf(stock)) {
           continue;
@@ -1531,20 +1532,45 @@ export function tickStockMarket(db) {
           processNormalTick(db, stock, usedSymbols, { marketRegime });
         }
       }
-
-      // Owner ETF prices are calculated only after every non-ETF price is
-      // settled. The cycle reads the previous completed owner snapshots, so
-      // ETF cross-holdings cannot recursively inflate one another.
-      runOwnerEtfValuationCycle(db, { nowMs: now });
-
-      if (now - lastDelistCandidateEventAt >= 300_000) {
-        lastDelistCandidateEventAt = now;
-        for (const candidate of stocks) evaluateCompanyDistressRisk(db, candidate, now);
-      }
-
-      liquidatePositionsIfNeeded(db);
-      triggerStockPriceAlerts(db);
+      return allStocks;
     })();
+
+    // Phase 2: Owner ETF valuation — separate transaction (heavy, reads all user assets)
+    // Owner ETF prices are calculated only after every non-ETF price is
+    // settled. The cycle reads the previous completed owner snapshots, so
+    // ETF cross-holdings cannot recursively inflate one another.
+    try {
+      runOwnerEtfValuationCycle(db, { nowMs: Date.now() });
+    } catch (etfErr) {
+      console.error("[CRITICAL] Error in runOwnerEtfValuationCycle:", etfErr);
+    }
+
+    // Phase 3: Distress risk evaluation — separate transaction
+    const now = Date.now();
+    if (stocks && stocks.length > 0 && now - lastDelistCandidateEventAt >= 300_000) {
+      try {
+        lastDelistCandidateEventAt = now;
+        db.transaction(() => {
+          for (const candidate of stocks) evaluateCompanyDistressRisk(db, candidate, now);
+        })();
+      } catch (distressErr) {
+        console.error("[CRITICAL] Error in evaluateCompanyDistressRisk:", distressErr);
+      }
+    }
+
+    // Phase 4: Liquidation check — separate transaction
+    try {
+      liquidatePositionsIfNeeded(db);
+    } catch (liqErr) {
+      console.error("[CRITICAL] Error in liquidatePositionsIfNeeded:", liqErr);
+    }
+
+    // Phase 5: Price alerts — separate transaction
+    try {
+      triggerStockPriceAlerts(db);
+    } catch (alertErr) {
+      console.error("[CRITICAL] Error in triggerStockPriceAlerts:", alertErr);
+    }
   } catch (error) {
     console.error("[CRITICAL] Error in tickStockMarket:", error);
   }

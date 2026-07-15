@@ -43,6 +43,12 @@ import {
   pickCupRound,
   startCupRound,
 } from "../services/cupGameService.js";
+import {
+  startTimingRound,
+  stopTimingRound,
+  getActiveTimingRound,
+  getTimingRound,
+} from "../services/timingGameService.js";
 
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
@@ -54,7 +60,8 @@ const GAME_TYPE_MAPPING = {
   "/card-draw/": "card-draw",
   "/bomb-dodge/": "bomb-dodge",
   "/slot/": "slot",
-  "/dart/": "dart"
+  "/dart/": "dart",
+  "/timing/": "timing"
 };
 
 function checkGameSuspended(req, res, next) {
@@ -80,7 +87,7 @@ function checkGameSuspended(req, res, next) {
 gamesRouter.use(checkGameSuspended);
 
 gamesRouter.get("/status", (req, res) => {
-  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup", "timing"];
   const suspended = {};
   for (const game of games) {
     const row = db.prepare("SELECT value FROM system_config WHERE key = ?").get(`game_suspended_${game}`);
@@ -678,6 +685,58 @@ gamesRouter.post("/dart/play", (req, res, next) => {
       });
     });
     return res.json(play());
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// === 시간 감각 게임 API ===
+
+gamesRouter.post("/timing/start", (req, res, next) => {
+  try {
+    const { modeSeconds, betAmount } = req.body;
+    const result = startTimingRound(db, {
+      userId: req.user.id,
+      modeSeconds: Number(modeSeconds),
+      betAmount: Number(betAmount),
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.post("/timing/stop", (req, res, next) => {
+  try {
+    const { roundId, clientElapsedMs, clientRttMs } = req.body;
+    const result = stopTimingRound(db, {
+      userId: req.user.id,
+      roundId,
+      clientElapsedMs: Number(clientElapsedMs),
+      clientRttMs: Number(clientRttMs || 0),
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.get("/timing/rounds/current", (req, res, next) => {
+  try {
+    const round = getActiveTimingRound(db, { userId: req.user.id });
+    return res.json({ round });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+gamesRouter.get("/timing/rounds/:roundId", (req, res, next) => {
+  try {
+    const round = getTimingRound(db, {
+      userId: req.user.id,
+      roundId: req.params.roundId,
+    });
+    return res.json({ round });
   } catch (error) {
     return next(error);
   }

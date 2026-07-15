@@ -1,0 +1,56 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e45]
+  - generic [ref=e56]:
+    - banner [ref=e57]:
+      - link "MARKET DOMINION 마켓 도미니언" [ref=e58] [cursor=pointer]:
+        - /url: /
+        - generic [ref=e59]: MARKET DOMINION
+        - text: 마켓 도미니언
+      - navigation [ref=e60]:
+        - link "시장" [ref=e61] [cursor=pointer]:
+          - /url: /market
+        - link "종목" [ref=e62] [cursor=pointer]:
+          - /url: /stocks
+        - link "포트폴리오" [ref=e63] [cursor=pointer]:
+          - /url: /portfolio
+        - link "주문" [ref=e64] [cursor=pointer]:
+          - /url: /orders
+        - link "레버리지" [ref=e65] [cursor=pointer]:
+          - /url: /leverage
+        - link "전략" [ref=e66] [cursor=pointer]:
+          - /url: /strategies
+        - link "기업" [ref=e67] [cursor=pointer]:
+          - /url: /companies
+        - link "M&A" [ref=e68] [cursor=pointer]:
+          - /url: /mna
+        - link "IPO" [ref=e69] [cursor=pointer]:
+          - /url: /ipos
+        - link "뉴스" [ref=e70] [cursor=pointer]:
+          - /url: /news
+        - link "리더보드" [ref=e71] [cursor=pointer]:
+          - /url: /leaderboard
+      - generic [ref=e72]:
+        - link "로그인" [ref=e73] [cursor=pointer]:
+          - /url: /auth/login
+        - link "가입" [ref=e74] [cursor=pointer]:
+          - /url: /auth/register
+    - generic [ref=e76]:
+      - generic [ref=e78]:
+        - text: ACCOUNT
+        - heading "회원가입" [level=1] [ref=e79]
+        - paragraph [ref=e80]: 가상 경제 원장에 안전하게 접속합니다.
+      - generic [ref=e82]:
+        - generic [ref=e83]:
+          - text: 이메일
+          - textbox "이메일" [ref=e84]
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - text: 사용자명
+            - textbox "사용자명" [ref=e87]
+          - generic [ref=e88]:
+            - text: 닉네임
+            - textbox "닉네임" [ref=e89]
+        - generic [ref=e90]:
+          - text: 비밀번호
+          - textbox "비밀번호" [ref=e91]
+        - button "계정 생성" [ref=e92] [cursor=pointer]

@@ -1,0 +1,67 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - banner [ref=f1e3]:
+      - link "MARKET DOMINION 마켓 도미니언" [ref=f1e4] [cursor=pointer]:
+        - /url: /
+        - generic [ref=f1e5]: MARKET DOMINION
+        - text: 마켓 도미니언
+      - navigation [ref=f1e6]:
+        - link "시장" [ref=f1e7] [cursor=pointer]:
+          - /url: /market
+        - link "종목" [ref=f1e8] [cursor=pointer]:
+          - /url: /stocks
+        - link "포트폴리오" [ref=f1e9] [cursor=pointer]:
+          - /url: /portfolio
+        - link "주문" [ref=f1e10] [cursor=pointer]:
+          - /url: /orders
+        - link "레버리지" [ref=f1e11] [cursor=pointer]:
+          - /url: /leverage
+        - link "전략" [ref=f1e12] [cursor=pointer]:
+          - /url: /strategies
+        - link "기업" [ref=f1e13] [cursor=pointer]:
+          - /url: /companies
+        - link "M&A" [ref=f1e14] [cursor=pointer]:
+          - /url: /mna
+        - link "IPO" [ref=f1e15] [cursor=pointer]:
+          - /url: /ipos
+        - link "뉴스" [ref=f1e16] [cursor=pointer]:
+          - /url: /news
+        - link "리더보드" [ref=f1e17] [cursor=pointer]:
+          - /url: /leaderboard
+      - generic [ref=f1e18]:
+        - link "스모크유저" [ref=f1e19] [cursor=pointer]:
+          - /url: /profile
+        - button "로그아웃" [ref=f1e20] [cursor=pointer]
+    - generic [ref=f1e21]:
+      - generic [ref=f1e22]:
+        - generic [ref=f1e23]:
+          - text: LIVE VIRTUAL ECONOMY
+          - heading "시장을 움직이고 기업을 지배하세요." [level=1] [ref=f1e24]: 시장을 움직이고기업을 지배하세요.
+          - paragraph [ref=f1e25]: 실제 주문장 체결, 유한 유동성, 기업 경영, 적대적 M&A가 하나의 영속적인 가상 경제에서 연결됩니다.
+          - generic [ref=f1e26]:
+            - link "거래 시작" [ref=f1e27] [cursor=pointer]:
+              - /url: /stocks
+            - link "시장 국면 보기" [ref=f1e28] [cursor=pointer]:
+              - /url: /market
+        - generic [ref=f1e29]: 시장 데이터를 불러오는 중입니다.
+      - generic [ref=f1e30]:
+        - article [ref=f1e31]:
+          - text: 시장 국면
+          - strong [ref=f1e32]: 분석 중
+        - article [ref=f1e33]:
+          - text: 상장 종목
+          - strong [ref=f1e34]: —
+        - article [ref=f1e35]:
+          - text: 평균 수익률
+          - strong [ref=f1e36]: —
+        - article [ref=f1e37]:
+          - text: 시장 상태
+          - strong [ref=f1e38]: 실시간
+        - article [ref=f1e39]:
+          - text: MARKET PULSE
+          - heading "호가 체결 기반 시장" [level=2] [ref=f1e40]
+        - article [ref=f1e42]:
+          - text: SYSTEM
+          - heading "실제 자산·주식 이전" [level=2] [ref=f1e43]
+          - paragraph [ref=f1e44]: 주문, 레버리지, 경영 액션, 공개매수와 자동매매가 동일한 PostgreSQL 원장과 거래 엔진을 사용합니다.
+  - alert [ref=f1e45]

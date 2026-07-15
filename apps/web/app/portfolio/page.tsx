@@ -1,0 +1,1 @@
+import ResourcePage from"../../components/ResourcePage";export default function Page(){return <ResourcePage title="포트폴리오" eyebrow="ASSET" endpoint="/api/portfolio" itemsKey="holdings" description="호가 깊이로 계산한 청산 가능 가치입니다."/>}
