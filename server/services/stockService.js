@@ -1894,7 +1894,8 @@ function updateStockPrice(
   basis = "previous_tick",
   { manageDelistRisk = true } = {},
 ) {
-  const newCap = newPrice * stock.total_shares;
+  const rawCap = newPrice * Number(stock.total_shares || 0);
+  const newCap = Number.isFinite(rawCap) && rawCap > 0 ? rawCap : Number(stock.market_cap || 0);
   
   db.prepare(`
     UPDATE stocks 
