@@ -22,8 +22,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 8,
     targetMaxSeconds: 12,
     failWindowSeconds: 0.65,
-    maxMultiplier: 2.20,
-    curvePower: 4.0,
+    maxMultiplier: 2.60,
+    curvePower: 3.8,
     maxBetCashRate: 0.30
   },
   15: {
@@ -31,8 +31,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 13,
     targetMaxSeconds: 17,
     failWindowSeconds: 0.75,
-    maxMultiplier: 2.70,
-    curvePower: 4.4,
+    maxMultiplier: 3.80,
+    curvePower: 4.0,
     maxBetCashRate: 0.28
   },
   20: {
@@ -40,8 +40,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 18,
     targetMaxSeconds: 22,
     failWindowSeconds: 0.85,
-    maxMultiplier: 3.20,
-    curvePower: 4.8,
+    maxMultiplier: 5.00,
+    curvePower: 4.4,
     maxBetCashRate: 0.25
   },
   30: {
@@ -49,8 +49,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 28,
     targetMaxSeconds: 32,
     failWindowSeconds: 1.05,
-    maxMultiplier: 4.50,
-    curvePower: 5.2,
+    maxMultiplier: 7.50,
+    curvePower: 4.8,
     maxBetCashRate: 0.20
   },
   45: {
@@ -58,8 +58,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 43,
     targetMaxSeconds: 47,
     failWindowSeconds: 1.25,
-    maxMultiplier: 6.00,
-    curvePower: 5.8,
+    maxMultiplier: 12.00,
+    curvePower: 5.2,
     maxBetCashRate: 0.15
   },
   60: {
@@ -67,8 +67,8 @@ const TIMING_GAME_MODES = {
     targetMinSeconds: 58,
     targetMaxSeconds: 62,
     failWindowSeconds: 1.50,
-    maxMultiplier: 8.00,
-    curvePower: 7.0,
+    maxMultiplier: 20.00,
+    curvePower: 6.0,
     maxBetCashRate: 0.10
   }
 };
