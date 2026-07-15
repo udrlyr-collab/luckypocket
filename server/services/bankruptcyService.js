@@ -67,7 +67,11 @@ export function getBankruptcyStatus(database, user, valuation = null) {
   let reason = "eligible";
   let message = "파산신청을 할 수 있어요.";
 
-  if (cooldownRemainingMs > 0) {
+  if (assetSnapshot.valuationComplete === false) {
+    eligible = false;
+    reason = "valuation_incomplete";
+    message = "총평가금액을 완전하게 계산할 수 없어 파산신청 자격을 확인할 수 없습니다.";
+  } else if (cooldownRemainingMs > 0) {
     eligible = false;
     reason = "cooldown";
     message = "파산신청은 24시간에 한 번만 사용할 수 있어요.";
@@ -82,7 +86,7 @@ export function getBankruptcyStatus(database, user, valuation = null) {
         "최근 송금한 금액이 있어 아직 파산신청할 수 없어요. 최근 24시간 내 보낸 송금액도 파산 판정에 포함돼요.";
     } else {
       reason = "asset_threshold";
-      message = "총 평가자산이 500,000원 미만일 때만 파산신청할 수 있어요.";
+      message = "총평가금액이 500,000원 미만일 때만 파산신청할 수 있어요.";
     }
   }
 
@@ -93,6 +97,8 @@ export function getBankruptcyStatus(database, user, valuation = null) {
     reason,
     message,
     totalEvaluatedAsset,
+    valuationComplete: assetSnapshot.valuationComplete !== false,
+    valuationErrors: assetSnapshot.valuationErrors || [],
     recentOutgoingTransferAmount,
     effectiveBankruptcyAsset,
     transferLookbackHours: BANKRUPTCY_POLICY.transferLookbackHours,

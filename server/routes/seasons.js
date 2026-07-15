@@ -25,16 +25,24 @@ function latestEndedTop3() {
   const top3 = db
     .prepare(
       `SELECT
-         user_id,
-         nickname_snapshot,
-         rank,
-         final_balance,
-         final_total_evaluated_asset,
-         starting_bonus_for_next_season
-       FROM season_results
-       WHERE season_id = ?
-         AND rank <= 3
-       ORDER BY rank ASC, final_total_evaluated_asset DESC`,
+         sr.user_id,
+         sr.nickname_snapshot,
+         sr.rank,
+         sr.final_balance,
+         sr.final_total_evaluated_asset,
+         sr.starting_bonus_for_next_season,
+         m.company_rank AS reward_company_rank,
+         COALESCE(target.name, source.name) AS reward_company_name,
+         COALESCE(target.symbol, source.symbol) AS reward_company_symbol,
+         m.action AS reward_action
+       FROM season_results sr
+       LEFT JOIN season_reward_mappings m
+         ON m.season_id = sr.season_id AND m.winner_user_id = sr.user_id
+       LEFT JOIN stocks source ON source.id = m.source_stock_id
+       LEFT JOIN stocks target ON target.id = m.target_etf_stock_id
+       WHERE sr.season_id = ?
+         AND sr.rank <= 3
+       ORDER BY sr.rank ASC, sr.final_total_evaluated_asset DESC`,
     )
     .all(season.id)
     .map((row) => ({
@@ -44,6 +52,10 @@ function latestEndedTop3() {
       finalBalance: row.final_balance,
       finalTotalEvaluatedAsset: row.final_total_evaluated_asset,
       startingBonusForNextSeason: row.starting_bonus_for_next_season,
+      rewardCompanyRank: row.reward_company_rank,
+      rewardCompanyName: row.reward_company_name,
+      rewardCompanySymbol: row.reward_company_symbol,
+      rewardAction: row.reward_action,
     }));
   return { season: serializeSeason(season), top3 };
 }
@@ -105,4 +117,3 @@ seasonsRouter.post("/notices/:noticeId/seen", (req, res) => {
   }
   return res.json({ ok: true });
 });
-

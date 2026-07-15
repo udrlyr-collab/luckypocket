@@ -254,20 +254,27 @@ function DateButton({ active, onClick, children }) {
 function primaryValue(ranking, type) {
   if (type === "achievements") return `${ranking.achievementCount.toLocaleString("ko-KR")}개 달성`;
   if (type === "games") return `${ranking.totalGames.toLocaleString("ko-KR")}판`;
+  if (ranking.assetValuationComplete === false) return <span className="text-error">평가 오류</span>;
   return <MoneyText value={ranking.balance} compact />;
+}
+
+function rankingWealthText(ranking) {
+  return ranking.assetValuationComplete === false
+    ? "평가 오류"
+    : formatCompactMoney(ranking.balance);
 }
 
 function secondaryStats(ranking, type) {
   if (type === "achievements") {
     return [
-      ["현재 자산", formatCompactMoney(ranking.balance)],
+      ["총평가금액", rankingWealthText(ranking)],
       ["게임", `${ranking.totalGames.toLocaleString("ko-KR")}판`],
       ["파산 횟수", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];
   }
   if (type === "games") {
     return [
-      ["현재 자산", formatCompactMoney(ranking.balance)],
+      ["총평가금액", rankingWealthText(ranking)],
       ["업적", `${ranking.achievementCount.toLocaleString("ko-KR")}개`],
       ["파산 횟수", `${ranking.bankruptcyCount.toLocaleString("ko-KR")}회`],
     ];

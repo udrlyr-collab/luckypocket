@@ -20,8 +20,60 @@ function stockExcluded(stockId, excluded) {
 function ownerAssetEtf(row) {
   return row.is_etf === 1 && (
     row.etf_tracking_type === "owner_asset" ||
-    (row.etf_tracking_type === undefined && row.owner_user_id !== null && row.owner_user_id !== undefined)
+    (row.etf_tracking_type == null && row.owner_user_id !== null && row.owner_user_id !== undefined)
   );
+}
+
+function resolveValuationPrice(database, row) {
+  if (row.status === "delisted") {
+    return { price: 0, source: "delisted" };
+  }
+  const currentPrice = Math.floor(numeric(row.current_price));
+  if (currentPrice > 0) {
+    return { price: currentPrice, source: "current_price" };
+  }
+
+  const recentTrade = database.prepare(`
+    SELECT price
+    FROM stock_trades
+    WHERE stock_id = ?
+      AND price > 0
+      AND trade_type IN ('buy', 'sell')
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(row.stock_id);
+  if (Number(recentTrade?.price) > 0) {
+    return { price: Math.floor(Number(recentTrade.price)), source: "recent_normal_trade" };
+  }
+
+  const recentHistory = database.prepare(`
+    SELECT price
+    FROM stock_price_history
+    WHERE stock_id = ?
+      AND price > 0
+      AND COALESCE(event_type, '') NOT IN ('final_crash', 'delisted')
+    ORDER BY id DESC
+    LIMIT 1
+  `).get(row.stock_id);
+  if (Number(recentHistory?.price) > 0) {
+    return { price: Math.floor(Number(recentHistory.price)), source: "recent_normal_history" };
+  }
+
+  const snapshotPrice = Math.floor(numeric(row.daily_anchor_price));
+  if (snapshotPrice > 0) {
+    return { price: snapshotPrice, source: "last_normal_snapshot" };
+  }
+
+  return {
+    price: null,
+    source: "unavailable",
+    error: {
+      code: "STOCK_VALUATION_PRICE_UNAVAILABLE",
+      stockId: Number(row.stock_id),
+      symbol: row.symbol || null,
+      message: `${row.name || row.symbol || `#${row.stock_id}`}의 정상 평가 가격을 찾을 수 없습니다.`,
+    },
+  };
 }
 
 function allocateEstimatedTaxes(items, totalTax) {
@@ -57,10 +109,13 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
       estimatedLeverageCloseFees: 0,
       estimatedLeverageTaxes: 0,
       leverageNetSettlementValue: 0,
+      otherEligibleAssetValue: 0,
       stockValue: 0,
       positionValue: 0,
       unrealizedPnl: 0,
       totalEvaluatedAsset: 0,
+      valuationComplete: false,
+      valuationErrors: [{ code: "USER_NOT_FOUND", userId: Number(userId) }],
       holdings: [],
       positions: [],
     };
@@ -72,9 +127,17 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
   );
   const excludeOwnEtfs = options.excludeOwnEtfs !== false;
   const excludeOwnerAssetEtfs = options.excludeOwnerAssetEtfs === true;
+  const stockColumns = new Set(
+    database.prepare("PRAGMA table_info(stocks)").all().map((column) => column.name),
+  );
+  const stockField = (name, fallback = "NULL") => (
+    stockColumns.has(name) ? `s.${name}` : `${fallback} AS ${name}`
+  );
 
   const holdingRows = database.prepare(`
-    SELECT h.*, s.current_price, s.status, s.is_etf, s.owner_user_id
+    SELECT h.*, ${stockField("name")}, ${stockField("symbol")}, s.current_price,
+           s.status, s.is_etf, s.owner_user_id, ${stockField("etf_tracking_type")},
+           ${stockField("daily_anchor_price")}
     FROM stock_holdings h
     JOIN stocks s ON s.id = h.stock_id
     WHERE h.user_id = ? AND h.quantity > 0
@@ -84,9 +147,10 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
     !(excludeOwnerAssetEtfs && ownerAssetEtf(row)),
   );
 
-  const positionRows = database.prepare(`
+  const positionRows = options.excludeAllPositions === true ? [] : database.prepare(`
     SELECT p.*, s.current_price, s.status, s.delist_risk_status, s.market_cap,
-           s.is_bluechip, s.is_etf, s.owner_user_id
+           s.is_bluechip, s.is_etf, s.owner_user_id, ${stockField("etf_tracking_type")},
+           ${stockField("name")}, ${stockField("symbol")}, ${stockField("daily_anchor_price")}
     FROM stock_positions p
     JOIN stocks s ON s.id = p.stock_id
     WHERE p.user_id = ? AND p.status = 'open'
@@ -96,9 +160,13 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
     !(excludeOwnerAssetEtfs && ownerAssetEtf(row)),
   );
 
+  const valuationErrors = [];
+
   const holdings = holdingRows.map((holding) => {
     const quantity = numeric(holding.quantity);
-    const currentPrice = holding.status === "delisted" ? 0 : numeric(holding.current_price);
+    const resolvedPrice = resolveValuationPrice(database, holding);
+    if (resolvedPrice.error) valuationErrors.push(resolvedPrice.error);
+    const currentPrice = resolvedPrice.price ?? 0;
     const totalCostBasis = getHoldingTotalCostBasis(holding);
     const beforeTax = calculateSpotSellSettlement({
       sellQuantity: quantity,
@@ -115,6 +183,7 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
       averagePrice: numeric(holding.average_price),
       totalCostBasis,
       currentPrice,
+      valuationPriceSource: resolvedPrice.source,
       grossMarketValue: beforeTax.grossSellAmount,
       estimatedSellFee: beforeTax.sellFee,
       proceedsAfterFee: beforeTax.proceedsAfterFee,
@@ -126,7 +195,9 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
   });
 
   const positions = positionRows.map((position) => {
-    const closePrice = position.status === "delisted" ? 0 : numeric(position.current_price);
+    const resolvedPrice = resolveValuationPrice(database, position);
+    if (resolvedPrice.error) valuationErrors.push(resolvedPrice.error);
+    const closePrice = resolvedPrice.price ?? 0;
     const outcome = calculateLeveragedPositionOutcome(position, position, closePrice);
     const beforeTax = outcome.liquidated
       ? {
@@ -149,6 +220,7 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
       leverage: numeric(position.leverage),
       marginAmount: numeric(position.margin_amount),
       currentPrice: closePrice,
+      valuationPriceSource: resolvedPrice.source,
       grossSettlementValue: Math.max(0, Math.floor(beforeTax.finalPayout || 0)),
       estimatedCloseFee: Math.max(0, Math.floor(beforeTax.closeFee || 0)),
       unrealizedProfitBeforeTax: Math.floor(beforeTax.realizedPnlBeforeTax || 0),
@@ -191,7 +263,19 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
   const estimatedLeverageTaxes = Math.floor(positions.reduce((sum, position) => sum + position.estimatedCapitalGainsTax, 0));
   const leverageNetSettlementValue = Math.floor(positions.reduce((sum, position) => sum + position.netSettlementValue, 0));
   const unrealizedPnl = Math.floor(taxableItems.reduce((sum, item) => sum + item.unrealizedProfitBeforeTax, 0));
-  const totalEvaluatedAsset = Math.max(0, cashBalance + stockNetLiquidationValue + leverageNetSettlementValue);
+  const otherEligibleAssetValue = Math.max(0, Math.floor(numeric(options.otherEligibleAssetValue)));
+  const totalEvaluatedAsset = Math.max(
+    0,
+    cashBalance + stockNetLiquidationValue + leverageNetSettlementValue + otherEligibleAssetValue,
+  );
+  const valuationComplete = valuationErrors.length === 0;
+
+  if (!valuationComplete && options.throwOnIncomplete === true) {
+    const error = new Error("총평가금액을 완전하게 계산할 수 없습니다.");
+    error.code = "INCOMPLETE_ASSET_VALUATION";
+    error.valuationErrors = valuationErrors;
+    throw error;
+  }
 
   return {
     cashBalance,
@@ -203,6 +287,7 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
     estimatedLeverageCloseFees,
     estimatedLeverageTaxes,
     leverageNetSettlementValue,
+    otherEligibleAssetValue,
     totalPositiveUnrealizedProfit,
     estimatedIncrementalTax: taxImpact.incrementalTax,
     taxLedger: ledger,
@@ -210,6 +295,8 @@ export function calculateUserTotalEvaluatedAsset(database, userId, options = {})
     positionValue: leverageNetSettlementValue,
     unrealizedPnl,
     totalEvaluatedAsset,
+    valuationComplete,
+    valuationErrors,
     holdings,
     positions,
   };
@@ -226,6 +313,7 @@ export function calculateOwnerEtfTrackingAsset(database, ownerUserId, excludedSt
     // Every owner-asset ETF is excluded. This prevents A owning B's ETF and
     // B owning A's ETF from feeding either ETF's next tracking value.
     excludeOwnerAssetEtfs: true,
+    excludeAllPositions: true,
   });
   return Math.max(1, valuation.totalEvaluatedAsset);
 }

@@ -18,6 +18,19 @@ import {
 } from "../services/marketStateService.js";
 import { endCurrentSeason } from "../services/seasonService.js";
 import {
+  buildSeasonRewardPreview,
+  checkSeasonRewardConsistency,
+  ensureSeasonRewardJob,
+  getSeasonRewardJob,
+  runSeasonRewardJob,
+} from "../services/seasonRewardService.js";
+import { rebuildUserAssetSnapshots } from "../services/assetSnapshotService.js";
+import {
+  catchUpMissingEtfInterest,
+  getEtfInterestMissingSummary,
+  settleCurrentEtfHourlyInterest,
+} from "../services/etfInterestService.js";
+import {
   getJackpotEntryStats,
   getJackpotPool,
   setJackpotPool,
@@ -43,8 +56,24 @@ function publicAdminUser(user) {
     ...publicUser(user),
     jackpotTickets: Number(user.jackpot_tickets || 0),
     totalEvaluatedAsset: Math.floor(Number(valuation.totalEvaluatedAsset || 0)),
+    assetValuationComplete: valuation.valuationComplete !== false,
+    assetValuationErrors: valuation.valuationErrors || [],
     achievementCount: achievementCount(db, user.id),
   };
+}
+
+function recordAdminSystemAction(adminUserId, actionType, detail = {}) {
+  db.prepare(`
+    INSERT INTO admin_logs
+      (admin_user_id, target_user_id, action_type, before_value, after_value, reason)
+    VALUES (?, ?, ?, NULL, ?, ?)
+  `).run(
+    adminUserId,
+    adminUserId,
+    actionType,
+    JSON.stringify(detail),
+    String(detail.reason || "관리자 시스템 작업").slice(0, 500),
+  );
 }
 
 adminRouter.use((req, res, next) => {
@@ -56,6 +85,129 @@ adminRouter.use((req, res, next) => {
 
 adminRouter.get("/dashboard/summary", (_req, res) => {
   return res.json(getAdminDashboardSummary(db));
+});
+
+adminRouter.get("/seasons/reward-preview", (_req, res, next) => {
+  try {
+    return res.json(buildSeasonRewardPreview(db));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/seasons/rewards/prepare", (req, res, next) => {
+  try {
+    const job = ensureSeasonRewardJob(db, { adminUserId: req.user.id });
+    recordAdminSystemAction(req.user.id, "season_reward_preview", {
+      jobId: job.id,
+      seasonId: job.season_id,
+      reason: "시즌 ETF 보상 매핑 확정",
+    });
+    return res.json(job);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/seasons/rewards/:jobId/run", (req, res, next) => {
+  try {
+    const job = getSeasonRewardJob(db, Number(req.params.jobId));
+    if (!job) return res.status(404).json({ message: "시즌 보상 작업을 찾을 수 없습니다." });
+    const season = db.prepare("SELECT status FROM seasons WHERE id = ?").get(job.season_id);
+    if (season?.status !== "ended") {
+      return res.status(409).json({ message: "시즌 종료 트랜잭션 안에서만 최초 보상을 실행할 수 있습니다." });
+    }
+    const result = runSeasonRewardJob(db, job.id);
+    recordAdminSystemAction(req.user.id, "season_reward_run", {
+      jobId: job.id,
+      seasonId: job.season_id,
+      status: result.status,
+      reason: "시즌 ETF 보상 실행",
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/seasons/rewards/:jobId/retry", (req, res, next) => {
+  try {
+    const job = getSeasonRewardJob(db, Number(req.params.jobId));
+    if (!job) return res.status(404).json({ message: "시즌 보상 작업을 찾을 수 없습니다." });
+    const result = runSeasonRewardJob(db, job.id);
+    recordAdminSystemAction(req.user.id, "season_reward_retry", {
+      jobId: job.id,
+      seasonId: job.season_id,
+      status: result.status,
+      reason: "실패한 시즌 ETF 보상 재시도",
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/seasons/rewards/:jobId/consistency", (req, res, next) => {
+  try {
+    return res.json(checkSeasonRewardConsistency(db, Number(req.params.jobId)));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/assets/snapshots/rebuild", (req, res, next) => {
+  try {
+    const userIds = Array.isArray(req.body?.userIds) ? req.body.userIds.map(Number) : null;
+    const result = rebuildUserAssetSnapshots(db, { userIds, apply: true });
+    recordAdminSystemAction(req.user.id, "asset_snapshot_rebuilt", {
+      valuationCycleId: result.valuationCycleId,
+      userCount: result.userCount,
+      incompleteCount: result.incompleteCount,
+      requestedUserIds: userIds,
+      reason: "총평가금액 스냅샷 재계산",
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/etf-interest/settle-current", (req, res, next) => {
+  try {
+    const result = settleCurrentEtfHourlyInterest(db);
+    recordAdminSystemAction(req.user.id, "etf_interest_settle_current", {
+      hourKey: result.hourKey,
+      eligibleUserCount: result.eligibleUserCount,
+      paidCount: result.results.length,
+      reason: "현재 시간 ETF 이자 정산",
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.get("/etf-interest/missing", (_req, res, next) => {
+  try {
+    return res.json(getEtfInterestMissingSummary(db));
+  } catch (error) {
+    return next(error);
+  }
+});
+
+adminRouter.post("/etf-interest/catch-up", (req, res, next) => {
+  try {
+    const result = catchUpMissingEtfInterest(db, { maxHours: req.body?.maxHours || 24 });
+    recordAdminSystemAction(req.user.id, "etf_interest_catch_up", {
+      maxHours: result.maxHours,
+      paidCount: result.paid.length,
+      skippedCount: result.skipped.length,
+      reason: "누락 ETF 이자 보정",
+    });
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
 });
 
 adminRouter.get("/economy/audit", (req, res) => {
@@ -166,6 +318,12 @@ adminRouter.post("/seasons/end-current", (req, res, next) => {
   }
   try {
     const result = endCurrentSeason(db, req.user);
+    recordAdminSystemAction(req.user.id, "season_end_with_etf_rewards", {
+      endedSeasonId: result.endedSeason.id,
+      newSeasonId: result.newSeason.id,
+      rewardJobId: result.seasonRewardJob?.id || null,
+      reason: "시즌 종료 및 ETF 보상 실행",
+    });
     return res.json({
       message: `시즌 ${result.endedSeason.season_number}이 종료되고 시즌 ${result.newSeason.season_number}이 시작되었어요.`,
       endedSeason: {

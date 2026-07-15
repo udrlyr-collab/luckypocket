@@ -20,9 +20,9 @@ export default function BalanceSummaryCard({ user }) {
       </div>
 
       <div className="balance-summary-main">
-        <span className="summary-label">총 평가 자산</span>
+        <span className="summary-label">총평가금액</span>
         <strong className="balance-summary-amount">
-          <AnimatedMoney value={user.totalAsset || user.balance} />
+          <AnimatedMoney value={user.totalEvaluatedAsset} />
         </strong>
         <span className={`mt-2 inline-flex items-center gap-1 text-sm font-black tabular-nums ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
           {todayProfit >= 0 ? "↗" : "↘"} 오늘 손익 {formatSignedMoney(todayProfit)}
@@ -30,7 +30,7 @@ export default function BalanceSummaryCard({ user }) {
       </div>
 
       <div className="balance-summary-metrics">
-        <SummaryMetric icon="✨" label="최고 자산" value={formatMoney(user.highestBalance)} />
+        <SummaryMetric icon="✨" label="최고 총평가금액" value={formatMoney(user.highestTotalEvaluatedAsset)} />
         <SummaryMetric
           icon="🏆"
           label="내 순위"

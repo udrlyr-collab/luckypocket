@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import BetInput from "../components/BetInput";
 import { ErrorAlert, GameShell } from "../components/GameShell";
@@ -78,7 +78,7 @@ export default function DartGame() {
       setLastDart(data.detail);
       setVisualResult(data);
       setPhase("flying");
-      await new Promise((resolve) => setTimeout(resolve, 850));
+      await new Promise((resolve) => setTimeout(resolve, data.detail.flightDurationMs || 850));
       setPhase("impact");
       await refreshUser();
       api("/games/daily-benefits").then(setBenefits).catch(() => {});
@@ -335,24 +335,16 @@ function targetRadius(target) {
 }
 
 function DartBoard({ dart, selectedSector, phase, target, won }) {
+  const stageRef = useRef(null);
   const dartX = dart ? BOARD_CENTER + dart.x * BOARD_RADIUS : BOARD_CENTER;
   const dartY = dart ? BOARD_CENTER + dart.y * BOARD_RADIUS : BOARD_CENTER;
   const highlightRadius = BOARD_RADIUS * targetRadius(target);
   const sectors = Array.from({ length: 20 }, (_, index) => index + 1);
 
   return (
-    <div className="dart-stage mx-auto w-full max-w-[420px]">
+    <div ref={stageRef} className="dart-stage mx-auto w-full max-w-[420px]">
       {phase === "flying" && dart && (
-        <span
-          className="dart-flight"
-          style={{
-            "--dart-left": `${(dartX / 320) * 100}%`,
-            "--dart-top": `${(dartY / 320) * 100}%`,
-          }}
-          aria-hidden="true"
-        >
-          ➶
-        </span>
+        <DartProjectile dart={dart} stageRef={stageRef} />
       )}
       <svg
         viewBox="0 0 320 320"
@@ -470,4 +462,43 @@ function DartBoard({ dart, selectedSector, phase, target, won }) {
       </svg>
     </div>
   );
+}
+
+function DartProjectile({ dart, stageRef }) {
+  const projectileRef = useRef(null);
+  useEffect(() => {
+    const projectile = projectileRef.current;
+    const stage = stageRef.current;
+    if (!projectile || !stage) return undefined;
+    const rect = stage.getBoundingClientRect();
+    const xRatio = Number.isFinite(Number(dart.boardXRatio)) ? Number(dart.boardXRatio) : (BOARD_CENTER + dart.x * BOARD_RADIUS) / 320;
+    const yRatio = Number.isFinite(Number(dart.boardYRatio)) ? Number(dart.boardYRatio) : (BOARD_CENTER + dart.y * BOARD_RADIUS) / 320;
+    const targetX = rect.width * xRatio;
+    const targetY = rect.height * yRatio;
+    const startX = rect.width + 34;
+    const startY = rect.height + 42;
+    const rotation = Number(dart.rotationDeg || -44);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const duration = reducedMotion ? 80 : Math.min(950, Math.max(650, Number(dart.flightDurationMs || 850)));
+    const transform = (x, y, rotate, scale = 1) => `translate3d(${x}px, ${y}px, 0) rotate(${rotate}deg) scale(${scale})`;
+    const keyframes = reducedMotion
+      ? [
+        { transform: transform(startX, startY, rotation, 0.9), opacity: 0 },
+        { transform: transform(targetX, targetY, rotation - 8, 1), opacity: 1 },
+      ]
+      : [
+        { offset: 0, transform: transform(startX, startY, rotation + 8, 0.72), opacity: 0 },
+        { offset: 0.08, transform: transform(startX + 18, startY + 10, rotation + 11, 0.76), opacity: 1 },
+        { offset: 0.35, transform: transform(rect.width * 0.82, rect.height * 0.25, rotation + 2, 0.92), opacity: 1 },
+        { offset: 0.72, transform: transform(targetX + (startX - targetX) * 0.16, targetY - 24, rotation - 5, 1.06), opacity: 1 },
+        { offset: 1, transform: transform(targetX, targetY, rotation - 8, 1), opacity: 1 },
+      ];
+    const animation = projectile.animate(keyframes, {
+      duration,
+      easing: "linear",
+      fill: "forwards",
+    });
+    return () => animation.cancel();
+  }, [dart, stageRef]);
+  return <span ref={projectileRef} className="dart-flight" aria-hidden="true">➶</span>;
 }

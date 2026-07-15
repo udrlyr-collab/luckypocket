@@ -5,6 +5,7 @@ import { serializeAchievements } from "../services/achievementService.js";
 import { recordAssetEvent } from "../services/assetEventService.js";
 import { getBankruptcyStatus } from "../services/bankruptcyService.js";
 import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import { createUserAssetSnapshot, getLatestUserAssetSnapshot } from "../services/assetSnapshotService.js";
 import {
   claimDailyMissionReward,
   getUserDailyMissions,
@@ -36,7 +37,19 @@ meRouter.get("/", (req, res) => {
     )
     .get(user.id).count;
   const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+  if (!getLatestUserAssetSnapshot(db, user.id)) {
+    createUserAssetSnapshot(db, user.id, { valuationCycleId: `me-${Date.now()}`, valuation });
+  }
   const { totalEvaluatedAsset } = valuation;
+  const snapshotHigh = db.prepare(`
+    SELECT MAX(total_evaluated_asset) AS value
+    FROM user_asset_snapshots
+    WHERE user_id = ? AND valuation_complete = 1
+  `).get(user.id);
+  const highestTotalEvaluatedAsset = Math.max(
+    Number(totalEvaluatedAsset || 0),
+    Number(snapshotHigh?.value || 0),
+  );
   const rankedUsers = db.prepare("SELECT id FROM users ORDER BY id ASC").all()
     .map((entry) => ({
       id: entry.id,
@@ -62,7 +75,12 @@ meRouter.get("/", (req, res) => {
   return res.json({
     user: {
       ...publicUser(user),
+      totalEvaluatedAsset,
+      highestTotalEvaluatedAsset,
+      highestBalance: highestTotalEvaluatedAsset,
       totalAsset: totalEvaluatedAsset,
+      assetValuationComplete: valuation.valuationComplete !== false,
+      assetValuationErrors: valuation.valuationErrors || [],
       todayProfit,
       achievements,
       revivalsRemaining: Math.max(0, 3 - revivalCount),
@@ -130,8 +148,14 @@ meRouter.post("/revive", (req, res, next) => {
   try {
     const revive = db.transaction(() => {
       const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
-      if (user.balance >= 1000) {
-        const error = new Error("현재 자산이 1,000원 미만일 때만 지원금을 받을 수 있어요.");
+      const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+      if (valuation.valuationComplete === false) {
+        const error = new Error("총평가금액을 계산할 수 없어 지원금 자격을 확인할 수 없습니다.");
+        error.status = 409;
+        throw error;
+      }
+      if (valuation.totalEvaluatedAsset >= 1000) {
+        const error = new Error("총평가금액이 1,000원 미만일 때만 지원금을 받을 수 있어요.");
         error.status = 400;
         throw error;
       }

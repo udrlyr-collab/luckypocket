@@ -18,6 +18,10 @@ function initialCupIds(count) {
   return Array.from({ length: count }, (_, index) => `cup-${index + 1}`);
 }
 
+function positionsForCupIds(cupIds) {
+  return Object.fromEntries(cupIds.map((cupId, index) => [cupId, index]));
+}
+
 function CupStage({
   cupIds,
   phase,
@@ -26,7 +30,8 @@ function CupStage({
   winnerCupId,
   revealedCupIds,
   canPick,
-  swapOffsets,
+  cupPositions,
+  swapMotions,
   onPick,
   stageRef,
 }) {
@@ -35,9 +40,13 @@ function CupStage({
     <div
       ref={stageRef}
       className={`cup-luck-board cup-count-${cupIds.length} phase-${phase}`}
+      style={{ "--cup-count": cupIds.length }}
       aria-live="polite"
     >
       {cupIds.map((cupId, index) => {
+        const slotIndex = cupPositions[cupId] ?? index;
+        const motion = swapMotions[cupId];
+        const persistentShift = `calc(${slotIndex - index} * (100% + 0.75rem))`;
         const isLuckyPreview = luckyCupId === cupId && (phase === "showing_luck" || phase === "hiding_luck");
         const isRevealed = isRevealPhase && revealedCupIds.includes(cupId);
         const isWinner = isRevealed && winnerCupId === cupId;
@@ -46,18 +55,26 @@ function CupStage({
           <button
             key={cupId}
             type="button"
-            className={`cup-luck-cup ${selectedCupId === cupId ? "is-selected" : ""} ${isLuckyPreview ? "is-lucky-preview" : ""} ${isRevealed ? "is-revealed" : ""} ${isWinner ? "is-winner" : ""} ${isMiss ? "is-miss" : ""}`}
-            style={{ "--cup-shift": `${swapOffsets[cupId] || 0}px` }}
+            className={`cup-luck-cup ${motion ? "is-swapping" : ""} ${motion?.layer === "front" ? "is-swap-front" : "is-swap-back"} ${selectedCupId === cupId ? "is-selected" : ""} ${isLuckyPreview ? "is-lucky-preview" : ""} ${isRevealed ? "is-revealed" : ""} ${isWinner ? "is-winner" : ""} ${isMiss ? "is-miss" : ""}`}
+            style={{
+              "--cup-shift": motion ? `${motion.fromShift}px` : persistentShift,
+              "--cup-rest-shift": motion ? `${motion.restShift}px` : persistentShift,
+              "--cup-swap-from": `${motion?.fromShift ?? 0}px`,
+              "--cup-swap-to": `${motion?.toShift ?? 0}px`,
+              "--cup-swap-mid": `${motion ? (motion.fromShift + motion.toShift) / 2 : 0}px`,
+              "--cup-swap-arc": `${motion?.arc ?? -20}px`,
+              "--cup-swap-duration": `${motion?.duration ?? 300}ms`,
+            }}
             disabled={!canPick}
             onClick={() => onPick(cupId)}
-            aria-label={`컵 ${index + 1}${canPick ? " 선택" : ""}`}
+            aria-label={`컵 ${slotIndex + 1}${canPick ? " 선택" : ""}`}
           >
             <span className="cup-luck-shadow" aria-hidden="true" />
             {(isLuckyPreview || isRevealed) && (
               <span className={`cup-luck-ball ${isLuckyPreview ? "is-preview-ball" : ""}`} aria-hidden="true">🍀</span>
             )}
             <span className="cup-luck-icon" aria-hidden="true">🥤</span>
-            <span className="cup-luck-number">{index + 1}</span>
+            <span className="cup-luck-number">{slotIndex + 1}</span>
             {isMiss && <span className="cup-luck-empty" aria-label="빈 컵">✦</span>}
           </button>
         );
@@ -78,7 +95,8 @@ export default function CupLuckGame() {
   const [revealedCupIds, setRevealedCupIds] = useState([]);
   const [pendingResult, setPendingResult] = useState(null);
   const [result, setResult] = useState(null);
-  const [swapOffsets, setSwapOffsets] = useState({});
+  const [cupPositions, setCupPositions] = useState(() => positionsForCupIds(initialCupIds(3)));
+  const [swapMotions, setSwapMotions] = useState({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [reducedMotion, setReducedMotion] = useState(false);
@@ -116,6 +134,7 @@ export default function CupLuckGame() {
           setRound(activeRound);
           setCupCount(activeRound.cupCount);
           setCupIds(activeRound.cupIds?.length ? activeRound.cupIds : initialCupIds(activeRound.cupCount));
+          setCupPositions(positionsForCupIds(activeRound.cupIds?.length ? activeRound.cupIds : initialCupIds(activeRound.cupCount)));
           setSelectedCupId(activeRound.selectedCupId);
           setRevealedCupIds(activeRound.cupIds || []);
           setPendingResult({ round: activeRound, won: activeRound.won });
@@ -131,6 +150,7 @@ export default function CupLuckGame() {
         setRound(activeRound);
         setCupCount(activeRound.cupCount);
         setCupIds(activeRound.cupIds?.length ? activeRound.cupIds : initialCupIds(activeRound.cupCount));
+        setCupPositions(positionsForCupIds(activeRound.cupIds?.length ? activeRound.cupIds : initialCupIds(activeRound.cupCount)));
         setPhase("awaiting_pick");
       } catch {
         if (storedId) window.localStorage.removeItem(ROUND_STORAGE_KEY);
@@ -143,6 +163,10 @@ export default function CupLuckGame() {
   const runIntro = async (startedRound) => {
     const operations = startedRound.shuffleOperations || [];
     const workingCupIds = [...(startedRound.cupIds || initialCupIds(startedRound.cupCount))];
+    const stableCupIds = [...workingCupIds];
+    let workingPositions = positionsForCupIds(workingCupIds);
+    setCupIds(stableCupIds);
+    setCupPositions(workingPositions);
     setPhase("preparing");
     await wait(timing(260));
     if (!aliveRef.current) return;
@@ -156,26 +180,38 @@ export default function CupLuckGame() {
     setPhase("shuffling");
     for (const operation of operations) {
       if (!aliveRef.current) return;
+      const cupElements = stageRef.current?.querySelectorAll(".cup-luck-cup") || [];
+      const measuredPitch = cupElements.length > 1
+        ? Math.abs(cupElements[1].offsetLeft - cupElements[0].offsetLeft)
+        : 0;
       const width = stageRef.current?.clientWidth || 480;
-      const distance = (width / Math.max(1, startedRound.cupCount)) * (operation.toIndex - operation.fromIndex);
+      const pitch = measuredPitch || width / Math.max(1, startedRound.cupCount);
       const fromCupId = workingCupIds[operation.fromIndex];
       const toCupId = workingCupIds[operation.toIndex];
       if (!fromCupId || !toCupId) continue;
-      const duration = timing(operation.durationMs || 320);
-      setSwapOffsets({ [fromCupId]: distance, [toCupId]: -distance });
-      await wait(Math.floor(duration / 2));
-      if (!aliveRef.current) return;
+      const duration = timing(Math.min(340, Math.max(220, operation.durationMs || 300)));
+      const fromBaseIndex = stableCupIds.indexOf(fromCupId);
+      const toBaseIndex = stableCupIds.indexOf(toCupId);
+      const fromShift = (workingPositions[fromCupId] - fromBaseIndex) * pitch;
+      const toShift = (workingPositions[toCupId] - toBaseIndex) * pitch;
+      const fromTarget = (operation.toIndex - fromBaseIndex) * pitch;
+      const toTarget = (operation.fromIndex - toBaseIndex) * pitch;
+      setSwapMotions({
+        [fromCupId]: { fromShift, toShift: fromTarget, restShift: fromTarget, arc: -22, duration, layer: "front" },
+        [toCupId]: { fromShift: toShift, toShift: toTarget, restShift: toTarget, arc: 16, duration, layer: "back" },
+      });
+      await wait(duration);
       [workingCupIds[operation.fromIndex], workingCupIds[operation.toIndex]] = [
         workingCupIds[operation.toIndex],
         workingCupIds[operation.fromIndex],
       ];
-      setCupIds([...workingCupIds]);
-      setSwapOffsets({ [fromCupId]: -distance, [toCupId]: distance });
-      await wait(Math.ceil(duration / 2));
-      setSwapOffsets({});
+      workingPositions = positionsForCupIds(workingCupIds);
+      setCupPositions(workingPositions);
+      setSwapMotions({});
+      await wait(timing(35));
     }
     if (!aliveRef.current) return;
-    setCupIds([...workingCupIds]);
+    setCupPositions(workingPositions);
     setPhase("awaiting_pick");
   };
 
@@ -194,6 +230,7 @@ export default function CupLuckGame() {
       const startedRound = data.round;
       setRound(startedRound);
       setCupIds(startedRound.cupIds || initialCupIds(startedRound.cupCount));
+      setCupPositions(positionsForCupIds(startedRound.cupIds || initialCupIds(startedRound.cupCount)));
       setLuckyCupId(startedRound.luckyCupId);
       window.localStorage.setItem(ROUND_STORAGE_KEY, startedRound.id);
       void runIntro(startedRound);
@@ -248,6 +285,7 @@ export default function CupLuckGame() {
     window.localStorage.removeItem(ROUND_STORAGE_KEY);
     setRound(null);
     setCupIds(initialCupIds(cupCount));
+    setCupPositions(positionsForCupIds(initialCupIds(cupCount)));
     setLuckyCupId(null);
     setSelectedCupId(null);
     setRevealedCupIds([]);
@@ -293,7 +331,12 @@ export default function CupLuckGame() {
                   type="button"
                   className={`min-h-12 rounded-2xl border p-3 text-left transition hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${cupCount === count ? "border-primary bg-primary/5 shadow-sm" : "border-base-300 bg-base-100"}`}
                   disabled={phase !== "idle" || busy}
-                  onClick={() => { setCupCount(count); setCupIds(initialCupIds(count)); }}
+                  onClick={() => {
+                    const ids = initialCupIds(count);
+                    setCupCount(count);
+                    setCupIds(ids);
+                    setCupPositions(positionsForCupIds(ids));
+                  }}
                 >
                   <strong className="block font-black">컵 {count}개</strong>
                   <span className="mt-1 block text-xs font-bold text-base-content/60">확률 {(100 / count).toFixed(2)}% · {count}배</span>
@@ -337,7 +380,8 @@ export default function CupLuckGame() {
               winnerCupId={stageWinnerCupId}
               revealedCupIds={revealedCupIds}
               canPick={canPick}
-              swapOffsets={swapOffsets}
+              cupPositions={cupPositions}
+              swapMotions={swapMotions}
               onPick={pickCup}
               stageRef={stageRef}
             />

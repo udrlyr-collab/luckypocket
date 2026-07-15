@@ -88,7 +88,9 @@ rankingsRouter.get("/", (req, res, next) => {
       const serializeSeasonResult = (row) => ({
         userId: row.user_id,
         nickname: row.nickname_snapshot,
-        balance: row.final_balance,
+        balance: row.final_total_evaluated_asset,
+        cashBalance: row.final_cash_balance ?? row.final_balance,
+        totalEvaluatedAsset: row.final_total_evaluated_asset,
         highestBalance: row.final_total_evaluated_asset,
         totalProfit: row.total_profit,
         todayEarned: 0,
@@ -242,12 +244,16 @@ rankingsRouter.get("/", (req, res, next) => {
     const serialize = (row) => ({
       userId: row.id,
       nickname: row.nickname,
-      balance: type === "currentBalance" ? row.total_evaluated_asset : row.balance,
+      // `balance` is kept as a compatibility field, but wealth shown anywhere
+      // in rankings is always the unified total evaluated asset.
+      balance: row.total_evaluated_asset,
       cashBalance: row.valuation.cashBalance,
       stockNetLiquidationValue: row.valuation.stockNetLiquidationValue,
       leverageNetSettlementValue: row.valuation.leverageNetSettlementValue,
       totalEvaluatedAsset: row.total_evaluated_asset,
-      highestBalance: row.highest_balance,
+      assetValuationComplete: row.valuation.valuationComplete !== false,
+      assetValuationErrors: row.valuation.valuationErrors || [],
+      highestBalance: row.total_evaluated_asset,
       totalProfit: row.total_profit,
       todayEarned: row.today_earned,
       todayLost: row.today_lost,

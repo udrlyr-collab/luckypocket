@@ -798,7 +798,7 @@ function getCompanyAcquisitionInfo(user, stock) {
   const requiredTotalAsset = requiredCompanyAcquisitionBalance(acquisitionPrice);
   const valuation = user
     ? calculateUserTotalEvaluatedAsset(db, user.id)
-    : { totalEvaluatedAsset: 0 };
+    : { totalEvaluatedAsset: 0, valuationComplete: false, valuationErrors: [] };
   const userTotalEvaluatedAsset = Math.floor(
     Number(valuation.totalEvaluatedAsset || 0),
   );
@@ -831,6 +831,9 @@ function getCompanyAcquisitionInfo(user, stock) {
   } else if (existingEtf) {
     canAcquire = false;
     reason = "already_owns_company";
+  } else if (valuation.valuationComplete === false) {
+    canAcquire = false;
+    reason = "valuation_incomplete";
   } else if (userTotalEvaluatedAsset < requiredTotalAsset) {
     canAcquire = false;
     reason = "total_asset_required";
@@ -856,6 +859,8 @@ function getCompanyAcquisitionInfo(user, stock) {
     hasOwnPosition,
     meetsAssetRequirement: userTotalEvaluatedAsset >= requiredTotalAsset,
     hasEnoughCash: userCashBalance >= acquisitionPrice,
+    valuationComplete: valuation.valuationComplete !== false,
+    valuationErrors: valuation.valuationErrors || [],
     balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
     cost: acquisitionPrice,
     requiredBalance: requiredTotalAsset,
@@ -1054,23 +1059,28 @@ stocksRouter.get("/:id", (req, res) => {
     stock.owner_user_id &&
     stock.owner_user_id !== req.user.id
   ) {
-    const defender = db
-      .prepare("SELECT balance FROM users WHERE id = ?")
-      .get(stock.owner_user_id);
-    if (defender) {
-      const cost = Math.floor(defender.balance * 0.2);
-      const attackerValuation = calculateUserTotalEvaluatedAsset(db, req.user.id);
-      hostileTakeover = {
-        cost,
-        requiredBalance: requiredCompanyAcquisitionBalance(cost),
-        requiredTotalAsset: requiredCompanyAcquisitionBalance(cost),
-        userTotalEvaluatedAsset: attackerValuation.totalEvaluatedAsset,
-        userCashBalance: currentUser.balance,
-        meetsAssetRequirement: attackerValuation.totalEvaluatedAsset >= requiredCompanyAcquisitionBalance(cost),
-        hasEnoughCash: currentUser.balance >= cost,
-        balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
-      };
-    }
+    const cost = Math.max(1, Math.floor(Number(stock.market_cap || 0)));
+    const requiredTotalAsset = requiredCompanyAcquisitionBalance(cost);
+    const attackerValuation = calculateUserTotalEvaluatedAsset(db, req.user.id);
+    hostileTakeover = {
+      targetMarketCap: cost,
+      targetPrice: Number(stock.current_price || 0),
+      targetTotalShares: Number(stock.total_shares || 0),
+      targetOwnerUserId: Number(stock.owner_user_id),
+      acquisitionCost: cost,
+      cost,
+      requiredBalance: requiredTotalAsset,
+      requiredTotalAsset,
+      userTotalEvaluatedAsset: attackerValuation.totalEvaluatedAsset,
+      userCashBalance: currentUser.balance,
+      valuationComplete: attackerValuation.valuationComplete !== false,
+      valuationErrors: attackerValuation.valuationErrors || [],
+      meetsAssetRequirement:
+        attackerValuation.valuationComplete !== false &&
+        attackerValuation.totalEvaluatedAsset >= requiredTotalAsset,
+      hasEnoughCash: currentUser.balance >= cost,
+      balanceMultiplier: STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier,
+    };
   }
 
   const events = db.prepare(`
@@ -1096,6 +1106,13 @@ stocksRouter.get("/:id", (req, res) => {
   const shortInterestRatio = shortValue / Math.max(1, Number(stock.market_cap || 1));
   const hostileTakeoverEvent = db.prepare(`
     SELECT h.id, h.status, h.attack_cash AS attackCash, h.defense_cash AS defenseCash,
+           h.target_market_cap_snapshot AS targetMarketCap,
+           h.target_price_snapshot AS targetPrice,
+           h.target_total_shares_snapshot AS targetTotalShares,
+           h.acquisition_cost_snapshot AS acquisitionCost,
+           h.attacker_total_evaluated_asset_snapshot AS attackerTotalEvaluatedAsset,
+           h.attacker_cash_snapshot AS attackerCash,
+           h.attack_strength AS attackStrength, h.defense_strength AS defenseStrength,
            h.ends_at AS endsAt, attacker.nickname AS attackerNickname, defender.nickname AS defenderNickname
     FROM hostile_takeover_events h
     JOIN users attacker ON attacker.id = h.attacker_user_id
@@ -1913,8 +1930,11 @@ stocksRouter.post("/:id/acquire", (req, res) => {
       if (stock.is_etf || stock.status === 'acquired') throw new Error("이미 인수된 종목입니다.");
       const acquisitionPrice = Math.floor(Number(stock.market_cap || 0));
       const requiredTotalAsset = requiredCompanyAcquisitionBalance(acquisitionPrice);
-      const userTotalEvaluatedAsset =
-        calculateUserTotalEvaluatedAsset(db, userId).totalEvaluatedAsset;
+      const valuation = calculateUserTotalEvaluatedAsset(db, userId);
+      if (valuation.valuationComplete === false) {
+        throw new Error("총평가금액을 완전하게 계산할 수 없어 회사 인수 자격을 판정할 수 없습니다.");
+      }
+      const userTotalEvaluatedAsset = valuation.totalEvaluatedAsset;
       if (userTotalEvaluatedAsset < requiredTotalAsset) {
         throw new Error(
           `회사를 인수하려면 총 평가자산이 인수 금액의 ${STOCK_MARKET_POLICY.companyAcquisitionBalanceMultiplier}배(${formatWon(requiredTotalAsset)}) 이상이어야 해요.`,
@@ -2223,6 +2243,144 @@ stocksRouter.post("/:id/hostile-takeover/declare", (req, res) => {
     const declaration = db.transaction(() => {
       const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
       if (!stock || stock.status !== "acquired" || stock.is_etf !== 1) {
+        throw new Error("인수된 회사만 적대적 M&A를 시작할 수 있습니다.");
+      }
+      if (Number(stock.owner_user_id) === Number(attackerId)) {
+        throw new Error("본인이 소유한 회사에는 적대적 M&A를 할 수 없습니다.");
+      }
+      assertStockTradeAllowed(stock);
+      if (db.prepare(`
+        SELECT id FROM hostile_takeover_events
+        WHERE stock_id = ? AND status IN ('declared', 'defended')
+      `).get(stockId)) {
+        throw new Error("이미 진행 중인 적대적 M&A가 있습니다.");
+      }
+
+      const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(attackerId);
+      const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(stock.owner_user_id);
+      if (!attacker || !defender) throw new Error("공격자 또는 현재 소유자를 찾을 수 없습니다.");
+      if (db.prepare(`
+        SELECT id FROM stocks
+        WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired' AND id != ?
+      `).get(attackerId, stockId)) {
+        throw new Error("활성 인수자 ETF는 한 개만 소유할 수 있습니다.");
+      }
+
+      const targetMarketCap = Math.max(1, Math.floor(Number(stock.market_cap || 0)));
+      const acquisitionCost = targetMarketCap;
+      const requiredTotalAsset = requiredCompanyAcquisitionBalance(targetMarketCap);
+      const valuation = calculateUserTotalEvaluatedAsset(db, attackerId);
+      if (valuation.valuationComplete === false) {
+        throw new Error("총평가금액을 완전하게 계산할 수 없어 M&A 자격을 판정할 수 없습니다.");
+      }
+      if (valuation.totalEvaluatedAsset < requiredTotalAsset) {
+        throw new Error("대상 회사 시가총액의 5배 이상인 총평가금액이 필요합니다.");
+      }
+      if (Number(attacker.balance) < acquisitionCost) {
+        throw new Error("대상 회사 시가총액과 같은 인수 대금을 현금으로 보유해야 합니다.");
+      }
+
+      const balanceAfter = Number(attacker.balance) - acquisitionCost;
+      const endsAt = new Date(Date.now() + 5 * 60_000).toISOString();
+      db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, attackerId);
+      const inserted = db.prepare(`
+        INSERT INTO hostile_takeover_events
+          (stock_id, attacker_user_id, defender_user_id, attack_cash,
+           defense_cash, attacker_asset_snapshot, defender_asset_snapshot,
+           target_market_cap_snapshot, target_price_snapshot,
+           target_total_shares_snapshot, target_owner_user_id_snapshot,
+           attacker_total_evaluated_asset_snapshot, attacker_cash_snapshot,
+           acquisition_cost_snapshot, ends_at, metadata_json)
+        VALUES (?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        stockId,
+        attackerId,
+        defender.id,
+        acquisitionCost,
+        valuation.totalEvaluatedAsset,
+        targetMarketCap,
+        stock.current_price,
+        stock.total_shares,
+        defender.id,
+        valuation.totalEvaluatedAsset,
+        attacker.balance,
+        acquisitionCost,
+        endsAt,
+        JSON.stringify({ policy: "target_market_cap_v1" }),
+      );
+      const eventId = Number(inserted.lastInsertRowid);
+      db.prepare(`
+        INSERT INTO hostile_takeover_supports
+          (hostile_takeover_event_id, user_id, side, cash_amount)
+        VALUES (?, ?, 'attack', ?)
+      `).run(eventId, attackerId, acquisitionCost);
+      db.prepare(`
+        INSERT INTO asset_events
+          (user_id, event_type, amount, balance_before, balance_after,
+           source_type, source_id, detail_json)
+        VALUES (?, 'hostile_takeover_escrow', ?, ?, ?, 'hostile_takeover', ?, ?)
+      `).run(
+        attackerId,
+        -acquisitionCost,
+        attacker.balance,
+        balanceAfter,
+        `escrow:${eventId}`,
+        JSON.stringify({ stockId, targetMarketCap, acquisitionCost, requiredTotalAsset, endsAt }),
+      );
+      db.prepare(`
+        INSERT INTO stock_trades
+          (user_id, stock_id, trade_type, amount, quantity, price, leverage,
+           balance_before, balance_after, detail_json)
+        VALUES (?, ?, 'hostile_takeover_declare', ?, 0, ?, 1, ?, ?, ?)
+      `).run(
+        attackerId,
+        stockId,
+        acquisitionCost,
+        stock.current_price,
+        attacker.balance,
+        balanceAfter,
+        JSON.stringify({ hostileTakeoverEventId: eventId, targetMarketCap, endsAt }),
+      );
+      createServerNotification(db, {
+        userId: defender.id,
+        nickname: defender.nickname,
+        type: "hostile_takeover_declared",
+        title: "적대적 M&A 공개 입찰",
+        message: `${attacker.nickname}님이 ${stock.name} 인수를 선언했어요. 종료 전까지 방어 자금을 투입할 수 있어요.`,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: { hostileTakeoverEventId: eventId, stockId, targetMarketCap, endsAt },
+      });
+      return {
+        id: eventId,
+        targetMarketCap,
+        acquisitionCost,
+        requiredTotalAsset,
+        attackerTotalEvaluatedAsset: valuation.totalEvaluatedAsset,
+        attackerCash: attacker.balance,
+        endsAt,
+      };
+    })();
+    return res.json({
+      message: "적대적 M&A 공개 입찰을 시작했습니다.",
+      hostileTakeover: declaration,
+    });
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+});
+
+stocksRouter.post("/:id/hostile-takeover/declare-legacy-disabled", (req, res) => {
+  return res.status(410).json({
+    message: "폐기된 적대적 M&A 선언 방식입니다. /hostile-takeover/declare를 사용하세요.",
+  });
+
+  const stockId = Number(req.params.id);
+  const attackerId = req.user.id;
+  try {
+    const declaration = db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stockId);
+      if (!stock || stock.status !== "acquired" || stock.is_etf !== 1) {
         throw new Error("인수된 회사만 적대적 M&A 공개 입찰을 시작할 수 있어요.");
       }
       if (stock.owner_user_id === attackerId) throw new Error("본인의 회사에는 적대적 M&A를 할 수 없어요.");
@@ -2304,6 +2462,13 @@ stocksRouter.post("/:id/hostile-takeover/defend", (req, res) => {
         SET defense_cash = defense_cash + ?, status = 'defended'
         WHERE id = ?
       `).run(amount, event.id);
+      db.prepare(`
+        INSERT INTO hostile_takeover_supports
+          (hostile_takeover_event_id, user_id, side, cash_amount)
+        VALUES (?, ?, 'defense', ?)
+        ON CONFLICT(hostile_takeover_event_id, user_id, side)
+        DO UPDATE SET cash_amount = cash_amount + excluded.cash_amount
+      `).run(event.id, defenderId, amount);
       db.prepare(`
         INSERT INTO asset_events
           (user_id, event_type, amount, balance_before, balance_after, source_type, source_id, detail_json)

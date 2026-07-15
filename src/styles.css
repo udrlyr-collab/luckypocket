@@ -550,15 +550,21 @@ textarea,
 .dart-flight {
   position: absolute;
   z-index: 8;
-  left: var(--dart-left);
-  top: var(--dart-top);
+  left: 0;
+  top: 0;
+  margin: -1.5rem 0 0 -1.5rem;
   color: #75586b;
   font-size: 3rem;
   font-weight: 900;
   line-height: 1;
   filter: drop-shadow(0 7px 5px rgba(90, 60, 80, .24));
   transform-origin: 70% 50%;
-  animation: dartFlight 850ms cubic-bezier(.2, .7, .18, 1) forwards;
+}
+
+.dart-land path {
+  transform-box: fill-box;
+  transform-origin: 100% 100%;
+  animation: dartTailVibration 360ms cubic-bezier(.2,.8,.3,1) 120ms both;
 }
 
 .dart-impact {
@@ -1028,6 +1034,14 @@ textarea,
   75% { transform: translate(-1px, 1px) rotate(-.15deg); }
 }
 
+@keyframes dartTailVibration {
+  0%, 100% { transform: rotate(0); }
+  22% { transform: rotate(8deg); }
+  46% { transform: rotate(-6deg); }
+  68% { transform: rotate(3deg); }
+  84% { transform: rotate(-1.5deg); }
+}
+
 @keyframes dartResultRing {
   from { transform: scale(.25); opacity: 1; }
   to { transform: scale(1.8); opacity: 0; }
@@ -1091,7 +1105,7 @@ textarea,
 
 .cup-luck-board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  grid-template-columns: repeat(var(--cup-count, 3), minmax(0, 1fr));
   gap: 0.75rem;
   width: 100%;
   min-height: 12rem;
@@ -1113,13 +1127,20 @@ textarea,
   border: 1px solid oklch(var(--bc) / 0.16);
   border-radius: 1.5rem;
   background: oklch(var(--b1));
-  transform: translateX(var(--cup-shift, 0));
-  transition: transform 150ms cubic-bezier(.25, .75, .25, 1), border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+  transform: translate3d(var(--cup-shift, 0), 0, 0);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
   will-change: transform;
 }
 
+.cup-luck-cup.is-swapping {
+  animation: cupSwapCurve var(--cup-swap-duration, 300ms) cubic-bezier(.22,.8,.3,1) both;
+}
+
+.cup-luck-cup.is-swap-front { z-index: 4; }
+.cup-luck-cup.is-swap-back { z-index: 3; }
+
 .cup-luck-cup:not(:disabled):hover {
-  transform: translateY(-0.35rem);
+  transform: translate3d(var(--cup-shift, 0), -0.35rem, 0);
   border-color: oklch(var(--p) / 0.5);
 }
 
@@ -1214,6 +1235,12 @@ textarea,
   100% { transform: translateY(-1.45rem) rotate(-4deg); }
 }
 
+@keyframes cupSwapCurve {
+  0% { transform: translate3d(var(--cup-swap-from), 0, 0) scale(1); }
+  48% { transform: translate3d(var(--cup-swap-mid), var(--cup-swap-arc), 0) scale(1.04); }
+  100% { transform: translate3d(var(--cup-swap-to), 0, 0) scale(1); }
+}
+
 @keyframes cupBallPop {
   from { transform: translateX(50%) scale(.55); opacity: 0; }
   to { transform: translateX(50%) scale(1); opacity: 1; }
@@ -1224,9 +1251,21 @@ textarea,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .dart-impact,
+  .dart-land,
+  .dart-land path,
+  .dart-result-ring,
+  .dart-bullseye-pulse,
+  .dart-board-hit,
+  .dart-board-miss {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
   .cup-luck-cup,
   .cup-luck-cup:not(:disabled):hover {
-    transform: translateX(0);
+    transform: translate3d(var(--cup-rest-shift, 0), 0, 0);
+    animation: none;
     transition-duration: 1ms;
   }
 }

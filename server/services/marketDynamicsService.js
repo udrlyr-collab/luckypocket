@@ -1,10 +1,31 @@
 import { createServerNotification } from "./serverNotificationService.js";
 
-export const TREND_DURATION_MINUTES = Object.freeze({ min: 30, max: 120 });
+export const TREND_DURATION_MINUTES = Object.freeze({ min: 30, max: 180 });
+export const STOCK_TICKS_PER_DAY = 24 * 60 * 60 / 10;
+export const STABILITY_DAILY_BASE_DRIFT = Object.freeze({
+  SMALL: 0.0003,
+  MID: 0.0008,
+  LARGE: 0.0015,
+  MEGA: 0.0022,
+  GIANT: 0.0030,
+  BLUE_CHIP: 0.0035,
+  DELIST_RISK: -0.0020,
+});
+export const STABILITY_TARGET_DAILY_VOLATILITY = Object.freeze({
+  SMALL: 0.20,
+  MID: 0.14,
+  LARGE: 0.10,
+  MEGA: 0.07,
+  GIANT: 0.05,
+  BLUE_CHIP: 0.025,
+  DELIST_RISK: 0.24,
+});
+// Compatibility export for existing policy checks. Runtime drift is selected
+// from the exact stability-tier daily values below, not from this envelope.
 export const TREND_DRIFT_PER_TICK = Object.freeze({
-  bull: { min: 0.00001, max: 0.00005 },
-  sideways: { min: -0.000005, max: 0.000005 },
-  bear: { min: -0.00005, max: -0.00001 },
+  bull: { min: 0, max: STABILITY_DAILY_BASE_DRIFT.BLUE_CHIP / STOCK_TICKS_PER_DAY },
+  sideways: { min: 0, max: 0 },
+  bear: { min: -STABILITY_DAILY_BASE_DRIFT.BLUE_CHIP / STOCK_TICKS_PER_DAY, max: 0 },
 });
 
 export const TREND_REGIME_PROBABILITIES = Object.freeze({
@@ -17,6 +38,72 @@ export const TREND_REGIME_PROBABILITIES = Object.freeze({
   mega: { bull: 0.58, sideways: 0.19, bear: 0.23 },
   giant: { bull: 0.60, sideways: 0.18, bear: 0.22 },
 });
+
+export const STABILITY_TREND_PROBABILITIES = Object.freeze({
+  BLUE_CHIP: { bull: 0.72, sideways: 0.21, bear: 0.07 },
+  GIANT: { bull: 0.68, sideways: 0.21, bear: 0.11 },
+  MEGA: { bull: 0.64, sideways: 0.21, bear: 0.15 },
+  LARGE: { bull: 0.60, sideways: 0.20, bear: 0.20 },
+  MID: { bull: 0.56, sideways: 0.19, bear: 0.25 },
+  SMALL: { bull: 0.52, sideways: 0.18, bear: 0.30 },
+  DELIST_RISK: { bull: 0.38, sideways: 0.17, bear: 0.45 },
+});
+
+const STABILITY_FLOORS = Object.freeze({ GIANT: 1e12, MEGA: 5e11, LARGE: 1.5e11, MID: 5e10, SMALL: 5e9, DELIST_RISK: 0 });
+const STABILITY_ORDER = ["DELIST_RISK", "SMALL", "MID", "LARGE", "MEGA", "GIANT", "BLUE_CHIP"];
+
+export function stabilityTierForCap(marketCap, isBlueChip = false) {
+  if (isBlueChip) return "BLUE_CHIP";
+  const cap = Math.max(0, Number(marketCap) || 0);
+  if (cap >= STABILITY_FLOORS.GIANT) return "GIANT";
+  if (cap >= STABILITY_FLOORS.MEGA) return "MEGA";
+  if (cap >= STABILITY_FLOORS.LARGE) return "LARGE";
+  if (cap >= STABILITY_FLOORS.MID) return "MID";
+  if (cap >= STABILITY_FLOORS.SMALL) return "SMALL";
+  return "DELIST_RISK";
+}
+
+export function refreshLegacyStabilityState(db, stock, nowMs = Date.now()) {
+  const cap = Math.max(1, Number(stock.current_price) * Number(stock.total_shares));
+  const previous24 = Math.max(1, Number(stock.market_cap_ema_24h) || cap);
+  const previous7d = Math.max(1, Number(stock.market_cap_ema_7d) || cap);
+  const lastMs = toMs(stock.last_stability_update_at) || nowMs;
+  const elapsed = Math.max(0, nowMs - lastMs);
+  const ema = (previous, windowMs) => previous + (cap - previous) * (1 - Math.exp(-Math.min(elapsed, windowMs * 10) / windowMs));
+  const ema24 = Math.max(1, Math.floor(ema(previous24, 86_400_000)));
+  const ema7d = Math.max(1, Math.floor(ema(previous7d, 7 * 86_400_000)));
+  const listedAge = Math.max(0, nowMs - (toMs(stock.listed_at) || toMs(stock.created_at) || nowMs));
+  const initialCap = Math.max(1, Number(stock.initial_market_cap) || cap);
+  const emaBlend = ema24 * 0.6 + ema7d * 0.4;
+  const initialWeight = listedAge < 7 * 86_400_000 ? (1 - listedAge / (7 * 86_400_000)) * 0.5 : 0;
+  const stabilityCap = Math.max(1, Math.floor(emaBlend * (1 - initialWeight) + initialCap * initialWeight));
+  const currentTier = stock.is_bluechip === 1 ? "BLUE_CHIP" : (stock.stability_tier || stabilityTierForCap(stabilityCap));
+  const rawTier = stabilityTierForCap(stabilityCap, stock.is_bluechip === 1);
+  let tier = currentTier, candidate = stock.stability_tier_candidate || null;
+  let candidateSince = toMs(stock.stability_tier_candidate_since);
+  if (rawTier === currentTier || insideTierHysteresis(currentTier, rawTier, stabilityCap)) {
+    candidate = null; candidateSince = 0;
+  } else {
+    if (candidate !== rawTier) { candidate = rawTier; candidateSince = nowMs; }
+    const movingDown = STABILITY_ORDER.indexOf(rawTier) < STABILITY_ORDER.indexOf(currentTier);
+    const distressed = ["distress_review", "delist_review", "final_crash"].includes(stock.delist_risk_status);
+    const required = movingDown ? (distressed ? 12 : 24) * 3_600_000 : 12 * 3_600_000;
+    if (nowMs - candidateSince >= required) { tier = rawTier; candidate = null; candidateSince = 0; }
+  }
+  db.prepare(`UPDATE stocks SET market_cap_ema_24h=?,market_cap_ema_7d=?,stability_market_cap=?,stability_tier=?,
+    stability_tier_candidate=?,stability_tier_candidate_since=?,stability_tier_entered_at=CASE WHEN stability_tier<>? THEN ? ELSE stability_tier_entered_at END,
+    last_stability_update_at=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`).run(
+    ema24, ema7d, stabilityCap, tier, candidate, candidateSince ? nowIso(candidateSince) : null, tier, nowIso(nowMs), nowIso(nowMs), stock.id,
+  );
+  return { ...stock, market_cap: cap, market_cap_ema_24h: ema24, market_cap_ema_7d: ema7d, stability_market_cap: stabilityCap, stability_tier: tier };
+}
+
+function insideTierHysteresis(current, target, cap) {
+  if (current === "BLUE_CHIP") return false;
+  const movingDown = STABILITY_ORDER.indexOf(target) < STABILITY_ORDER.indexOf(current);
+  const boundary = movingDown ? STABILITY_FLOORS[current] : STABILITY_FLOORS[STABILITY_ORDER[STABILITY_ORDER.indexOf(current) + 1]];
+  return Number.isFinite(boundary) && cap >= boundary * 0.95 && cap <= boundary * 1.05;
+}
 
 const MARKET_REGIME_OPTIONS = [
   { marketRegime: "strong_bull", weight: 0.10, strength: 1.0 },
@@ -48,6 +135,12 @@ const EVENT_DRIFT = Object.freeze({
 
 function randomBetween(min, max) {
   return min + Math.random() * (max - min);
+}
+
+function standardNormal() {
+  const u = Math.max(Number.EPSILON, Math.random());
+  const v = Math.max(Number.EPSILON, Math.random());
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
 
 function pickWeighted(items) {
@@ -114,10 +207,10 @@ export function ensureMarketRegime(db, nowMs = Date.now()) {
 
 export function getMarketRegimeModifier(marketRegime) {
   const regime = marketRegime?.market_regime || marketRegime?.marketRegime || "sideways";
-  if (regime === "strong_bull") return 0.000025;
-  if (regime === "bull") return 0.000012;
-  if (regime === "bear") return -0.000012;
-  if (regime === "panic") return -0.000025;
+  if (regime === "strong_bull") return 0.004 / STOCK_TICKS_PER_DAY;
+  if (regime === "bull") return 0.002 / STOCK_TICKS_PER_DAY;
+  if (regime === "bear") return -0.002 / STOCK_TICKS_PER_DAY;
+  if (regime === "panic") return -0.004 / STOCK_TICKS_PER_DAY;
   return 0;
 }
 
@@ -131,10 +224,9 @@ function shouldSkipTrend(stock) {
 
 export function ensureStockTrendRegime(db, stock, nowMs = Date.now()) {
   if (shouldSkipTrend(stock)) return null;
-  const currentCap = Math.max(1, Math.floor(Number(stock.market_cap) || 1));
-  const previousEma = Math.max(1, Math.floor(Number(stock.market_cap_ema_24h) || currentCap));
-  const nextEma = Math.max(1, Math.floor(previousEma * 0.95 + currentCap * 0.05));
-  const effectiveCap = Math.max(1, Math.floor(currentCap * 0.3 + nextEma * 0.7));
+  const stableStock = refreshLegacyStabilityState(db, stock, nowMs);
+  const effectiveCap = stableStock.stability_market_cap;
+  const nextEma = stableStock.market_cap_ema_24h;
   const isCurrent = stock.trend_regime && toMs(stock.trend_regime_ends_at) > nowMs;
 
   if (isCurrent) {
@@ -152,15 +244,14 @@ export function ensureStockTrendRegime(db, stock, nowMs = Date.now()) {
     };
   }
 
-  const tier = marketCapTrendTier(effectiveCap);
-  const regime = pickRegime(TREND_REGIME_PROBABILITIES[tier]);
-  const range = TREND_DRIFT_PER_TICK[regime];
-  const driftPerTick = randomBetween(range.min, range.max);
-  const baseVolatility = Math.max(0.00002, Math.min(0.004, Number(stock.volatility || 0.02) * 0.06));
-  const volatility = Math.max(
-    0.00002,
-    Math.min(0.004, baseVolatility * (TIER_VOLATILITY_MULTIPLIER[tier] || 1)),
-  );
+  const tier = stableStock.stability_tier;
+  const regime = pickRegime(STABILITY_TREND_PROBABILITIES[tier]);
+  const dailyBaseDrift = STABILITY_DAILY_BASE_DRIFT[tier] ?? STABILITY_DAILY_BASE_DRIFT.SMALL;
+  const regimeDirection = regime === "bull" ? 1 : regime === "bear" ? -1 : 0;
+  const driftPerTick = dailyBaseDrift * regimeDirection / STOCK_TICKS_PER_DAY;
+  const targetDailyVolatility = STABILITY_TARGET_DAILY_VOLATILITY[tier]
+    ?? STABILITY_TARGET_DAILY_VOLATILITY.SMALL;
+  const volatility = targetDailyVolatility / Math.sqrt(STOCK_TICKS_PER_DAY);
   const durationMinutes = Math.floor(randomBetween(
     TREND_DURATION_MINUTES.min,
     TREND_DURATION_MINUTES.max + 1,
@@ -187,19 +278,24 @@ export function getActiveCorporateEventModifier(db, stockId, nowMs = Date.now())
     WHERE stock_id = ? AND status = 'active'
       AND (ends_at IS NULL OR ends_at > ?)
   `).all(stockId, now);
-  return events.reduce((sum, event) => sum + (EVENT_DRIFT[event.event_type] || 0), 0);
+  const total = events.reduce((sum, event) => sum + (EVENT_DRIFT[event.event_type] || 0), 0);
+  return Math.max(-0.00025, Math.min(0.00035, total));
 }
 
 export function calculateTrendMoveRate(db, stock, { marketRegime, sectorModifier = 0, nowMs = Date.now() } = {}) {
   const trend = ensureStockTrendRegime(db, stock, nowMs);
   if (!trend) return null;
-  const noise = randomBetween(-trend.volatility, trend.volatility);
+  const noise = Math.max(-4 * trend.volatility, Math.min(4 * trend.volatility, standardNormal() * trend.volatility));
   const eventModifier = getActiveCorporateEventModifier(db, stock.id, nowMs);
   const marketModifier = getMarketRegimeModifier(marketRegime);
   const panicMultiplier = (marketRegime?.market_regime || marketRegime?.marketRegime) === "panic"
     ? (marketCapTrendTier(trend.marketCapBasis) === "danger_micro" || marketCapTrendTier(trend.marketCapBasis) === "micro" ? 1.7 : 1.15)
     : 1;
-  return (trend.driftPerTick + noise * panicMultiplier + sectorModifier + marketModifier + eventModifier);
+  const normalizedSectorModifier = Number(sectorModifier || 0) / STOCK_TICKS_PER_DAY;
+  const normalizedEventModifier = Number(eventModifier || 0) / 100;
+  const raw = trend.driftPerTick + noise * panicMultiplier + normalizedSectorModifier + marketModifier + normalizedEventModifier;
+  const fourSigma = Math.max(0.00005, trend.volatility * 4);
+  return Math.max(-fourSigma, Math.min(fourSigma, raw));
 }
 
 function eventDurationMs() {
@@ -356,7 +452,7 @@ export function releaseExpiredTradingHalts(db, nowMs = Date.now()) {
   `).all(now);
   for (const stock of released) {
     db.prepare(`
-      UPDATE stocks SET is_trading_suspended = 0, trading_halted_until = NULL,
+      UPDATE stocks SET is_trading_suspended = 0, trading_halted_until = NULL, circuit_breaker_reason = NULL,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?
     `).run(stock.id);
     emitCorporateNews(db, stock, "volatility_halt_released", "거래 재개", `${stock.name}의 변동성 완화장치가 해제됐어요.`);
@@ -367,21 +463,36 @@ export function releaseExpiredTradingHalts(db, nowMs = Date.now()) {
 export function maybeTriggerVolatilityHalt(db, stock, nowMs = Date.now()) {
   if (!stock || stock.is_trading_suspended || stock.is_etf === 1 || stock.status === "ipo_subscription") return false;
   const now = nowIso(nowMs);
-  const reference = db.prepare(`
+  const reference5m = db.prepare(`
     SELECT price FROM stock_price_history
     WHERE stock_id = ? AND created_at >= datetime(?, '-5 minutes')
     ORDER BY created_at ASC LIMIT 1
   `).get(stock.id, now);
-  if (!reference || Number(reference.price) <= 0) return false;
-  const changeRate = Math.abs((Number(stock.current_price) - Number(reference.price)) / Number(reference.price));
-  if (changeRate < 0.50) return false; // 변동성 완화장치 발동 기준을 30%에서 50%로 완화
+  const reference30m = db.prepare(`
+    SELECT price FROM stock_price_history
+    WHERE stock_id = ? AND created_at >= datetime(?, '-30 minutes')
+    ORDER BY created_at ASC LIMIT 1
+  `).get(stock.id, now);
+  if (!reference5m || Number(reference5m.price) <= 0) return false;
+  const change5m = (Number(stock.current_price) - Number(reference5m.price)) / Number(reference5m.price);
+  const change30m = reference30m && Number(reference30m.price) > 0
+    ? (Number(stock.current_price) - Number(reference30m.price)) / Number(reference30m.price) : 0;
+  const tier = stock.is_bluechip === 1 ? "BLUE_CHIP" : (stock.stability_tier || stabilityTierForCap(stock.stability_market_cap || stock.market_cap));
+  const thresholds = tier === "BLUE_CHIP" ? [-0.04, -0.07] : tier === "GIANT" ? [-0.06, -0.10] : null;
+  if (!thresholds || (change5m > thresholds[0] && change30m > thresholds[1])) return false;
   const haltSeconds = Math.floor(randomBetween(30, 121));
   const haltUntil = nowIso(nowMs + haltSeconds * 1000);
   db.prepare(`
     UPDATE stocks SET is_trading_suspended = 1, trading_halted_until = ?,
+      circuit_breaker_reason = 'rapid_large_cap_decline', circuit_breaker_count = COALESCE(circuit_breaker_count, 0) + 1,
       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?
   `).run(haltUntil, stock.id);
-  emitCorporateNews(db, stock, "volatility_halt", "변동성 완화장치 발동", `${stock.name}이 5분 동안 ${(changeRate * 100).toFixed(1)}% 움직여 거래를 잠시 멈췄어요.`, { haltUntil, changeRate });
+  db.prepare(`INSERT INTO stock_price_guard_events
+    (stock_id,event_type,reference_price,observed_price,protected_price,change_5m_bps,change_30m_bps,reason)
+    VALUES(?,'circuit_breaker',?,?,?,?,?,'rapid_large_cap_decline')`).run(
+      stock.id, reference5m.price, stock.current_price, stock.current_price, Math.round(change5m * 10_000), Math.round(change30m * 10_000),
+    );
+  emitCorporateNews(db, stock, "volatility_halt", "변동성 완화장치 발동", `${stock.name}의 단기 급락으로 거래를 잠시 멈췄어요.`, { haltUntil, change5m, change30m, tier });
   return true;
 }
 

@@ -9,13 +9,10 @@ import {
   calculateSpotSettlement,
 } from "./stockSettlementService.js";
 import { applyStockTaxLedgerImpact } from "./stockTaxLedgerService.js";
+import { ensureSeasonRewardJob, runSeasonRewardJob } from "./seasonRewardService.js";
 
 export const SEASON_STARTING_BALANCE = 1_000_000;
-export const SEASON_TOP_BONUSES = new Map([
-  [1, 30_000_000],
-  [2, 15_000_000],
-  [3, 5_000_000],
-]);
+export const SEASON_TOP_BONUSES = new Map();
 
 export function getActiveSeason(database) {
   return database
@@ -24,7 +21,7 @@ export function getActiveSeason(database) {
 }
 
 export function getStartingBalanceForRank(rank) {
-  return SEASON_TOP_BONUSES.get(Number(rank)) || SEASON_STARTING_BALANCE;
+  return SEASON_STARTING_BALANCE;
 }
 
 function insertAssetEvent(database, {
@@ -56,7 +53,7 @@ function insertAssetEvent(database, {
     );
 }
 
-function settleHoldings(database, season) {
+function settleHoldings(database, season, preservedStockIds = new Set()) {
   const holdings = database
     .prepare(
       `SELECT h.*, s.current_price, s.status
@@ -67,6 +64,7 @@ function settleHoldings(database, season) {
     .all();
 
   for (const holding of holdings) {
+    if (preservedStockIds.has(Number(holding.stock_id))) continue;
     const settlement = calculateSpotSettlement(database, {
       userId: holding.user_id,
       holding,
@@ -259,12 +257,30 @@ export function endCurrentSeason(database, adminUser) {
       throw new Error("진행 중인 시즌이 없어요.");
     }
 
+    const rewardJob = ensureSeasonRewardJob(database, {
+      season,
+      adminUserId: adminUser.id,
+    });
+    const preservedStockIds = new Set([
+      ...rewardJob.mappings.map((mapping) => Number(mapping.source_stock_id)),
+      ...database.prepare(`
+        SELECT id FROM stocks
+        WHERE is_etf = 1 AND etf_tracking_type = 'owner_asset' AND status = 'acquired'
+      `).all().map((stock) => Number(stock.id)),
+    ]);
     const ranked = rankSeasonUsers(database, season);
 
-    settleHoldings(database, season);
+    settleHoldings(database, season, preservedStockIds);
     settlePositions(database, season);
 
-    database.prepare("DELETE FROM stock_holdings").run();
+    if (preservedStockIds.size > 0) {
+      database.prepare(`
+        DELETE FROM stock_holdings
+        WHERE stock_id NOT IN (${[...preservedStockIds].map(() => "?").join(",")})
+      `).run(...preservedStockIds);
+    } else {
+      database.prepare("DELETE FROM stock_holdings").run();
+    }
     database.prepare("DELETE FROM stock_positions").run();
     database.prepare("DELETE FROM game_sessions").run();
 
@@ -373,6 +389,8 @@ export function endCurrentSeason(database, adminUser) {
         .run(user.id, newSeasonId, newSeasonNumber);
     }
 
+    const completedRewardJob = runSeasonRewardJob(database, rewardJob.id);
+
     createServerNotification(database, {
       userId: adminUser.id,
       nickname: adminUser.nickname,
@@ -400,6 +418,7 @@ export function endCurrentSeason(database, adminUser) {
         startingBonusForNextSeason: user.startingBonusForNextSeason,
       })),
       userCount: ranked.length,
+      seasonRewardJob: completedRewardJob,
     };
   })();
 }

@@ -199,9 +199,10 @@ test("all-cash buy budget leaves room for the buy fee", () => {
 });
 
 test("dynamic stock tick limit clamps ordinary moves but bypasses admin target events", () => {
-  const smallStock = { market_cap: 20_000_000_000, status: "listed" };
-  assert.equal(clampTickMoveRate(smallStock, 0.50), 0.10);
-  assert.equal(clampTickMoveRate(smallStock, -0.50), -0.12);
+  const smallStock = { market_cap: 20_000_000_000, stability_tier: "SMALL", status: "listed" };
+  const expectedFourSigma = 0.20 / Math.sqrt(8_640) * 4;
+  assert.equal(clampTickMoveRate(smallStock, 0.50), expectedFourSigma);
+  assert.equal(clampTickMoveRate(smallStock, -0.50), -expectedFourSigma);
 
   const adminTargetStock = {
     market_cap: 20_000_000_000,

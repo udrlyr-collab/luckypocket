@@ -8,6 +8,8 @@ import {
   validateNickname,
 } from "../services/nicknameService.js";
 import { getUserStockStats } from "../services/stockTradeStatsService.js";
+import { calculateUserTotalEvaluatedAsset } from "../services/portfolioValuationService.js";
+import { createUserAssetSnapshot } from "../services/assetSnapshotService.js";
 
 export const profileRouter = Router();
 profileRouter.use(requireAuth);
@@ -39,10 +41,27 @@ profileRouter.get("/summary", (req, res) => {
        FROM asset_events WHERE user_id = ?`,
     )
     .get(user.id);
+  const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+  const snapshotHigh = db.prepare(`
+    SELECT MAX(total_evaluated_asset) AS value
+    FROM user_asset_snapshots
+    WHERE user_id = ? AND valuation_complete = 1
+  `).get(user.id);
+  const highestTotalEvaluatedAsset = Math.max(
+    Number(valuation.totalEvaluatedAsset || 0),
+    Number(snapshotHigh?.value || 0),
+  );
 
   return res.json({
     summary: {
       ...publicUser(user),
+      totalEvaluatedAsset: valuation.totalEvaluatedAsset,
+      highestTotalEvaluatedAsset,
+      cashBalance: valuation.cashBalance,
+      stockNetLiquidationValue: valuation.stockNetLiquidationValue,
+      leverageNetSettlementValue: valuation.leverageNetSettlementValue,
+      assetValuationComplete: valuation.valuationComplete !== false,
+      assetValuationErrors: valuation.valuationErrors || [],
       totalGames: totals.total_games,
       totalBets: totals.total_bets,
       grossProfit: totals.total_profit,
@@ -139,6 +158,69 @@ profileRouter.patch("/nickname", (req, res, next) => {
 });
 
 profileRouter.get("/asset-history", (req, res) => {
+  const ranges = { day: "-1 day", week: "-7 days", month: "-30 days" };
+  const range = Object.hasOwn(ranges, req.query.range) ? req.query.range : "day";
+  const modifier = ranges[range];
+  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  const valuation = calculateUserTotalEvaluatedAsset(db, user.id);
+  createUserAssetSnapshot(db, user.id, {
+    valuationCycleId: `profile-history-${Date.now()}`,
+    valuation,
+  });
+  const previous = db.prepare(`
+    SELECT * FROM user_asset_snapshots
+    WHERE user_id = ? AND julianday(calculated_at) < julianday('now', ?)
+    ORDER BY id DESC LIMIT 1
+  `).get(user.id, modifier);
+  const rows = db.prepare(`
+    SELECT * FROM user_asset_snapshots
+    WHERE user_id = ? AND julianday(calculated_at) >= julianday('now', ?)
+    ORDER BY id ASC
+  `).all(user.id, modifier);
+  const points = [];
+  if (previous) {
+    points.push({
+      id: previous.id,
+      eventType: "range_start_snapshot",
+      amount: 0,
+      balance: Number(previous.total_evaluated_asset),
+      createdAt: previous.calculated_at,
+      valuationComplete: previous.valuation_complete === 1,
+    });
+  }
+  for (const snapshot of rows) {
+    const priorBalance = points.at(-1)?.balance ?? Number(snapshot.total_evaluated_asset);
+    points.push({
+      id: snapshot.id,
+      eventType: "asset_snapshot",
+      amount: Number(snapshot.total_evaluated_asset) - priorBalance,
+      balance: Number(snapshot.total_evaluated_asset),
+      createdAt: snapshot.calculated_at,
+      valuationComplete: snapshot.valuation_complete === 1,
+    });
+  }
+  if (points.length === 0) {
+    points.push({
+      id: "current",
+      eventType: "asset_snapshot",
+      amount: 0,
+      balance: valuation.totalEvaluatedAsset,
+      createdAt: new Date().toISOString(),
+      valuationComplete: valuation.valuationComplete !== false,
+    });
+  }
+  return res.json({
+    range,
+    startBalance: points[0].balance,
+    endBalance: points.at(-1).balance,
+    change: points.at(-1).balance - points[0].balance,
+    points,
+    valuationBasis: "total_evaluated_asset_snapshot",
+    sufficientHistory: points.length >= 2,
+  });
+});
+
+profileRouter.get("/asset-history-legacy-disabled", (req, res) => {
   const ranges = {
     day: "-1 day",
     week: "-7 days",

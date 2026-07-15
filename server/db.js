@@ -712,6 +712,103 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_hostile_takeover_events_one_active
     ON hostile_takeover_events(stock_id)
     WHERE status IN ('declared', 'defended');
+
+  CREATE TABLE IF NOT EXISTS hostile_takeover_supports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    hostile_takeover_event_id INTEGER NOT NULL REFERENCES hostile_takeover_events(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    side TEXT NOT NULL CHECK (side IN ('attack', 'defense')),
+    cash_amount INTEGER NOT NULL DEFAULT 0 CHECK (cash_amount >= 0),
+    delegated_share_quantity INTEGER NOT NULL DEFAULT 0 CHECK (delegated_share_quantity >= 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(hostile_takeover_event_id, user_id, side)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_hostile_takeover_supports_event
+    ON hostile_takeover_supports(hostile_takeover_event_id, side);
+
+  CREATE TABLE IF NOT EXISTS user_asset_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    valuation_cycle_id TEXT NOT NULL,
+    cash_balance INTEGER NOT NULL,
+    gross_stock_market_value INTEGER NOT NULL,
+    estimated_stock_sell_fees INTEGER NOT NULL,
+    estimated_stock_taxes INTEGER NOT NULL,
+    stock_net_liquidation_value INTEGER NOT NULL,
+    leverage_gross_settlement_value INTEGER NOT NULL,
+    estimated_leverage_close_fees INTEGER NOT NULL,
+    estimated_leverage_taxes INTEGER NOT NULL,
+    leverage_net_settlement_value INTEGER NOT NULL,
+    other_eligible_asset_value INTEGER NOT NULL DEFAULT 0,
+    total_evaluated_asset INTEGER NOT NULL,
+    valuation_complete INTEGER NOT NULL DEFAULT 1 CHECK (valuation_complete IN (0, 1)),
+    valuation_errors_json TEXT NOT NULL DEFAULT '[]',
+    holdings_json TEXT NOT NULL DEFAULT '[]',
+    positions_json TEXT NOT NULL DEFAULT '[]',
+    is_valid INTEGER NOT NULL DEFAULT 1 CHECK (is_valid IN (0, 1)),
+    calculated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    invalidated_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_user_asset_snapshots_latest
+    ON user_asset_snapshots(user_id, is_valid, id DESC);
+
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_user_asset_snapshots_cycle_user
+    ON user_asset_snapshots(valuation_cycle_id, user_id);
+
+  CREATE TABLE IF NOT EXISTS season_reward_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    season_number INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'previewed' CHECK (status IN ('previewed', 'running', 'completed', 'failed')),
+    user_ranking_json TEXT NOT NULL,
+    company_ranking_json TEXT NOT NULL,
+    error_message TEXT,
+    started_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(season_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS season_reward_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id INTEGER NOT NULL REFERENCES season_reward_jobs(id) ON DELETE CASCADE,
+    season_id INTEGER NOT NULL REFERENCES seasons(id) ON DELETE CASCADE,
+    winner_rank INTEGER NOT NULL CHECK (winner_rank BETWEEN 1 AND 3),
+    winner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    company_rank INTEGER NOT NULL CHECK (company_rank BETWEEN 2 AND 4),
+    source_stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE RESTRICT,
+    target_etf_stock_id INTEGER REFERENCES stocks(id) ON DELETE SET NULL,
+    action TEXT CHECK (action IN ('convert', 'merge')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'failed')),
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    completed_at TEXT,
+    UNIQUE(season_id, winner_rank),
+    UNIQUE(season_id, source_stock_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS etf_hourly_interest_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hour_key TEXT NOT NULL,
+    pre_interest_total_evaluated_asset INTEGER NOT NULL,
+    interest_rate REAL NOT NULL,
+    interest_amount INTEGER NOT NULL,
+    balance_before INTEGER NOT NULL,
+    balance_after INTEGER NOT NULL,
+    eligible_reason_json TEXT NOT NULL DEFAULT '{}',
+    valuation_snapshot_id INTEGER REFERENCES user_asset_snapshots(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'paid' CHECK (status IN ('paid', 'skipped_no_snapshot')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(user_id, hour_key)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_etf_hourly_interest_hour
+    ON etf_hourly_interest_events(hour_key, status);
 `);
 
 function tableColumns(tableName) {
@@ -734,6 +831,15 @@ db.exec(`
 `);
 
 addColumnIfMissing("season_results", "starting_bonus_for_next_season", "INTEGER NOT NULL DEFAULT 1000000");
+addColumnIfMissing("hostile_takeover_events", "target_market_cap_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "target_price_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "target_total_shares_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "target_owner_user_id_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "attacker_total_evaluated_asset_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "attacker_cash_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "acquisition_cost_snapshot", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "attack_strength", "INTEGER");
+addColumnIfMissing("hostile_takeover_events", "defense_strength", "INTEGER");
 
 for (const tableName of [
   "game_logs",
@@ -946,8 +1052,62 @@ addColumnIfMissing("stocks", "trend_market_cap_basis", "INTEGER");
 addColumnIfMissing("stocks", "trend_drift_per_tick", "REAL");
 addColumnIfMissing("stocks", "trend_volatility", "REAL");
 addColumnIfMissing("stocks", "market_cap_ema_24h", "INTEGER");
+addColumnIfMissing("stocks", "market_cap_ema_7d", "INTEGER");
+addColumnIfMissing("stocks", "initial_market_cap", "INTEGER");
+addColumnIfMissing("stocks", "stability_market_cap", "INTEGER");
+addColumnIfMissing("stocks", "stability_tier", "TEXT");
+addColumnIfMissing("stocks", "stability_tier_candidate", "TEXT");
+addColumnIfMissing("stocks", "stability_tier_candidate_since", "TEXT");
+addColumnIfMissing("stocks", "stability_tier_entered_at", "TEXT");
+addColumnIfMissing("stocks", "last_stability_update_at", "TEXT");
+addColumnIfMissing("stocks", "daily_anchor_price", "INTEGER");
+addColumnIfMissing("stocks", "daily_anchor_at", "TEXT");
+addColumnIfMissing("stocks", "circuit_breaker_count", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stocks", "circuit_breaker_reason", "TEXT");
 addColumnIfMissing("stocks", "market_cap_tier_started_at", "TEXT");
 addColumnIfMissing("stocks", "trading_halted_until", "TEXT");
+addColumnIfMissing("stocks", "treasury_shares", "INTEGER NOT NULL DEFAULT 0");
+addColumnIfMissing("stocks", "distress_risk_score", "REAL NOT NULL DEFAULT 0");
+addColumnIfMissing("stocks", "distress_risk_started_at", "TEXT");
+addColumnIfMissing("stocks", "distress_observation_started_at", "TEXT");
+addColumnIfMissing("stocks", "distress_last_evaluated_at", "TEXT");
+addColumnIfMissing("stocks", "season_reward_origin_season_id", "INTEGER");
+addColumnIfMissing("stocks", "season_reward_winner_user_id", "INTEGER");
+addColumnIfMissing("stocks", "season_reward_source_stock_id", "INTEGER");
+addColumnIfMissing("stocks", "merged_into_stock_id", "INTEGER");
+addColumnIfMissing("stocks", "merged_at", "TEXT");
+
+db.exec(`
+  UPDATE stocks SET
+    initial_market_cap = COALESCE(NULLIF(initial_market_cap,0), market_cap),
+    market_cap_ema_24h = COALESCE(NULLIF(market_cap_ema_24h,0), market_cap),
+    market_cap_ema_7d = COALESCE(NULLIF(market_cap_ema_7d,0), market_cap),
+    stability_market_cap = COALESCE(NULLIF(stability_market_cap,0), market_cap),
+    stability_tier = COALESCE(stability_tier, CASE
+      WHEN is_bluechip=1 THEN 'BLUE_CHIP' WHEN market_cap>=1000000000000 THEN 'GIANT'
+      WHEN market_cap>=500000000000 THEN 'MEGA' WHEN market_cap>=150000000000 THEN 'LARGE'
+      WHEN market_cap>=50000000000 THEN 'MID' WHEN market_cap>=5000000000 THEN 'SMALL' ELSE 'DELIST_RISK' END),
+    stability_tier_entered_at = COALESCE(stability_tier_entered_at,created_at),
+    last_stability_update_at = COALESCE(last_stability_update_at,updated_at,created_at),
+    daily_anchor_price = COALESCE(NULLIF(daily_anchor_price,0),current_price),
+    daily_anchor_at = COALESCE(daily_anchor_at,updated_at,created_at)
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS stock_price_guard_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL REFERENCES stocks(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    reference_price INTEGER NOT NULL,
+    observed_price INTEGER NOT NULL,
+    protected_price INTEGER NOT NULL,
+    change_5m_bps INTEGER,
+    change_30m_bps INTEGER,
+    reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_stock_price_guard_events_stock ON stock_price_guard_events(stock_id,created_at DESC);
+`);
 
 addColumnIfMissing("admin_logs", "target_stock_id", "INTEGER REFERENCES stocks(id) ON DELETE SET NULL");
 addColumnIfMissing("admin_logs", "reason", "TEXT");
@@ -1140,6 +1300,81 @@ if (!userColumns.has("last_mined_at")) {
 if (!userColumns.has("jackpot_tickets")) {
   db.exec("ALTER TABLE users ADD COLUMN jackpot_tickets INTEGER NOT NULL DEFAULT 0");
 }
+addColumnIfMissing("users", "account_status", "TEXT NOT NULL DEFAULT 'active'");
+addColumnIfMissing("users", "is_system_account", "INTEGER NOT NULL DEFAULT 0");
+
+db.exec(`
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_users_update
+  AFTER UPDATE OF balance ON users
+  BEGIN
+    UPDATE user_asset_snapshots
+    SET is_valid = 0,
+        invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = NEW.id AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_holdings_insert
+  AFTER INSERT ON stock_holdings
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = NEW.user_id AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_holdings_update
+  AFTER UPDATE ON stock_holdings
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id IN (OLD.user_id, NEW.user_id) AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_holdings_delete
+  AFTER DELETE ON stock_holdings
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = OLD.user_id AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_positions_insert
+  AFTER INSERT ON stock_positions
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = NEW.user_id AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_positions_update
+  AFTER UPDATE ON stock_positions
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id IN (OLD.user_id, NEW.user_id) AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_positions_delete
+  AFTER DELETE ON stock_positions
+  BEGIN
+    UPDATE user_asset_snapshots SET is_valid = 0,
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = OLD.user_id AND is_valid = 1;
+  END;
+
+  CREATE TRIGGER IF NOT EXISTS trg_user_asset_snapshot_stock_price_update
+  AFTER UPDATE OF current_price, status ON stocks
+  BEGIN
+    UPDATE user_asset_snapshots
+    SET is_valid = 0,
+        invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE is_valid = 1
+      AND user_id IN (
+        SELECT user_id FROM stock_holdings WHERE stock_id = NEW.id AND quantity > 0
+        UNION
+        SELECT user_id FROM stock_positions WHERE stock_id = NEW.id AND status = 'open'
+      );
+  END;
+`);
 
 const jackpotEntriesCols = tableColumns("jackpot_entries");
 if (jackpotEntriesCols.has("entry_date")) {

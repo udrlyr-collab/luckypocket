@@ -33,6 +33,7 @@ import {
   maybeTriggerShortSqueeze,
   maybeTriggerVolatilityHalt,
   processCorporateEvents,
+  refreshLegacyStabilityState,
   releaseExpiredTradingHalts,
 } from "./marketDynamicsService.js";
 import { runDailyUnluckyScheduler } from "./dailyUnluckyService.js";
@@ -58,18 +59,18 @@ export function getStockMarketClock(now = Date.now()) {
 }
 
 const EVENT_PROBABILITIES = {
-  normal: 0.9993,
-  surge: 0.0004,
-  crash: 0.0003,
+  normal: 0.99997,
+  surge: 0.000018,
+  crash: 0.000012,
 };
 
 const SECTOR_EVENT_INTERVAL_MS = 30 * 60_000;
 let lastSectorEventAt = 0;
 
 const SECTOR_EVENT_PROBABILITIES = {
-  good: { normal: 0.9987, surge: 0.0010, crash: 0.0003 },
-  bad: { normal: 0.9987, surge: 0.0003, crash: 0.0010 },
-  volatile: { normal: 0.9978, surge: 0.0011, crash: 0.0011 },
+  good: { normal: 0.99994, surge: 0.00005, crash: 0.00001 },
+  bad: { normal: 0.99994, surge: 0.00001, crash: 0.00005 },
+  volatile: { normal: 0.99990, surge: 0.00005, crash: 0.00005 },
 };
 
 const SECTOR_EVENT_TEMPLATES = {
@@ -388,6 +389,26 @@ export const STOCK_MARKET_POLICY = {
   ipoMinVolatility: 0.01,
   ipoMaxVolatility: 0.025,
 };
+
+export const COMPANY_SIZE_PROTECTION = Object.freeze({
+  SMALL: 0,
+  MID: 8,
+  LARGE: 15,
+  MEGA: 22,
+  GIANT: 30,
+  BLUE_CHIP: 38,
+  DELIST_RISK: 0,
+});
+
+export const DISTRESS_MIN_OBSERVATION_HOURS = Object.freeze({
+  SMALL: 6,
+  MID: 12,
+  LARGE: 24,
+  MEGA: 36,
+  GIANT: 48,
+  BLUE_CHIP: 72,
+  DELIST_RISK: 6,
+});
 
 export function requiredCompanyAcquisitionBalance(acquisitionCost) {
   const cost = Number(acquisitionCost);
@@ -716,8 +737,9 @@ function clampStockTickPrice(db, stock, nextPrice, override = {}) {
     return Math.max(1, Math.floor(nextPrice));
   }
 
+  const stableStock = refreshLegacyStabilityState(db, stock);
   const liquidityStock = {
-    ...stock,
+    ...stableStock,
     ...override,
     today_trade_value: getTodayStockTradeValue(db, stock.id),
   };
@@ -726,7 +748,26 @@ function clampStockTickPrice(db, stock, nextPrice, override = {}) {
     Number(stock.current_price || 1);
   const adjustedRawMoveRate = rawMoveRate * getLiquidityModifier(liquidityStock);
   const moveRate = clampTickMoveRate(liquidityStock, adjustedRawMoveRate);
-  return Math.max(1, Math.floor(stock.current_price * (1 + moveRate)));
+  const tickPrice = Math.max(1, Math.floor(stock.current_price * (1 + moveRate)));
+  const nowMs = Date.now();
+  const anchorMs = Date.parse(stableStock.daily_anchor_at || "");
+  const resetAnchor = !Number.isFinite(anchorMs) || nowMs - anchorMs >= DAY_SECONDS * 1000 || Number(stableStock.daily_anchor_price) <= 0;
+  const anchor = resetAnchor ? Number(stock.current_price) : Number(stableStock.daily_anchor_price);
+  if (resetAnchor) db.prepare("UPDATE stocks SET daily_anchor_price=?,daily_anchor_at=? WHERE id=?").run(anchor, new Date(nowMs).toISOString(), stock.id);
+  const bands = {
+    BLUE_CHIP: [-0.06, 0.08], GIANT: [-0.12, 0.15], MEGA: [-0.15, 0.20], LARGE: [-0.20, 0.28],
+    MID: [-0.28, 0.38], SMALL: [-0.35, 0.50], DELIST_RISK: [-0.45, 0.65],
+  };
+  let [maxDown, maxUp] = bands[stableStock.stability_tier] || bands.SMALL;
+  if (stableStock.delist_risk_status === "distress_review") {
+    if (stableStock.stability_tier === "BLUE_CHIP") [maxDown, maxUp] = [-0.14, 0.14];
+    else if (stableStock.stability_tier === "GIANT") [maxDown, maxUp] = [-0.20, 0.18];
+    else { maxDown = Math.max(-0.45, maxDown * 1.35); maxUp = Math.min(0.60, maxUp * 1.2); }
+  }
+  const protectedPrice = Math.max(1, Math.min(Math.floor(anchor * (1 + maxUp)), Math.max(Math.ceil(anchor * (1 + maxDown)), tickPrice)));
+  if (protectedPrice !== tickPrice) db.prepare(`INSERT INTO stock_price_guard_events(stock_id,event_type,reference_price,observed_price,protected_price,reason)
+    VALUES(?,'daily_band',?,?,?,'stability_tier_daily_band')`).run(stock.id, anchor, tickPrice, protectedPrice);
+  return protectedPrice;
 }
 
 function maybeCreateSectorEvent(db, nowMs = Date.now()) {
@@ -1189,7 +1230,7 @@ function triggerStockPriceAlerts(database) {
   }
 }
 
-export function resolveDueHostileTakeovers(db, nowMs = Date.now()) {
+function resolveDueHostileTakeoversLegacy(db, nowMs = Date.now()) {
   const now = new Date(nowMs).toISOString();
   const events = db.prepare(`
     SELECT * FROM hostile_takeover_events
@@ -1271,6 +1312,178 @@ export function resolveDueHostileTakeovers(db, nowMs = Date.now()) {
   return events.length;
 }
 
+export function calculateHostileTakeoverStrength({
+  escrowCash = 0,
+  holderQuantity = 0,
+  sharePrice = 0,
+  supportCash = 0,
+  delegatedShareQuantity = 0,
+  treasuryShares = 0,
+} = {}) {
+  const price = Math.max(0, Number(sharePrice || 0));
+  return Math.max(0, Math.floor(
+    Math.max(0, Number(escrowCash || 0)) +
+    Math.max(0, Number(holderQuantity || 0)) * price +
+    Math.max(0, Number(supportCash || 0)) +
+    Math.max(0, Number(delegatedShareQuantity || 0)) * price +
+    Math.max(0, Number(treasuryShares || 0)) * price
+  ));
+}
+
+export function resolveDueHostileTakeovers(db, nowMs = Date.now()) {
+  const now = new Date(nowMs).toISOString();
+  const events = db.prepare(`
+    SELECT * FROM hostile_takeover_events
+    WHERE status IN ('declared', 'defended') AND ends_at <= ?
+    ORDER BY id ASC
+  `).all(now);
+
+  const creditEscrow = (user, amount, eventType, sourceId, detail) => {
+    const safeAmount = Math.max(0, Math.floor(Number(amount || 0)));
+    if (!user || safeAmount <= 0) return;
+    const current = db.prepare("SELECT balance FROM users WHERE id = ?").get(user.id);
+    if (!current) return;
+    const balanceBefore = Math.floor(Number(current.balance || 0));
+    const balanceAfter = balanceBefore + safeAmount;
+    db.prepare("UPDATE users SET balance = ? WHERE id = ?").run(balanceAfter, user.id);
+    db.prepare(`
+      INSERT OR IGNORE INTO asset_events
+        (user_id, event_type, amount, balance_before, balance_after,
+         source_type, source_id, detail_json)
+      VALUES (?, ?, ?, ?, ?, 'hostile_takeover', ?, ?)
+    `).run(user.id, eventType, safeAmount, balanceBefore, balanceAfter, sourceId, JSON.stringify(detail));
+  };
+
+  for (const event of events) {
+    db.transaction(() => {
+      const stock = db.prepare("SELECT * FROM stocks WHERE id = ?").get(event.stock_id);
+      const attacker = db.prepare("SELECT * FROM users WHERE id = ?").get(event.attacker_user_id);
+      const defender = db.prepare("SELECT * FROM users WHERE id = ?").get(event.defender_user_id);
+      const anotherOwnedEtf = attacker && db.prepare(`
+        SELECT id FROM stocks
+        WHERE owner_user_id = ? AND is_etf = 1 AND status = 'acquired' AND id != ?
+      `).get(attacker.id, event.stock_id);
+      const valid = stock && attacker && defender && !anotherOwnedEtf &&
+        Number(stock.owner_user_id) === Number(event.defender_user_id) &&
+        stock.status === "acquired";
+
+      if (!valid) {
+        creditEscrow(attacker, event.attack_cash, "hostile_takeover_refund", `refund:${event.id}`, {
+          hostileTakeoverEventId: event.id,
+          reason: anotherOwnedEtf ? "attacker_already_owns_active_etf" : "target_changed",
+        });
+        creditEscrow(defender, event.defense_cash, "hostile_takeover_defense_refund", `defense-refund:${event.id}`, {
+          hostileTakeoverEventId: event.id,
+          reason: "takeover_cancelled",
+        });
+        db.prepare("UPDATE hostile_takeover_events SET status = 'cancelled', resolved_at = ? WHERE id = ?")
+          .run(now, event.id);
+        return;
+      }
+
+      const snapshotPrice = Math.max(1, Math.floor(Number(event.target_price_snapshot || stock.current_price || 1)));
+      const holdingQuantity = (userId) => Math.max(0, Number(db.prepare(`
+        SELECT COALESCE(quantity, 0) AS quantity
+        FROM stock_holdings WHERE user_id = ? AND stock_id = ?
+      `).get(userId, event.stock_id)?.quantity || 0));
+      const support = (side, excludedUserId) => db.prepare(`
+        SELECT COALESCE(SUM(cash_amount), 0) AS cash_amount,
+               COALESCE(SUM(delegated_share_quantity), 0) AS delegated_shares
+        FROM hostile_takeover_supports
+        WHERE hostile_takeover_event_id = ? AND side = ? AND user_id != ?
+      `).get(event.id, side, excludedUserId);
+      const attackSupport = support("attack", attacker.id);
+      const defenseSupport = support("defense", defender.id);
+      const attackStrength = calculateHostileTakeoverStrength({
+        escrowCash: event.attack_cash,
+        holderQuantity: holdingQuantity(attacker.id),
+        sharePrice: snapshotPrice,
+        supportCash: attackSupport.cash_amount,
+        delegatedShareQuantity: attackSupport.delegated_shares,
+      });
+      const defenseStrength = calculateHostileTakeoverStrength({
+        escrowCash: event.defense_cash,
+        holderQuantity: holdingQuantity(defender.id),
+        sharePrice: snapshotPrice,
+        supportCash: defenseSupport.cash_amount,
+        delegatedShareQuantity: defenseSupport.delegated_shares,
+        treasuryShares: stock.treasury_shares,
+      });
+      const attackWins = attackStrength > defenseStrength;
+
+      creditEscrow(defender, event.defense_cash, "hostile_takeover_defense_refund", `defense-refund:${event.id}`, {
+        hostileTakeoverEventId: event.id,
+        attackStrength,
+        defenseStrength,
+      });
+
+      if (attackWins) {
+        creditEscrow(defender, event.attack_cash, "hostile_takeover_receive", `receive:${event.id}`, {
+          hostileTakeoverEventId: event.id,
+          targetMarketCapSnapshot: event.target_market_cap_snapshot,
+          attackStrength,
+          defenseStrength,
+        });
+        const attackerTrackingAsset = calculateOwnerEtfTrackingAsset(db, attacker.id, stock.id);
+        db.prepare(`
+          UPDATE stocks
+          SET owner_user_id = ?, owner_nickname_snapshot = ?,
+              etf_base_price = current_price,
+              etf_base_owner_asset = ?, etf_last_tracked_owner_asset = ?,
+              etf_acquisition_cost = ?,
+              etf_delist_reference_price = current_price,
+              etf_delist_reference_set_at = ?,
+              etf_delist_trigger_price = MAX(1, CAST(current_price * ? AS INTEGER)),
+              etf_delist_triggered_at = NULL, etf_delist_reason = NULL,
+              delist_risk_status = 'normal', is_market_cap_warning = 0,
+              caution_tick_count = 0, recovery_tick_count = 0,
+              delist_review_tick_count = 0
+          WHERE id = ?
+        `).run(
+          attacker.id,
+          attacker.nickname,
+          attackerTrackingAsset,
+          attackerTrackingAsset,
+          Number(event.acquisition_cost_snapshot || event.attack_cash),
+          now,
+          STOCK_MARKET_POLICY.ownerEtfDelistPriceRatio,
+          stock.id,
+        );
+      } else {
+        creditEscrow(attacker, event.attack_cash, "hostile_takeover_refund", `refund:${event.id}`, {
+          hostileTakeoverEventId: event.id,
+          attackStrength,
+          defenseStrength,
+          reason: "defended",
+        });
+      }
+
+      db.prepare(`
+        UPDATE hostile_takeover_events
+        SET status = ?, resolved_at = ?, attack_strength = ?, defense_strength = ?
+        WHERE id = ?
+      `).run(attackWins ? "resolved_attack" : "resolved_defense", now, attackStrength, defenseStrength, event.id);
+      createServerNotification(db, {
+        type: attackWins ? "hostile_takeover_success" : "hostile_takeover_defended",
+        title: attackWins ? "적대적 M&A 성공" : "적대적 M&A 방어 성공",
+        message: attackWins
+          ? `${attacker.nickname}님이 ${stock.name} 인수에 성공했어요.`
+          : `${defender.nickname}님이 ${stock.name} 인수를 방어했어요.`,
+        gameType: "stock",
+        gameName: "주식",
+        metadata: {
+          hostileTakeoverEventId: event.id,
+          stockId: stock.id,
+          attackStrength,
+          defenseStrength,
+          policy: "invested_target_resources_only_v1",
+        },
+      });
+    })();
+  }
+  return events.length;
+}
+
 export function tickStockMarket(db) {
   try {
     nextTickAt = Date.now() + STOCK_TICK_INTERVAL_MS;
@@ -1326,30 +1539,7 @@ export function tickStockMarket(db) {
 
       if (now - lastDelistCandidateEventAt >= 300_000) {
         lastDelistCandidateEventAt = now;
-        const candidates = stocks.filter(s => s.status === 'listed' && s.is_etf === 0 && !["distress_review", "delist_review", "caution", "final_crash"].includes(s.delist_risk_status));
-        if (candidates.length > 0) {
-          const weights = candidates.map(stock => {
-            const cap = stock.market_cap;
-            if (stock.is_bluechip === 1) return 0.005;
-            if (cap < 10_000_000_000) return 2.5;
-            if (cap < 50_000_000_000) return 1.5;
-            if (cap < 300_000_000_000) return 0.8;
-            if (cap < 2_000_000_000_000) return 0.3;
-            if (cap < 20_000_000_000_000) return 0.1;
-            return 0.02;
-          });
-          const totalWeight = weights.reduce((a,b) => a+b, 0);
-          let r = Math.random() * totalWeight;
-          let selected = candidates[0];
-          for (let i = 0; i < candidates.length; i++) {
-            if (r < weights[i]) {
-              selected = candidates[i];
-              break;
-            }
-            r -= weights[i];
-          }
-          enterDistressReview(db, selected);
-        }
+        for (const candidate of stocks) evaluateCompanyDistressRisk(db, candidate, now);
       }
 
       liquidatePositionsIfNeeded(db);
@@ -1431,9 +1621,7 @@ function processNormalTick(
     } else {
       const sectorEvent = getActiveSectorEvent(db, stock.sector);
       const isDistressReview = stock.delist_risk_status === "distress_review";
-      const event = isDistressReview && Math.random() < 0.38
-        ? "crash"
-        : getRandomEvent(getSectorAdjustedEventProbabilities(sectorEvent));
+      const event = getRandomEvent(getSectorAdjustedEventProbabilities(sectorEvent));
       if (event === "surge") {
         const upper = sectorEvent?.sentiment === "good" || sectorEvent?.sentiment === "volatile" ? 0.15 : 0.10;
         newPrice = Math.floor(newPrice * (1 + 0.05 + Math.random() * upper)); // +5% ~ +20%
@@ -2167,6 +2355,68 @@ function recordDelistLifecycleEvent(db, stockId, eventType, title, message) {
   ).run(stockId, eventType, title, message);
 }
 
+export function evaluateCompanyDistressRisk(db, stock, nowMs = Date.now()) {
+  const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
+  if (
+    !current ||
+    current.status === "delisted" ||
+    current.status === "ipo_subscription" ||
+    isOwnerAssetEtf(current) ||
+    ["delist_review", "recovery", "final_crash"].includes(current.delist_risk_status)
+  ) {
+    return null;
+  }
+
+  const tier = current.is_bluechip === 1 ? "BLUE_CHIP" : (current.stability_tier || "SMALL");
+  const normalizedTier = COMPANY_SIZE_PROTECTION[tier] === undefined ? "SMALL" : tier;
+  const protection = COMPANY_SIZE_PROTECTION[normalizedTier];
+  const marketCap = Math.max(1, Number(current.market_cap || 1));
+  const stabilityCap = Math.max(1, Number(current.stability_market_cap || current.initial_market_cap || marketCap));
+  const anchorPrice = Math.max(1, Number(current.daily_anchor_price || current.initial_price || current.current_price || 1));
+  const currentPrice = Math.max(1, Number(current.current_price || 1));
+  const capDrawdown = Math.max(0, 1 - marketCap / stabilityCap);
+  const priceDrawdown = Math.max(0, 1 - currentPrice / anchorPrice);
+  const belowCautionPressure = marketCap < STOCK_MARKET_POLICY.marketCapWarningThreshold ? 30 : 0;
+  const negativeTrendPressure = current.trend_regime === "bear" ? 8 : 0;
+  const volatilityPressure = Math.min(18, Math.max(0, Number(current.trend_volatility || 0)) * 2_500);
+  // Randomness can only add a small risk increment; it never changes lifecycle state directly.
+  const randomRiskIncrement = Math.random() < 0.02 ? Math.random() * 4 : 0;
+  const observedPressure =
+    capDrawdown * 42 + priceDrawdown * 28 + belowCautionPressure +
+    negativeTrendPressure + volatilityPressure + randomRiskIncrement - protection;
+  const previousScore = Math.max(0, Number(current.distress_risk_score || 0));
+  const score = Math.max(0, Math.min(100, previousScore * 0.82 + Math.max(0, observedPressure) * 0.18));
+  const threshold = 55;
+  let observationStartedAt = current.distress_observation_started_at || null;
+  if (score >= threshold && !observationStartedAt) observationStartedAt = new Date(nowMs).toISOString();
+  if (score < threshold * 0.75) observationStartedAt = null;
+
+  db.prepare(`
+    UPDATE stocks
+    SET distress_risk_score = ?,
+        distress_risk_started_at = CASE WHEN ? >= ? THEN COALESCE(distress_risk_started_at, ?) ELSE NULL END,
+        distress_observation_started_at = ?,
+        distress_last_evaluated_at = ?,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE id = ?
+  `).run(
+    score,
+    score,
+    threshold,
+    new Date(nowMs).toISOString(),
+    observationStartedAt,
+    new Date(nowMs).toISOString(),
+    current.id,
+  );
+
+  const minimumHours = DISTRESS_MIN_OBSERVATION_HOURS[normalizedTier];
+  const observedMs = observationStartedAt ? nowMs - Date.parse(observationStartedAt) : 0;
+  if (score >= threshold && observedMs >= minimumHours * 3_600_000) {
+    enterDistressReview(db, { ...current, distress_risk_score: score, stability_tier: normalizedTier });
+  }
+  return { score, tier: normalizedTier, protection, minimumHours, observationStartedAt };
+}
+
 function enterDistressReview(db, stock) {
   const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
   if (!current || current.status === "delisted" || isOwnerAssetEtf(current)) return;
@@ -2183,7 +2433,12 @@ function enterDistressReview(db, stock) {
         event_until = ?, is_market_cap_warning = 1,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE id = ?
-  `).run(Date.now() + 120_000, current.id);
+  `).run(
+    Date.now() + (DISTRESS_MIN_OBSERVATION_HOURS[
+      current.is_bluechip === 1 ? "BLUE_CHIP" : (current.stability_tier || "SMALL")
+    ] || 6) * 3_600_000,
+    current.id,
+  );
   recordDelistLifecycleEvent(db, current.id, "distress_review", "부실기업 심사", message);
   createServerNotification(db, {
     nickname: "행운시장",
@@ -2198,7 +2453,7 @@ function enterDistressReview(db, stock) {
 
 function enterDelistReview(db, stock, customMessage = null) {
   const current = db.prepare("SELECT * FROM stocks WHERE id = ?").get(stock.id);
-  if (!current || current.status === "delisted") return;
+  if (!current || current.status === "delisted" || Number(current.market_cap) >= STOCK_MARKET_POLICY.minimumMarketCap) return;
   const wasInReview = ["delist_review", "recovery"].includes(
     current.delist_risk_status,
   );
@@ -2316,7 +2571,9 @@ function triggerFinalCrash(db, stock, reason) {
   if (
     !current ||
     current.status === "delisted" ||
-    current.delist_risk_status === "final_crash"
+    current.delist_risk_status === "final_crash" ||
+    Number(current.market_cap) >= STOCK_MARKET_POLICY.minimumMarketCap ||
+    !["delist_review", "recovery"].includes(current.delist_risk_status)
   ) {
     return;
   }
@@ -2408,7 +2665,8 @@ function updateDelistRiskAfterPrice(db, stock) {
 
   const band = getMarketCapPolicyState(current.market_cap);
   if (band === "final_crash") {
-    triggerFinalCrash(db, current, "market_cap_under_1b");
+    if (["delist_review", "recovery"].includes(current.delist_risk_status)) triggerFinalCrash(db, current, "market_cap_under_1b");
+    else enterDelistReview(db, current);
     return;
   }
   if (band === "delist_review") {

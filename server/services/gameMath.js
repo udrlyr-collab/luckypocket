@@ -135,11 +135,15 @@ export function throwDart() {
   const radius = Math.sqrt(cryptoFloat());
   const angle = 2 * Math.PI * cryptoFloat();
   return {
+    roundId: `dart_${randomBytes(16).toString("hex")}`,
     radius,
     angle,
     x: radius * Math.cos(angle),
     y: radius * Math.sin(angle),
     sector: Math.floor(angle / ((2 * Math.PI) / 20)) + 1,
+    score: Math.max(0, Math.floor((1 - radius) * 1_000)),
+    rotationDeg: -58 + cryptoFloat() * 24,
+    flightDurationMs: 650 + Math.floor(cryptoFloat() * 301),
   };
 }
 

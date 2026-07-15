@@ -30,6 +30,7 @@ import { readClientAssetVersion } from "./services/clientVersionService.js";
 import { startJackpotScheduler } from "./services/jackpotService.js";
 import { runDailyUnluckyScheduler } from "./services/dailyUnluckyService.js";
 import { ensureMarketRegime } from "./services/marketDynamicsService.js";
+import { startEtfInterestScheduler } from "./services/etfInterestService.js";
 
 const app = express();
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -168,6 +169,7 @@ const server = app.listen(config.port, "127.0.0.1", () => {
 
   // Initialize new robust jackpot scheduler
   startJackpotScheduler(db);
+  startEtfInterestScheduler(db);
 });
 
 function shutdown() {

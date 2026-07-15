@@ -96,6 +96,8 @@ export default function AdminPage() {
   const [error, setError] = useState("");
   const [marketOpen, setMarketOpen] = useState(null);
   const [seasonInfo, setSeasonInfo] = useState(null);
+  const [seasonRewardPreview, setSeasonRewardPreview] = useState(null);
+  const [etfInterestSummary, setEtfInterestSummary] = useState(null);
   const [jackpotInfo, setJackpotInfo] = useState(null);
   const [jackpotAmount, setJackpotAmount] = useState("");
   const [dashboardSummary, setDashboardSummary] = useState(null);
@@ -485,6 +487,62 @@ export default function AdminPage() {
       setSeasonInfo(current);
       await loadUsers();
       await refreshUser();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const previewSeasonRewards = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setSeasonRewardPreview(await api("/admin/seasons/reward-preview"));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const settleEtfInterest = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api("/admin/etf-interest/settle-current", { method: "POST" });
+      setMessage(`${data.hourKey} ETF 이자 정산: ${data.results.length}명`);
+      setEtfInterestSummary(await api("/admin/etf-interest/missing"));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const catchUpEtfInterest = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api("/admin/etf-interest/catch-up", {
+        method: "POST",
+        body: JSON.stringify({ maxHours: 24 }),
+      });
+      setMessage(`ETF 이자 보정: 지급 ${data.paid.length}건 · 스냅샷 없음 ${data.skipped.length}건`);
+      setEtfInterestSummary(await api("/admin/etf-interest/missing"));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rebuildAssetSnapshots = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const data = await api("/admin/assets/snapshots/rebuild", { method: "POST" });
+      setMessage(`총평가금액 스냅샷 ${data.userCount}명 재구축 완료`);
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -1025,9 +1083,11 @@ export default function AdminPage() {
                 <strong className="mt-1 block tabular-nums">{formatMoney(activeUser.balance)}</strong>
               </div>
               <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
-                <span className="text-xs font-bold text-base-content/45">총 평가자산</span>
-                <strong className="mt-1 block tabular-nums">
-                  {formatMoney(activeUser.totalEvaluatedAsset || activeUser.balance)}
+                <span className="text-xs font-bold text-base-content/45">총평가금액</span>
+                <strong className={`mt-1 block tabular-nums ${activeUser.assetValuationComplete === false ? "text-error" : ""}`}>
+                  {activeUser.assetValuationComplete === false
+                    ? "평가 오류"
+                    : formatMoney(activeUser.totalEvaluatedAsset)}
                 </strong>
               </div>
               <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
@@ -1546,6 +1606,38 @@ export default function AdminPage() {
                 ? new Date(seasonInfo.season.startedAt).toLocaleString("ko-KR")
                 : "-"}
             </strong>
+          </div>
+        </div>
+        <div className="mt-4 rounded-2xl border border-base-300 bg-base-100 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-black">시즌 회사 보상 미리보기</p>
+              <p className="text-xs font-bold text-base-content/50">사용자 1·2·3위에게 회사 시총 2·3·4위가 매핑됩니다. 순위 현금 보너스는 없습니다.</p>
+            </div>
+            <button type="button" className="btn btn-sm btn-outline rounded-xl" disabled={busy} onClick={previewSeasonRewards}>미리보기</button>
+          </div>
+          {seasonRewardPreview && (
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              {seasonRewardPreview.mappings.map((mapping) => (
+                <div key={mapping.winnerRank} className="rounded-xl bg-base-200/60 p-3 text-xs font-bold">
+                  <p className="text-primary">사용자 {mapping.winnerRank}위 → 회사 {mapping.companyRank}위</p>
+                  <p className="mt-1">{mapping.winnerUsername} → {mapping.sourceStockName}</p>
+                  <p className="mt-1 tabular-nums text-base-content/55">{formatMoney(mapping.sourceMarketCap)}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="mt-4 rounded-2xl border border-primary/20 bg-primary/5 p-4">
+          <p className="font-black">ETF 이자·총평가금액 관리</p>
+          <p className="mt-1 text-xs font-bold text-base-content/50">
+            시간당 0.1%는 사용자·KST 시간당 한 번만 지급됩니다.
+            {etfInterestSummary ? ` 현재 누락 ${etfInterestSummary.missingCount}건` : ""}
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            <button type="button" className="btn btn-sm btn-primary rounded-xl" disabled={busy} onClick={settleEtfInterest}>현재 시간 정산</button>
+            <button type="button" className="btn btn-sm btn-outline rounded-xl" disabled={busy} onClick={catchUpEtfInterest}>24시간 누락 검사·보정</button>
+            <button type="button" className="btn btn-sm btn-outline rounded-xl" disabled={busy} onClick={rebuildAssetSnapshots}>자산 스냅샷 재구축</button>
           </div>
         </div>
         <button

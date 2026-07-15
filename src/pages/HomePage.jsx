@@ -101,7 +101,7 @@ export default function HomePage() {
   }, []);
 
   const todayProfit = Number(user.todayProfit || 0);
-  const isLowBalance = (user.totalAsset || user.balance) < 500000;
+  const isLowBalance = user.assetValuationComplete !== false && user.totalEvaluatedAsset < 500000;
   const latestNewsItems = notifications.slice(0, 2);
   const quickGameEntries = ["risk-button", "bomb-dodge", "slot", "cup"]
     .map((key) => [key, gameMeta[key]])
@@ -162,10 +162,15 @@ export default function HomePage() {
           </div>
 
           <div className="mt-5">
-            <span className="text-xs font-black text-base-content/50">총 평가자산</span>
-            <strong className="mt-1 block max-w-full text-4xl font-black leading-none tracking-tight text-primary tabular-nums sm:text-5xl">
-              <MoneyText value={user.totalAsset || user.balance} className="break-words" />
+            <span className="text-xs font-black text-base-content/50">총평가금액</span>
+            <strong className={`mt-1 block max-w-full text-4xl font-black leading-none tracking-tight tabular-nums sm:text-5xl ${user.assetValuationComplete === false ? "text-error" : "text-primary"}`}>
+              {user.assetValuationComplete === false
+                ? "평가 오류"
+                : <MoneyText value={user.totalEvaluatedAsset} className="break-words" />}
             </strong>
+            {user.assetValuationComplete === false && (
+              <p className="mt-2 text-xs font-bold text-error">일부 보유 자산의 정상 평가 가격을 확인할 수 없습니다.</p>
+            )}
             <div className="mt-3 text-base font-black">
               오늘 손익 <ChangeText amount={todayProfit} />
             </div>

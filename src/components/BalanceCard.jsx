@@ -8,9 +8,9 @@ export default function BalanceCard({ user, compact = false }) {
     return (
       <div className="rounded-2xl bg-base-100 px-3 py-1.5 text-right shadow-sm sm:px-4">
         <div>
-          <span className="mr-2 hidden text-[10px] text-base-content/60 sm:inline">현재 자산</span>
+          <span className="mr-2 hidden text-[10px] text-base-content/60 sm:inline">총평가금액</span>
           <strong className="tabular-nums text-sm sm:text-base">
-            <AnimatedMoney value={user.balance} className="text-primary" />
+            <AnimatedMoney value={user.totalEvaluatedAsset} className="text-primary" />
           </strong>
         </div>
         <div className={`hidden text-[10px] font-bold tabular-nums sm:block ${todayProfit >= 0 ? "text-success" : "text-error"}`}>
@@ -24,9 +24,9 @@ export default function BalanceCard({ user, compact = false }) {
   return (
     <BaseCard className=" overflow-hidden bg-gradient-to-br from-pink-100 via-base-100 to-sky-100">
       <div className="relative z-10">
-        <p className="mb-1 text-sm font-bold text-base-content/55">현재 자산</p>
+        <p className="mb-1 text-sm font-bold text-base-content/55">총평가금액</p>
         <p className="money-hero">
-          <AnimatedMoney value={user.balance} className="text-primary" />
+          <AnimatedMoney value={user.totalEvaluatedAsset} className="text-primary" />
         </p>
         <div className="mt-5 grid grid-cols-2 gap-3">
           <div className="mini-stat">
@@ -36,8 +36,8 @@ export default function BalanceCard({ user, compact = false }) {
             </strong>
           </div>
           <div className="mini-stat">
-            <span>최고 자산</span>
-            <strong>{formatMoney(user.highestBalance)}</strong>
+            <span>최고 총평가금액</span>
+            <strong>{formatMoney(user.highestTotalEvaluatedAsset)}</strong>
           </div>
         </div>
       </div>

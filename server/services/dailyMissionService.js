@@ -223,7 +223,7 @@ export function claimDailyMissionReward(database, userId, missionId) {
         balanceBefore: user.balance,
         balanceAfter,
         sourceType: "daily_mission",
-        sourceId: mission.id,
+        sourceId: `${userId}:${mission.id}`,
         detail: {
           missionType: mission.mission_type,
           title: mission.title,
@@ -241,7 +241,7 @@ export function claimDailyMissionReward(database, userId, missionId) {
         balanceBefore: user.balance,
         balanceAfter: user.balance,
         sourceType: "daily_mission",
-        sourceId: mission.id,
+        sourceId: `${userId}:${mission.id}`,
         detail: {
           missionType: mission.mission_type,
           title: mission.title,
@@ -269,7 +269,7 @@ export function claimDailyMissionReward(database, userId, missionId) {
         balanceBefore: user.balance,
         balanceAfter: user.balance,
         sourceType: "daily_mission",
-        sourceId: mission.id,
+        sourceId: `${userId}:${mission.id}`,
         detail: {
           missionType: mission.mission_type,
           title: mission.title,

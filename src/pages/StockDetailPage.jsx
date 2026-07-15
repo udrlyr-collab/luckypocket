@@ -246,7 +246,7 @@ export default function StockDetailPage() {
   const acquisitionInfo = data.acquisition || {};
   const acquisitionCost = Number(acquisitionInfo.acquisitionPrice || acquisitionInfo.cost || stock.market_cap || 0);
   const acquisitionRequiredTotalAsset = Number(acquisitionInfo.requiredTotalAsset || acquisitionInfo.requiredBalance || acquisitionCost);
-  const acquisitionUserTotalAsset = Number(acquisitionInfo.userTotalEvaluatedAsset || user.totalAsset || user.balance || 0);
+  const acquisitionUserTotalAsset = Number(acquisitionInfo.userTotalEvaluatedAsset || 0);
   const acquisitionUserCashBalance = Number(acquisitionInfo.userCashBalance || user.balance || 0);
   const acquisitionEstimatedCash = Number(acquisitionInfo.estimatedCashAfterAutoClear || acquisitionUserCashBalance);
   const canAcquireCompany = acquisitionInfo.canAcquire !== false;
@@ -1004,6 +1004,24 @@ export default function StockDetailPage() {
                     {ownerNickname}님의 자산 변화를 추종합니다. 인수자가 아닌 유저는 현물과 레버리지 거래를 할 수 있어요.
                   </p>
                   {data.hostileTakeover && (
+                    <div className="mt-3 rounded-2xl bg-base-100/80 p-3 text-left text-xs font-bold">
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <p><span className="block text-base-content/50">대상 회사 시가총액</span><strong className="tabular-nums">{formatMoney(data.hostileTakeover.targetMarketCap)}</strong></p>
+                        <p><span className="block text-base-content/50">5배 자격 기준</span><strong className="tabular-nums">{formatMoney(hostileRequiredBalance)}</strong></p>
+                        <p><span className="block text-base-content/50">내 총평가금액</span><strong className="tabular-nums">{formatMoney(data.hostileTakeover.userTotalEvaluatedAsset)}</strong></p>
+                        <p><span className="block text-base-content/50">내 현금 / 인수 대금</span><strong className="tabular-nums">{formatMoney(data.hostileTakeover.userCashBalance)} / {formatMoney(hostileCost)}</strong></p>
+                      </div>
+                      {!data.hostileTakeover.valuationComplete && <p className="mt-2 text-error">총평가금액 산출이 불완전합니다.</p>}
+                      <button
+                        className="btn btn-outline btn-error mt-3 min-h-11 w-full rounded-2xl"
+                        disabled={busy || !data.hostileTakeover.meetsAssetRequirement || !data.hostileTakeover.hasEnoughCash}
+                        onClick={() => executeAction('/hostile-takeover/declare', '적대적 M&A 공개 입찰')}
+                      >
+                        적대적 M&A 공개 입찰 · 인수 대금 {formatMoney(hostileCost)}
+                      </button>
+                    </div>
+                  )}
+                  {false && data.hostileTakeover && (
                     <button
                       className="btn btn-outline btn-error mt-3 min-h-11 w-full rounded-2xl"
                       disabled={busy || !data.hostileTakeover.meetsAssetRequirement || !data.hostileTakeover.hasEnoughCash}

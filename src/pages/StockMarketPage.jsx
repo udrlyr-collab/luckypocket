@@ -313,7 +313,7 @@ export default function StockMarketPage() {
           <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
             <span className="text-[11px] font-black text-base-content/50 uppercase tracking-wider">총 평가 자산</span>
             <strong className="block text-lg mt-1 tabular-nums font-black text-base-content truncate">
-              {formatMoney(portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized))}
+              {formatMoney(portfolio.totalEvaluatedAsset)}
             </strong>
           </BaseCard>
           <BaseCard className="bg-gradient-to-br from-base-100 to-base-200/30 shadow-sm border border-base-200/50 min-w-0 p-4 rounded-2xl hover:shadow-md transition-shadow">
@@ -494,7 +494,7 @@ export default function StockMarketPage() {
               </div>
               <span className="text-xs font-black uppercase tracking-widest opacity-80">총 평가 자산</span>
               <strong className="block text-3xl font-black mt-2 tabular-nums">
-                <AnimatedMoney value={portfolio.totalEvaluatedAsset || (totalHoldingsValue + totalMargin + totalPositionsUnrealized)} />
+                <AnimatedMoney value={portfolio.totalEvaluatedAsset} />
               </strong>
               <div className="mt-4 pt-4 border-t border-white/20 flex justify-between items-center text-sm font-bold">
                 <span className="opacity-80">평가 수익률 (PnL)</span>

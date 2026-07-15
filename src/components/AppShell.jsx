@@ -120,8 +120,10 @@ export default function AppShell() {
               <span className="text-[10px] font-bold text-base-content/40">오늘도 행운 가득</span>
             </div>
             <div className="hidden min-w-0 text-right lg:block">
-              <span className="block truncate text-sm font-black text-primary">{formatMoney(user.totalAsset || user.balance)}</span>
-              <span className="text-[10px] font-bold text-base-content/40">총 평가 자산</span>
+              <span className={`block truncate text-sm font-black ${user.assetValuationComplete === false ? "text-error" : "text-primary"}`}>
+                {user.assetValuationComplete === false ? "평가 오류" : formatMoney(user.totalEvaluatedAsset)}
+              </span>
+              <span className="text-[10px] font-bold text-base-content/40">총평가금액</span>
             </div>
             <button
               type="button"
@@ -234,10 +236,15 @@ export default function AppShell() {
                 <div className="grid gap-2">
                   {seasonTop3.map((row) => (
                     <div key={row.userId} className="flex items-center justify-between gap-3 rounded-2xl bg-base-100 px-3 py-2">
-                      <span className="font-black">
-                        {row.rank}위 · {row.nickname}
+                      <span className="min-w-0 font-black">
+                        <span className="block">{row.rank}위 · {row.nickname}</span>
+                        <span className="block truncate text-xs text-secondary">
+                          {row.rewardCompanyName
+                            ? `시총 ${row.rewardCompanyRank}위 회사 → ${row.rewardCompanyName}`
+                            : "ETF 보상 기록 확인 중"}
+                        </span>
                       </span>
-                      <span className="text-sm font-black text-primary tabular-nums">
+                      <span className="shrink-0 text-sm font-black text-primary tabular-nums">
                         {formatMoney(row.finalTotalEvaluatedAsset)}
                       </span>
                     </div>

@@ -142,8 +142,16 @@ export default function ProfilePage() {
         <section className="mb-8">
           <SectionHeader title="핵심 요약" eyebrow="SUMMARY" />
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            <StatCard label="현재 자산" value={<MoneyText value={summary.balance} />} />
-            <StatCard label="최고 자산" value={<MoneyText value={summary.highestBalance} />} />
+            <StatCard
+              label="총평가금액"
+              value={summary.assetValuationComplete === false ? "평가 오류" : <MoneyText value={summary.totalEvaluatedAsset} />}
+              valueClassName={summary.assetValuationComplete === false ? "text-error" : ""}
+            />
+            <StatCard
+              label="최고 총평가금액"
+              value={summary.assetValuationComplete === false ? "평가 오류" : <MoneyText value={summary.highestTotalEvaluatedAsset} />}
+              valueClassName={summary.assetValuationComplete === false ? "text-error" : ""}
+            />
             <StatCard label="총 수익" value={<MoneyText value={summary.grossProfit} />} valueClassName="text-success" />
             <StatCard label="총 손실" value={<MoneyText value={summary.grossLoss} />} valueClassName="text-error" />
             <StatCard label="순수익" value={<ChangeText amount={summary.netGameProfit} />} />
@@ -211,7 +219,7 @@ export default function ProfilePage() {
               <span className="btn btn-sm btn-success rounded-xl font-bold min-h-10 text-white">탄광가기</span>
             </Link>
 
-            {user.balance < 500000 && (
+            {user.bankruptcyEligible && (
               <div className="flex items-center justify-between rounded-2xl bg-warning/10 p-4 border border-warning/30">
                 <div className="flex items-center gap-3">
                   <span className="text-2xl">🌱</span>

@@ -248,6 +248,11 @@ const TIER_TICK_LIMITS = {
   giant: { maxUp: 0.008, maxDown: 0.01 },
 };
 
+const STABILITY_DAILY_VOLATILITY = Object.freeze({
+  BLUE_CHIP: 0.03, GIANT: 0.05, MEGA: 0.07, LARGE: 0.10,
+  MID: 0.14, SMALL: 0.20, DELIST_RISK: 0.28,
+});
+
 export function getMarketCapTierName(marketCap) {
   if (marketCap < 5_000_000_000) return "danger_micro";
   if (marketCap < 10_000_000_000) return "micro";
@@ -269,10 +274,6 @@ export function getDynamicTickMoveLimit(stock) {
     return { maxUp: Infinity, maxDown: 0, reason: "blue_chip_target_ramp" };
   }
 
-  if (stock.is_bluechip === 1) {
-    return { maxUp: 0.015, maxDown: 0.013, reason: "blue_chip_daily_limit" };
-  }
-
   if (stock.status === "ipo_subscription") {
     return { maxUp: 0, maxDown: 0, reason: "ipo_subscription_no_tick" };
   }
@@ -281,22 +282,14 @@ export function getDynamicTickMoveLimit(stock) {
     return { maxUp: 0.30, maxDown: 0.25, reason: "newly_listed_high_volatility" };
   }
 
-  if (stock.delist_risk_status === "delist_review") {
-    return { maxUp: 0.45, maxDown: 0.55, reason: "delist_review_extreme_volatility" };
-  }
-
-  if (stock.delist_risk_status === "distress_review") {
-    return { maxUp: 0.18, maxDown: 0.25, reason: "distress_review_high_volatility" };
-  }
-
   if (stock.delist_risk_status === "final_crash") {
     return { maxUp: 0, maxDown: 0.95, reason: "final_crash" };
   }
-
-  const tier = getMarketCapTierName(stock.market_cap || 0);
-  const limits = TIER_TICK_LIMITS[tier] || { maxUp: 0.05, maxDown: 0.06 };
-
-  return { ...limits, reason: "market_cap_tier_limit", tier };
+  const tier = stock.is_bluechip === 1 ? "BLUE_CHIP" : (stock.stability_tier || "SMALL");
+  const targetVolatility = STABILITY_DAILY_VOLATILITY[tier] ?? STABILITY_DAILY_VOLATILITY.SMALL;
+  const distressMultiplier = ["distress_review", "delist_review"].includes(stock.delist_risk_status) ? 1.5 : 1;
+  const fourSigmaTick = targetVolatility / Math.sqrt(8_640) * 4 * distressMultiplier;
+  return { maxUp: fourSigmaTick, maxDown: fourSigmaTick, reason: "stability_tier_volatility_target", tier };
 }
 
 export function clampTickMoveRate(stock, rawMoveRate) {

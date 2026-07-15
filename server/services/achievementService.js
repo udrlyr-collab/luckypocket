@@ -1,14 +1,15 @@
 import { recordAssetEvent } from "./assetEventService.js";
 import { createAchievementNotification } from "./serverNotificationService.js";
+import { calculateUserTotalEvaluatedAsset } from "./portfolioValuationService.js";
 
 export const ACHIEVEMENTS = [
   { key: "first_play", title: "첫 발자국", description: "첫 게임 플레이", reward: 50000 },
   { key: "first_win", title: "첫 수확", description: "첫 승리", reward: 100000 },
   { key: "profit_100k", title: "작은 행운", description: "한 판 순수익 100,000원 이상", reward: 150000 },
-  { key: "balance_2m", title: "행운주머니 입문자", description: "현재 자산 2,000,000원 달성", reward: 200000 },
-  { key: "balance_5m", title: "주머니가 묵직해요", description: "현재 자산 5,000,000원 달성", reward: 400000 },
-  { key: "balance_10m", title: "천만 주머니", description: "현재 자산 10,000,000원 달성", reward: 800000 },
-  { key: "balance_50m", title: "행운 부자", description: "현재 자산 50,000,000원 달성", reward: 2500000 },
+  { key: "balance_2m", title: "행운주머니 입문자", description: "총평가금액 2,000,000원 달성", reward: 200000 },
+  { key: "balance_5m", title: "주머니가 묵직해요", description: "총평가금액 5,000,000원 달성", reward: 400000 },
+  { key: "balance_10m", title: "천만 주머니", description: "총평가금액 10,000,000원 달성", reward: 800000 },
+  { key: "balance_50m", title: "행운 부자", description: "총평가금액 50,000,000원 달성", reward: 2500000 },
   { key: "card_10_wins", title: "안정적인 카드 수집가", description: "카드 뽑기 10승", reward: 250000 },
   { key: "card_50_wins", title: "카드 장인", description: "카드 뽑기 50승", reward: 800000 },
   { key: "card_exact", title: "정확히 맞혔어요", description: "정확한 숫자 맞히기", reward: 400000 },
@@ -102,17 +103,17 @@ function getStats(database, userId) {
   };
 }
 
-function qualifies(key, { database, userId, user, stats, context }) {
+function qualifies(key, { database, userId, user, stats, context, totalEvaluatedAsset }) {
   const gameCount = (gameType) => stats.gameCounts.get(gameType)?.games || 0;
   const gameWins = (gameType) => stats.gameCounts.get(gameType)?.wins || 0;
   switch (key) {
     case "first_play": return stats.games >= 1;
     case "first_win": return stats.wins >= 1;
     case "profit_100k": return stats.max_profit >= 100000;
-    case "balance_2m": return user.balance >= 2000000;
-    case "balance_5m": return user.balance >= 5000000;
-    case "balance_10m": return user.balance >= 10000000;
-    case "balance_50m": return user.balance >= 50000000;
+    case "balance_2m": return totalEvaluatedAsset >= 2000000;
+    case "balance_5m": return totalEvaluatedAsset >= 5000000;
+    case "balance_10m": return totalEvaluatedAsset >= 10000000;
+    case "balance_50m": return totalEvaluatedAsset >= 50000000;
     case "card_10_wins": return gameWins("card-draw") >= 10;
     case "card_50_wins": return gameWins("card-draw") >= 50;
     case "card_exact":
@@ -146,7 +147,7 @@ function qualifies(key, { database, userId, user, stats, context }) {
     case "cup_win": return context.gameType === "cup" && context.won;
     case "cup_8_win": return context.gameType === "cup" && context.won && context.cupCount === 8;
     case "cup_streak_3": return stats.cupCurrentStreak >= 3;
-    case "comeback": return stats.lowBalance <= 100000 && user.balance >= 1000000;
+    case "comeback": return stats.lowBalance <= 100000 && totalEvaluatedAsset >= 1000000;
     case "streak_3": return stats.currentStreak >= 3;
     case "streak_5": return stats.currentStreak >= 5;
     case "daily_profit_5m": return stats.today_profit >= 5000000;
@@ -213,6 +214,11 @@ export function awardAchievements(database, userId, context) {
       .all(userId);
     const unlocked = new Set(rows.map((row) => row.achievement_key));
     let awardedThisPass = false;
+    const valuation = calculateUserTotalEvaluatedAsset(database, userId);
+    // Incomplete valuations must never silently unlock wealth achievements.
+    const totalEvaluatedAsset = valuation.valuationComplete === false
+      ? Number.NEGATIVE_INFINITY
+      : valuation.totalEvaluatedAsset;
 
     for (const achievement of ACHIEVEMENTS) {
       const recordKey = achievement.repeatable
@@ -222,7 +228,14 @@ export function awardAchievements(database, userId, context) {
 
       const user = database.prepare("SELECT * FROM users WHERE id = ?").get(userId);
       const stats = getStats(database, userId);
-      if (!qualifies(achievement.key, { database, userId, user, stats, context })) continue;
+      if (!qualifies(achievement.key, {
+        database,
+        userId,
+        user,
+        stats,
+        context,
+        totalEvaluatedAsset,
+      })) continue;
 
       award(database, userId, achievement, recordKey);
       unlocked.add(recordKey);
