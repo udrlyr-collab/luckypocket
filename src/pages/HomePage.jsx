@@ -27,6 +27,7 @@ export default function HomePage() {
   const [timeUntilMidnight, setTimeUntilMidnight] = useState("");
   const [marketMovers, setMarketMovers] = useState({ gainers: [], losers: [] });
   const [dailyMissions, setDailyMissions] = useState([]);
+  const [suspendedGames, setSuspendedGames] = useState({});
   const previousJackpotAmount = useRef(null);
   const [jackpotAddedAmount, setJackpotAddedAmount] = useState(0);
 
@@ -83,13 +84,15 @@ export default function HomePage() {
         api("/server/notifications?limit=50"),
         api("/stocks/market-movers"),
         api("/me/daily-missions"),
+        api("/games/status"),
       ])
-        .then(([stats, news, movers, missions]) => {
+        .then(([stats, news, movers, missions, gameStatus]) => {
           if (!active) return;
           setServerStats(stats);
           setNotifications(news.notifications);
           setMarketMovers(movers || { gainers: [], losers: [] });
           setDailyMissions(missions.missions || []);
+          setSuspendedGames(gameStatus.suspended || {});
         })
         .catch(() => {});
     loadServerNews();
@@ -421,16 +424,38 @@ export default function HomePage() {
       <section className="mb-8">
         <SectionHeader title="미니 게임" eyebrow="PLAY" />
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-          {Object.entries(gameMeta).map(([key, game]) => (
-            <Link key={key} to={game.path} className="game-card group shadow-sm bg-base-100 rounded-3xl p-5 border border-base-200 transition hover:border-primary/30">
-              <div className={`mb-4 grid size-14 place-items-center rounded-2xl text-3xl transition group-hover:-translate-y-1 ${game.color}`}>
-                {game.icon}
+          {Object.entries(gameMeta).map(([key, game]) => {
+            const isSuspended = suspendedGames[key] === true;
+            return (
+              <div
+                key={key}
+                onClick={() => {
+                  if (isSuspended) {
+                    alert("이 미니게임은 점검 및 정지 상태입니다. 관리자 제어 해제 후 이용해 주세요.");
+                  } else {
+                    navigate(game.path);
+                  }
+                }}
+                className={`game-card group shadow-sm bg-base-100 rounded-3xl p-5 border border-base-200 transition hover:border-primary/30 cursor-pointer ${
+                  isSuspended ? "opacity-50" : ""
+                }`}
+              >
+                <div className={`mb-4 grid size-14 place-items-center rounded-2xl text-3xl transition group-hover:-translate-y-1 ${game.color}`}>
+                  {game.icon}
+                </div>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-lg">{game.title}</h3>
+                  {isSuspended && (
+                    <span className="badge badge-error badge-xs font-black text-white rounded-lg px-1 py-0.5">정지됨</span>
+                  )}
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-base-content/55">{game.summary}</p>
+                <span className="mt-5 inline-block text-sm font-black text-primary">
+                  {isSuspended ? "점검 중" : "게임 열기 →"}
+                </span>
               </div>
-              <h3 className="font-black text-lg">{game.title}</h3>
-              <p className="mt-2 text-xs leading-relaxed text-base-content/55">{game.summary}</p>
-              <span className="mt-5 inline-block text-sm font-black text-primary">게임 열기 →</span>
-            </Link>
-          ))}
+            );
+          })}
           <Link to="/mine" className="game-card group shadow-sm bg-success/10 border-success/20 rounded-3xl p-5 transition hover:border-success/50">
             <div className={`mb-4 grid size-14 place-items-center rounded-2xl text-3xl transition group-hover:-translate-y-1 bg-success/20 text-success`}>
               ⛏

@@ -104,6 +104,7 @@ export default function AdminPage() {
   const [economyAudit, setEconomyAudit] = useState(null);
   const [consistencyResult, setConsistencyResult] = useState(null);
   const [stockFeeConfig, setStockFeeConfig] = useState(null);
+  const [suspendedGames, setSuspendedGames] = useState({});
   const [showAllSuspicious, setShowAllSuspicious] = useState(false);
   const [showAllConsistencyIssues, setShowAllConsistencyIssues] = useState(false);
   const [nicknameConfirmOpen, setNicknameConfirmOpen] = useState(false);
@@ -170,16 +171,37 @@ export default function AdminPage() {
 
   const loadAdminInsights = async () => {
     try {
-      const [summary, audit, feeConfig] = await Promise.all([
+      const [summary, audit, feeConfig, gameStatus] = await Promise.all([
         api("/admin/dashboard/summary"),
         api("/admin/economy/audit"),
         api("/stocks/fees/config"),
+        api("/admin/games/status"),
       ]);
       setDashboardSummary(summary);
       setEconomyAudit(audit);
       setStockFeeConfig(feeConfig);
+      setSuspendedGames(gameStatus.suspended || {});
     } catch (requestError) {
       setError(requestError.message);
+    }
+  };
+
+  const handleToggleGameSuspend = async (gameType, suspend) => {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const action = suspend ? "suspend" : "resume";
+      const res = await api(`/admin/games/${gameType}/${action}`, { method: "POST" });
+      setMessage(res.message);
+      setSuspendedGames((prev) => ({
+        ...prev,
+        [gameType]: suspend,
+      }));
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1207,6 +1229,56 @@ export default function AdminPage() {
           >
             우량주 선정 및 급등 설정
           </button>
+        </div>
+      </BaseCard>
+
+      <BaseCard className="mt-6 border-2 border-warning/25">
+        <SectionHeader title="미니게임 제어" eyebrow="MINIGAMES CONTROL" className="mb-2" />
+        <p className="text-xs font-bold text-base-content/50 mb-4">
+          각 미니게임을 점검 상태로 전환하거나 정지를 해제합니다. 정지된 미니게임은 일반 유저의 진입이 차단됩니다.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="table w-full text-sm">
+            <thead>
+              <tr className="border-b border-base-300">
+                <th className="bg-transparent font-black text-xs text-base-content/50">게임 이름</th>
+                <th className="bg-transparent font-black text-xs text-base-content/50">현재 상태</th>
+                <th className="bg-transparent font-black text-xs text-base-content/50 text-right">제어</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                { key: "risk-button", name: "위험버튼 ☝️" },
+                { key: "card-draw", name: "1부터 10 카드 🃏" },
+                { key: "bomb-dodge", name: "폭탄 숫자 피하기 💣" },
+                { key: "slot", name: "3자리 슬롯 🎰" },
+                { key: "dart", name: "다트 던지기 🎯" },
+                { key: "cup", name: "컵 속 행운 🥤" }
+              ].map((g) => {
+                const isSuspended = suspendedGames[g.key] === true;
+                return (
+                  <tr key={g.key} className="border-b border-base-200/50 hover:bg-base-200/20">
+                    <td className="font-bold">{g.name}</td>
+                    <td>
+                      <span className={`badge badge-sm font-black rounded-lg ${isSuspended ? "badge-error text-white" : "badge-success text-white"}`}>
+                        {isSuspended ? "정지됨 (점검 중)" : "정상 운영 중"}
+                      </span>
+                    </td>
+                    <td className="text-right">
+                      <button
+                        type="button"
+                        className={`btn btn-xs rounded-lg font-black ${isSuspended ? "btn-success" : "btn-error"}`}
+                        disabled={busy}
+                        onClick={() => handleToggleGameSuspend(g.key, !isSuspended)}
+                      >
+                        {isSuspended ? "정지 해제" : "게임 정지"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </BaseCard>
 

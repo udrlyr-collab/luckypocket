@@ -1135,10 +1135,111 @@ adminRouter.post("/stocks/:id/target-price", (req, res) => {
       stockId, stock.name, stock.symbol, eventType, sentiment,
       finalTitle, finalContent, stock.current_price, stock.current_price,
       targetPrice, percentPerTick, req.user.id, JSON.stringify({ reason })
+    db.prepare(`
+      UPDATE stocks
+      SET admin_price_target_active = 1,
+          admin_price_target = ?,
+          admin_price_target_direction = ?,
+          admin_price_target_percent_per_tick = ?,
+          admin_price_target_started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          admin_price_target_ended_at = NULL,
+          admin_price_target_reason = ?,
+          admin_price_target_started_by_user_id = ?,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE id = ?
+    `).run(targetPrice, direction, percentPerTick, reason, req.user.id, stockId);
+
+    db.prepare(`
+      INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+      VALUES (?, ?, 'admin_stock_target_price_started', ?, ?)
+    `).run(
+      req.user.id,
+      req.user.id,
+      String(stock.current_price),
+      JSON.stringify({
+        stockId,
+        stockName: stock.name,
+        targetPrice,
+        direction,
+        percentPerTick,
+        reason,
+        newsTitle,
+        newsContent,
+        publishNews,
+        oldPrice: stock.current_price,
+        newPrice: stock.current_price,
+        sentiment: direction === "up" ? "good" : "bad",
+      })
+    );
+
+    const eventType = publishNews ? "admin_price_target_started" : "admin_stock_manual_adjust";
+    const sentiment = direction === "up" ? "good" : "bad";
+
+    db.prepare(`
+      INSERT INTO stock_events (
+        stock_id, stock_name_snapshot, symbol_snapshot, event_type, sentiment, 
+        title, message, price_before, price_after, change_amount, change_rate, 
+        target_price, percent_per_tick, created_by_user_id, metadata_json
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)
+    `).run(
+      stockId, stock.name, stock.symbol, eventType, sentiment,
+      finalTitle, finalContent, stock.current_price, stock.current_price,
+      targetPrice, percentPerTick, req.user.id, JSON.stringify({ reason })
     );
 
     // Target price started notification removed per user request
   })();
 
   return res.json({ message: "목표주가 이벤트를 시작했습니다." });
+});
+
+adminRouter.get("/games/status", (req, res) => {
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const suspended = {};
+  for (const game of games) {
+    const row = db.prepare("SELECT value FROM system_config WHERE key = ?").get(`game_suspended_${game}`);
+    suspended[game] = row ? row.value === "true" : false;
+  }
+  return res.json({ suspended });
+});
+
+adminRouter.post("/games/:gameType/suspend", (req, res) => {
+  const { gameType } = req.params;
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  if (!games.includes(gameType)) {
+    return res.status(400).json({ message: "올바르지 않은 게임 유형입니다." });
+  }
+
+  db.prepare(`
+    INSERT INTO system_config (key, value) VALUES (?, 'true')
+    ON CONFLICT(key) DO UPDATE SET value = 'true'
+  `).run(`game_suspended_${gameType}`);
+
+  db.prepare(`
+    INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+    VALUES (?, ?, 'game_suspend', ?, 'true')
+  `).run(req.user.id, req.user.id, gameType);
+
+  return res.json({ message: `${gameType} 게임을 정지했습니다.` });
+});
+
+adminRouter.post("/games/:gameType/resume", (req, res) => {
+  const { gameType } = req.params;
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  if (!games.includes(gameType)) {
+    return res.status(400).json({ message: "올바르지 않은 게임 유형입니다." });
+  }
+
+  db.prepare(`
+    INSERT INTO system_config (key, value) VALUES (?, 'false')
+    ON CONFLICT(key) DO UPDATE SET value = 'false'
+  `).run(`game_suspended_${gameType}`);
+
+  db.prepare(`
+    INSERT INTO admin_logs (admin_user_id, target_user_id, action_type, before_value, after_value)
+    VALUES (?, ?, 'game_resume', ?, 'false')
+  `).run(req.user.id, req.user.id, gameType);
+
+  return res.json({ message: `${gameType} 게임의 정지를 해제했습니다.` });
 });

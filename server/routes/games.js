@@ -47,6 +47,47 @@ import {
 export const gamesRouter = Router();
 gamesRouter.use(requireAuth);
 
+const GAME_TYPE_MAPPING = {
+  "/cup/": "cup",
+  "/risk-button/": "risk-button",
+  "/card-draw/": "card-draw",
+  "/bomb-dodge/": "bomb-dodge",
+  "/slot/": "slot",
+  "/dart/": "dart"
+};
+
+function checkGameSuspended(req, res, next) {
+  const path = req.path;
+  let gameType = null;
+  for (const [prefix, type] of Object.entries(GAME_TYPE_MAPPING)) {
+    if (path.startsWith(prefix)) {
+      gameType = type;
+      break;
+    }
+  }
+
+  if (gameType) {
+    const configKey = `game_suspended_${gameType}`;
+    const row = db.prepare("SELECT value FROM system_config WHERE key = ?").get(configKey);
+    if (row && row.value === "true") {
+      return res.status(403).json({ message: "현재 이 미니게임은 관리자에 의해 정지된 상태입니다." });
+    }
+  }
+  next();
+}
+
+gamesRouter.use(checkGameSuspended);
+
+gamesRouter.get("/status", (req, res) => {
+  const games = ["risk-button", "card-draw", "bomb-dodge", "slot", "dart", "cup"];
+  const suspended = {};
+  for (const game of games) {
+    const row = db.prepare("SELECT value FROM system_config WHERE key = ?").get(`game_suspended_${game}`);
+    suspended[game] = row ? row.value === "true" : false;
+  }
+  return res.json({ suspended });
+});
+
 function activeSession(userId, gameType) {
   return db
     .prepare(
